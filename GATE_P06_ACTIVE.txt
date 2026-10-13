@@ -1,0 +1,9 @@
+﻿# STOP - Gate remains active
+
+P06 NIR is IN PROGRESS. Completion requires:
+- HIR as separate semantic boundary (already exists as hir.rs; evaluate completeness)
+- Full NIR metadata (async/concurrency, foreign ABI, debug beyond spans, memory ops, etc.)
+- Stronger verification (reachability/dominance, op-level type checks)
+- Tests covering these; updated IMPLEMENTATION_STATUS; completion report + approval.
+
+Do not advance to next module until P06 completed+approved.

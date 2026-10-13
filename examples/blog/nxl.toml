@@ -1,0 +1,9 @@
+[package]
+name = "blog"
+version = "0.1.0"
+description = "Blog with sqlite migrations/seeders"
+entry = "src/main.nxl"
+
+[database]
+driver = "sqlite"
+path = "database/database.sqlite"

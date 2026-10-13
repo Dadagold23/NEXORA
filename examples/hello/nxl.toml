@@ -1,0 +1,10 @@
+[package]
+name = "hello"
+version = "0.1.0"
+description = "Hello World CLI example"
+entry = "src/main.nxl"
+target = "js"
+
+[database]
+driver = "sqlite"
+path = "database/database.sqlite"

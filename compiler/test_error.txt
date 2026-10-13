@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.47s
+     Running unittests src\lib.rs (target\debug\deps\nxl_compiler-0c9137866b8456a9.exe)
+     Running unittests src\main.rs (target\debug\deps\nxlc-6fd949d6639fbb2a.exe)
+     Running tests\compiler_tests.rs (target\debug\deps\compiler_tests-1acd02062b0b9b40.exe)
+     Running tests\debugger_tests.rs (target\debug\deps\debugger_tests-549c76f506077b71.exe)
+     Running tests\example_tests.rs (target\debug\deps\example_tests-7dd471fec15b0758.exe)
+     Running tests\ffi_tests.rs (target\debug\deps\ffi_tests-81b660328ca711a4.exe)
+     Running tests\fuzz_tests.rs (target\debug\deps\fuzz_tests-471b6275a2d37555.exe)
+     Running tests\ide_tests.rs (target\debug\deps\ide_tests-29bd9f1a43f56256.exe)
+     Running tests\language_frontend_tests.rs (target\debug\deps\language_frontend_tests-1d67261892b497f1.exe)
+     Running tests\ndb_tests.rs (target\debug\deps\ndb_tests-9842bc5286bde5d7.exe)
+     Running tests\nls_tests.rs (target\debug\deps\nls_tests-ef05374989a7c866.exe)
+     Running tests\nuf_tests.rs (target\debug\deps\nuf_tests-0438fe3556b0a702.exe)
+     Running tests\nui_tests.rs (target\debug\deps\nui_tests-65d33f043fafc080.exe)
+     Running tests\perf_tests.rs (target\debug\deps\perf_tests-7e9813b34464a742.exe)
+     Running tests\platforms_tests.rs (target\debug\deps\platforms_tests-a148085254ff8cfc.exe)
+     Running tests\security_tests.rs (target\debug\deps\security_tests-c18563394d1c879d.exe)
+   Doc-tests nxl_compiler

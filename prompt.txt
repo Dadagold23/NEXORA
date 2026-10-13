@@ -1,0 +1,2005 @@
+Yes. I studied the ZIP rather than treating the previous master prompt as if it had already been implemented.
+
+### What is actually in `nxl.zip`
+
+The project currently has a **working language prototype**, not yet a production compiler/platform.
+
+The current implementation contains:
+
+* Lexer
+* Parser
+* AST
+* Basic semantic analyzer
+* Basic type system
+* Tree-walk interpreter
+* Very small CLI (`nxl run`)
+* 19 unit tests
+* Extensive architectural/specification documents
+* NEXORA/NXL language constitution
+* NIR, runtime, database, UI, interoperability, package manager, IDE, security and release designs
+
+I ran the existing test suite: **19/19 tests passed**.
+
+However, the gap between the specification and implementation is substantial. For example, the specification describes ownership, borrowing, generics, pattern matching, modules, classes, traits, async/await, actors, typed errors, NIR, compilation, multiple platforms, databases, package management, etc., while the current AST/interpreter implementation is still much smaller.
+
+The current CLI essentially supports:
+
+```text
+nxl run <file.nxl>
+```
+
+rather than the production compiler/toolchain described by the specifications.
+
+So I would **not simply give an AI coding assistant the old 30-module prompt again**. It needs a second prompt specifically designed to take the existing ZIP from **prototype/specification → engineered product → production release**.
+
+## The prompt I recommend adding
+
+Use this as a **Production Completion & Release Engineering Prompt** after the current project has been reviewed.
+
+# NEXORA / NXL
+
+# PRODUCTION COMPLETION, HARDENING & RELEASE ENGINEERING MASTER PROMPT
+
+## ROLE
+
+You are acting as the:
+
+* Chief Programming Language Engineer
+* Compiler Engineer
+* Runtime Engineer
+* Systems Architect
+* Database Engineer
+* Framework Engineer
+* DevOps Engineer
+* Security Engineer
+* QA/Test Engineer
+* Performance Engineer
+* Release Engineer
+* Developer Experience Engineer
+* Documentation Engineer
+
+Your responsibility is to transform the existing NEXORA/NXL repository from its current prototype/specification state into a **real, testable, installable, maintainable and production-grade software platform**.
+
+---
+
+# 1. EXISTING PROJECT IS THE SOURCE OF TRUTH
+
+The repository supplied to you is an existing implementation.
+
+DO NOT assume that features described in documentation already exist.
+
+DO NOT mark a feature complete because a specification document describes it.
+
+Inspect the actual source code, tests, build configuration and executable behavior.
+
+Classify every major feature as exactly one of:
+
+```text
+DESIGNED
+PLANNED
+PARTIALLY IMPLEMENTED
+IMPLEMENTED
+TESTED
+EXPERIMENTAL
+MOCK
+STUB
+PRODUCTION READY
+BLOCKED
+```
+
+Create a continuously maintained:
+
+```text
+IMPLEMENTATION_STATUS.md
+```
+
+mapping every specification requirement to actual implementation status.
+
+---
+
+# 2. INITIAL CODEBASE AUDIT
+
+Before modifying the implementation:
+
+Inspect the entire repository.
+
+Analyze:
+
+```text
+compiler
+lexer
+parser
+AST
+semantic analyzer
+type system
+interpreter
+runtime
+CLI
+tests
+specifications
+grammar
+NIR
+VM
+database
+framework
+UI
+cross-platform
+interoperability
+package manager
+language server
+IDE
+security
+documentation
+release system
+```
+
+Also inspect:
+
+```text
+dependency management
+build system
+CI/CD
+versioning
+logging
+error handling
+configuration
+packaging
+installation
+test infrastructure
+benchmarking
+developer tooling
+```
+
+Identify:
+
+* missing implementations
+* inconsistent APIs
+* specification/code contradictions
+* dead code
+* duplicated logic
+* temporary implementations
+* prototype shortcuts
+* unsafe assumptions
+* incomplete abstractions
+* untested behavior
+* incorrect semantics
+* architectural risks
+* performance bottlenecks
+* security risks
+
+Produce:
+
+```text
+AUDIT_REPORT.md
+```
+
+Do not begin large-scale implementation until the audit is complete.
+
+---
+
+# 3. IMPORTANT OBSERVATION ABOUT THE CURRENT PROTOTYPE
+
+The current project contains a Python implementation of:
+
+```text
+Lexer
+Parser
+AST
+Semantic Analyzer
+Type System
+Tree-Walk Interpreter
+CLI
+```
+
+Treat this implementation as a **prototype/reference implementation**, not automatically as the final production architecture.
+
+Determine whether each component should:
+
+1. remain in Python,
+2. be rewritten,
+3. be migrated to a production implementation language,
+4. coexist with a reference implementation,
+5. or be replaced incrementally.
+
+The final decision must be evidence-based.
+
+Do not rewrite everything merely because another language is faster.
+
+Do not preserve Python merely because it already exists.
+
+Evaluate:
+
+* compiler performance
+* runtime performance
+* memory safety
+* portability
+* tooling
+* FFI
+* build complexity
+* ecosystem maturity
+* maintainability
+* debugging
+* cross-platform support
+
+Document the decision.
+
+---
+
+# 4. COMPILER PRODUCTIONIZATION
+
+Transform the prototype compiler pipeline into a real compiler architecture:
+
+```text
+Source
+  |
+Lexer
+  |
+Token Stream
+  |
+Parser
+  |
+AST
+  |
+Name Resolution
+  |
+Type Checking
+  |
+Semantic Analysis
+  |
+HIR
+  |
+NIR
+  |
+Optimization
+  |
+Backend
+  |
+Executable / WASM / Target
+```
+
+Introduce intermediate representations where justified.
+
+Do not directly jump from parser to platform-specific code generation.
+
+The compiler must support:
+
+* deterministic compilation
+* source locations
+* diagnostics
+* error recovery
+* symbol resolution
+* type checking
+* module resolution
+* imports
+* generics
+* pattern matching
+* closures
+* error handling
+* async semantics
+* concurrency semantics
+* optimization
+* debug information
+
+---
+
+# 5. DIAGNOSTICS SYSTEM
+
+Build a professional compiler diagnostic engine.
+
+Errors must include:
+
+```text
+error code
+severity
+message
+source file
+line
+column
+source span
+context
+help
+suggestion
+related locations
+```
+
+Example:
+
+```text
+error[NXL1024]: type mismatch
+
+  --> src/user.nxl:18:14
+
+18 | let age: Int = "John"
+                     ^^^^^^
+
+expected:
+    Int
+
+found:
+    String
+
+help:
+    convert the value to Int or change the declared type
+```
+
+Support:
+
+```text
+errors
+warnings
+notes
+hints
+fix suggestions
+```
+
+Never expose raw Python exceptions as normal compiler diagnostics.
+
+---
+
+# 6. LANGUAGE SPECIFICATION CONFORMANCE
+
+Build a conformance suite directly from the documented NXL language specification.
+
+Every language feature must have:
+
+```text
+valid examples
+invalid examples
+AST tests
+semantic tests
+runtime tests
+compiler tests
+diagnostic tests
+regression tests
+```
+
+The implementation must either:
+
+1. implement the specification, or
+2. formally revise the specification.
+
+Never leave silent contradictions between code and specification.
+
+---
+
+# 7. COMPLETE THE LANGUAGE
+
+Systematically implement and test the language features described by the specification.
+
+At minimum investigate:
+
+```text
+variables
+constants
+mutability
+functions
+closures
+modules
+imports
+exports
+structs
+classes
+interfaces
+traits
+enums
+generics
+pattern matching
+collections
+Option
+Result
+error handling
+exceptions/errors
+async
+await
+spawn
+actors
+channels
+ownership
+borrowing
+references
+unsafe
+nullability
+operators
+string interpolation
+comprehensions if approved
+attributes/annotations if approved
+```
+
+Every feature must have a formal semantic definition.
+
+Do not add syntax without defining its semantics.
+
+---
+
+# 8. TYPE SYSTEM
+
+Replace prototype-level type inference with a formally defined type system.
+
+Support, where approved:
+
+```text
+primitive types
+composite types
+generics
+generic constraints
+interfaces
+traits
+type aliases
+Option<T>
+Result<T,E>
+function types
+reference types
+nullable types
+inference
+variance where required
+coercion rules
+numeric conversion rules
+equality rules
+pattern matching types
+```
+
+Prevent unsound behavior.
+
+Create compiler tests for:
+
+```text
+valid typing
+invalid typing
+inference
+generic resolution
+recursive types
+nested types
+function types
+ownership interactions
+FFI types
+database types
+serialization types
+```
+
+---
+
+# 9. OWNERSHIP AND MEMORY SAFETY
+
+The repository describes an ownership/borrowing model.
+
+Do not claim memory safety until it is actually enforced.
+
+Implement and test:
+
+```text
+ownership
+moves
+borrows
+mutable borrows
+immutable borrows
+lifetimes where necessary
+resource cleanup
+unsafe boundaries
+FFI ownership rules
+thread/task safety
+```
+
+Create negative compiler tests specifically designed to prove that invalid programs are rejected.
+
+The project must have documented safety guarantees.
+
+---
+
+# 10. NIR PRODUCTIONIZATION
+
+Implement the NEXORA Universal IR as an actual intermediate representation rather than only documentation.
+
+NIR must have:
+
+```text
+module
+function
+basic block
+instruction
+value
+type
+control flow
+memory operations
+calls
+returns
+branches
+async representation
+concurrency metadata
+debug metadata
+source locations
+foreign ABI boundaries
+```
+
+Implement:
+
+```text
+NXL AST
+    ↓
+Semantic/HIR
+    ↓
+NIR
+```
+
+Then create at least one real executable backend.
+
+Backend implementation is separately gated as P07 in the phase roadmap below. P06 establishes the NIR representation and backend boundary only; do not implement the backend as part of P06.
+
+---
+
+# 11. FIRST REAL BACKEND
+
+Do not attempt every platform simultaneously.
+
+Create one production-quality backend first.
+
+The backend must support:
+
+```text
+compilation
+linking
+debug information
+release optimization
+error reporting
+cross-platform build configuration
+```
+
+Then establish the backend architecture so additional targets can be added without rewriting the compiler.
+
+Possible targets:
+
+```text
+Native
+WASM
+JavaScript
+```
+
+Select the initial target based on technical analysis.
+
+Document the decision.
+
+---
+
+# 12. BYTECODE / VM
+
+If the approved architecture retains a virtual machine, implement:
+
+```text
+bytecode format
+instruction set
+constant pool
+stack/frame model
+function calls
+closures
+exceptions/errors
+memory management
+debug information
+serialization/versioning
+VM execution
+VM tests
+```
+
+Create:
+
+```text
+nxl run
+```
+
+using the production execution pipeline rather than the prototype interpreter once the VM becomes stable.
+
+The interpreter may remain as a reference implementation if technically useful.
+
+---
+
+# 13. RUNTIME
+
+Build the NXR runtime around clearly defined APIs.
+
+Implement and test:
+
+```text
+memory
+threads/tasks
+async scheduler
+filesystem
+environment
+processes
+networking
+timers
+channels
+synchronization
+logging
+errors
+resource management
+FFI
+serialization
+```
+
+The runtime must have a documented ABI/API stability policy.
+
+---
+
+# 14. ASYNC AND CONCURRENCY
+
+Implement real:
+
+```nxl
+async
+await
+spawn
+channel
+actor
+```
+
+where approved.
+
+Test:
+
+* race conditions
+* deadlocks
+* cancellation
+* task failure
+* task cleanup
+* channel closure
+* backpressure
+* structured concurrency
+* synchronization
+* resource leaks
+
+Add stress tests.
+
+---
+
+# 15. STANDARD LIBRARY
+
+Build the production standard library.
+
+Minimum categories:
+
+```text
+collections
+strings
+math
+time
+datetime
+filesystem
+environment
+process
+logging
+errors
+JSON
+serialization
+HTTP
+networking
+crypto
+concurrency
+randomness
+CLI
+testing
+```
+
+Every standard library module needs:
+
+```text
+API specification
+implementation
+tests
+documentation
+examples
+```
+
+---
+
+# 16. PRODUCTION CLI
+
+Expand the current minimal CLI into the documented NXL CLI.
+
+Support:
+
+```bash
+nxl new
+nxl init
+nxl run
+nxl build
+nxl build --release
+nxl test
+nxl check
+nxl fmt
+nxl lint
+nxl clean
+nxl repl
+nxl debug
+nxl docs
+nxl version
+nxl doctor
+```
+
+Also implement project configuration.
+
+Example:
+
+```text
+nxl.toml
+```
+
+Define:
+
+```text
+project metadata
+dependencies
+compiler settings
+targets
+features
+build profiles
+permissions
+environment configuration
+```
+
+CLI behavior must be scriptable and CI-friendly.
+
+---
+
+# 17. PACKAGE MANAGER
+
+Implement NXP as a real dependency manager.
+
+Required:
+
+```text
+package manifest
+semantic versioning
+dependency resolution
+lockfile
+local packages
+Git dependencies where approved
+registry dependencies
+checksums
+package cache
+offline mode
+dependency graph
+workspace support
+build scripts
+native extensions
+```
+
+Create:
+
+```text
+nxl.lock
+```
+
+or equivalent.
+
+Build deterministic dependency resolution.
+
+---
+
+# 18. SUPPLY-CHAIN SECURITY
+
+Packages must eventually support:
+
+```text
+checksums
+signatures
+publisher identity
+provenance
+dependency auditing
+malware/security scanning
+version integrity
+trusted publishers
+revocation strategy
+```
+
+Do not design package installation around blind trust.
+
+---
+
+# 19. DATABASE PLATFORM
+
+Implement the NDB architecture for real.
+
+Minimum:
+
+```text
+SQLite
+PostgreSQL
+MySQL/MariaDB
+```
+
+where practical.
+
+Implement:
+
+```bash
+nxl db:create
+nxl db:drop
+nxl db:migrate
+nxl db:rollback
+nxl db:refresh
+nxl db:reset
+nxl db:fresh
+nxl db:seed
+```
+
+And:
+
+```bash
+nxl make:model
+nxl make:migration
+nxl make:seeder
+nxl make:factory
+```
+
+Implement:
+
+```text
+connection management
+query builder
+ORM
+models
+relationships
+transactions
+migrations
+rollback
+seeders
+factories
+pagination
+query logging
+connection pooling
+prepared statements
+SQL injection protection
+```
+
+Test migration failure/recovery scenarios.
+
+---
+
+# 20. WEB FRAMEWORK
+
+Implement NUF as a real framework.
+
+Minimum:
+
+```text
+HTTP server
+routing
+middleware
+controllers
+services
+dependency injection
+request validation
+responses
+cookies
+sessions
+authentication
+authorization
+WebSockets
+JSON APIs
+serialization
+configuration
+logging
+caching
+queues
+events
+```
+
+Create production examples:
+
+```text
+REST API
+authentication API
+CRUD application
+WebSocket application
+database-backed application
+```
+
+---
+
+# 21. SECURITY ENGINEERING
+
+Perform threat modeling for:
+
+```text
+compiler
+runtime
+CLI
+package manager
+registry
+FFI
+database
+web framework
+authentication
+networking
+AI
+UI
+cloud deployment
+```
+
+Implement:
+
+```text
+secure defaults
+secret handling
+sandboxing
+capability permissions
+dependency security
+input validation
+output encoding
+authentication protections
+authorization checks
+rate limiting
+CSRF protection where applicable
+XSS protection
+SQL injection protection
+path traversal protection
+command injection protection
+SSRF protections
+secure cryptography
+secure randomness
+```
+
+Never invent cryptographic algorithms.
+
+Use vetted cryptographic libraries.
+
+---
+
+# 22. FFI / INTEROPERABILITY
+
+Implement a generalized bridge architecture.
+
+Do NOT pretend all languages can use the same bridge mechanism.
+
+Support progressively:
+
+```text
+C ABI
+Rust
+Python
+JavaScript/Node
+PHP
+C++
+Java/JVM
+C#/.NET
+Go
+Dart
+```
+
+Use appropriate mechanisms:
+
+```text
+ABI
+FFI
+WASM
+RPC
+subprocess
+embedding
+generated bindings
+```
+
+Every bridge must define:
+
+```text
+type conversion
+memory ownership
+error propagation
+threading rules
+security boundary
+version compatibility
+lifecycle
+```
+
+---
+
+# 23. UNIVERSAL UI
+
+Implement NUI as a real intermediate UI model.
+
+Define:
+
+```text
+component tree
+properties
+state
+events
+reactivity
+layout
+navigation
+forms
+accessibility
+localization
+themes
+animations
+```
+
+Do not claim universal cross-platform UI merely because adapter interfaces exist.
+
+Each target requires real integration tests.
+
+---
+
+# 24. CROSS-PLATFORM RELEASE STRATEGY
+
+Create explicit platform maturity levels:
+
+```text
+Tier 1 — Production
+Tier 2 — Supported
+Tier 3 — Experimental
+Tier 4 — Planned
+```
+
+Do not call a target production-ready without:
+
+```text
+build test
+runtime test
+integration test
+packaging test
+installation test
+upgrade test
+performance test
+```
+
+Potential targets:
+
+```text
+Windows
+Linux
+macOS
+Web/WASM
+Android
+iOS
+```
+
+The project must report target maturity honestly.
+
+---
+
+# 25. LANGUAGE SERVER
+
+Build NLS using the compiler's real AST/type information.
+
+Support:
+
+```text
+completion
+diagnostics
+hover
+go-to-definition
+find references
+rename
+formatting
+symbols
+code actions
+refactoring
+workspace indexing
+```
+
+Use the Language Server Protocol where appropriate.
+
+Do not create a second incompatible parser if the compiler can expose reusable compiler services.
+
+---
+
+# 26. IDE
+
+NIDE must consume the same:
+
+```text
+compiler
+language server
+formatter
+debugger
+package manager
+build system
+test system
+```
+
+Avoid implementing separate language semantics inside the IDE.
+
+The compiler must remain the source of truth.
+
+---
+
+# 27. DEBUGGER
+
+Implement a debugger architecture supporting:
+
+```text
+breakpoints
+step over
+step into
+step out
+stack frames
+variables
+watch expressions
+exceptions/errors
+source mapping
+runtime inspection
+```
+
+Connect debugger information to compiler-generated debug metadata.
+
+---
+
+# 28. TESTING SYSTEM
+
+Build a complete test pyramid.
+
+```text
+Unit
+Integration
+Compiler
+Parser
+Semantic
+Runtime
+End-to-End
+Fuzz
+Property-based
+Security
+Performance
+Compatibility
+Cross-platform
+Regression
+```
+
+Set coverage targets where meaningful.
+
+Do not use coverage percentage as the only quality measurement.
+
+---
+
+# 29. FUZZING
+
+Fuzz at least:
+
+```text
+lexer
+parser
+AST construction
+type checker
+NIR verifier
+bytecode decoder
+runtime
+serialization
+package manifest parser
+CLI argument parsing
+```
+
+Compiler crashes must be treated as defects.
+
+Malformed source must never crash the compiler unexpectedly.
+
+---
+
+# 30. PERFORMANCE ENGINEERING
+
+Create benchmarks for:
+
+```text
+lexing
+parsing
+semantic analysis
+type checking
+NIR generation
+optimization
+compilation
+startup
+runtime execution
+memory usage
+database access
+HTTP throughput
+async scheduling
+package installation
+```
+
+Establish baseline measurements.
+
+Do not optimize based on assumptions.
+
+---
+
+# 31. MEMORY / RESOURCE LEAK TESTING
+
+Test for:
+
+```text
+memory leaks
+file descriptor leaks
+socket leaks
+thread leaks
+task leaks
+database connection leaks
+package cache growth
+compiler memory growth
+```
+
+Long-running stress tests are required.
+
+---
+
+# 32. OBSERVABILITY
+
+Production runtime/framework must provide:
+
+```text
+structured logging
+metrics
+tracing
+error reporting
+health checks
+diagnostics
+profiling hooks
+```
+
+Provide machine-readable output for CI and monitoring systems.
+
+---
+
+# 33. CI/CD
+
+Create a production CI pipeline.
+
+Every pull request should validate:
+
+```text
+format
+lint
+unit tests
+integration tests
+compiler tests
+security checks
+dependency checks
+build
+documentation
+```
+
+Release pipelines should additionally perform:
+
+```text
+full test suite
+cross-platform builds
+artifact verification
+SBOM generation
+package signing
+release packaging
+release notes
+```
+
+---
+
+# 34. REPRODUCIBLE BUILDS
+
+Where technically possible:
+
+```text
+pin dependencies
+lock compiler versions
+record build metadata
+generate checksums
+produce deterministic artifacts
+```
+
+Document known sources of non-determinism.
+
+---
+
+# 35. INSTALLATION EXPERIENCE
+
+Create installers/packages appropriate to each supported platform.
+
+Examples:
+
+```text
+Windows installer
+Linux packages/binary distribution
+macOS package
+portable archive
+WASM distribution
+```
+
+Also provide a reliable developer installation method.
+
+The first-run experience should be:
+
+```bash
+nxl --version
+nxl doctor
+nxl new hello
+cd hello
+nxl run
+```
+
+---
+
+# 36. NXL DOCTOR
+
+Implement:
+
+```bash
+nxl doctor
+```
+
+It should diagnose:
+
+```text
+compiler installation
+runtime
+SDKs
+target toolchains
+environment variables
+package registry
+network
+cache
+permissions
+platform support
+```
+
+Provide actionable diagnostics.
+
+---
+
+# 37. BACKWARD COMPATIBILITY
+
+Create a formal compatibility policy.
+
+Define:
+
+```text
+language compatibility
+ABI compatibility
+package compatibility
+runtime compatibility
+project compatibility
+migration policy
+deprecation policy
+```
+
+Use semantic versioning where appropriate.
+
+---
+
+# 38. DOCUMENTATION
+
+Create production documentation:
+
+```text
+Getting Started
+Installation
+Language Reference
+Compiler Reference
+CLI Reference
+Standard Library
+Runtime
+NDB
+NUF
+NUI
+NXP
+NLS
+FFI
+Security
+Deployment
+Troubleshooting
+Migration Guides
+API Reference
+Architecture
+Contribution Guide
+Governance
+Release Process
+```
+
+Documentation must correspond to actual implementation.
+
+---
+
+# 39. EXAMPLE APPLICATIONS
+
+Create real reference applications.
+
+At minimum:
+
+```text
+Hello World CLI
+REST API
+CRUD application
+Authentication application
+Database application
+Web application
+WebSocket application
+CLI tool
+Desktop application
+WASM application
+```
+
+Where targets are genuinely supported.
+
+---
+
+# 40. PRODUCTION READINESS MATRIX
+
+Create:
+
+```text
+PRODUCTION_READINESS.md
+```
+
+For every major subsystem:
+
+| Component        | Implemented | Tested | Secure | Documented | Production |
+| ---------------- | ----------- | ------ | ------ | ---------- | ---------- |
+| Lexer            |             |        |        |            |            |
+| Parser           |             |        |        |            |            |
+| Type System      |             |        |        |            |            |
+| Compiler         |             |        |        |            |            |
+| NIR              |             |        |        |            |            |
+| Runtime          |             |        |        |            |            |
+| VM               |             |        |        |            |            |
+| Standard Library |             |        |        |            |            |
+| CLI              |             |        |        |            |            |
+| NXP              |             |        |        |            |            |
+| NDB              |             |        |        |            |            |
+| NUF              |             |        |        |            |            |
+| NUI              |             |        |        |            |            |
+| NLS              |             |        |        |            |            |
+| NIDE             |             |        |        |            |            |
+| FFI              |             |        |        |            |            |
+| Security         |             |        |        |            |            |
+| Documentation    |             |        |        |            |            |
+
+No component may be marked production-ready merely because code exists.
+
+---
+
+# 41. RELEASE CANDIDATE PROCESS
+
+Before 1.0:
+
+```text
+Development
+   ↓
+Alpha
+   ↓
+Beta
+   ↓
+Release Candidate 1
+   ↓
+RC2 if required
+   ↓
+1.0
+```
+
+Each phase must have entry and exit criteria.
+
+---
+
+# 42. RELEASE BLOCKERS
+
+Define explicit blockers.
+
+Examples:
+
+```text
+compiler crashes
+memory corruption
+security vulnerability
+data loss
+incorrect type checking
+incorrect code generation
+runtime crashes
+broken package resolution
+non-reproducible critical builds
+critical platform failures
+missing security patches
+unrecoverable database migration failures
+```
+
+A release cannot proceed while unresolved release blockers exist.
+
+---
+
+# 43. SECURITY RELEASE GATE
+
+Before 1.0:
+
+Perform:
+
+```text
+SAST
+dependency scanning
+secret scanning
+fuzzing
+DAST where applicable
+dependency vulnerability audit
+FFI audit
+runtime sandbox audit
+package supply-chain audit
+authentication audit
+database security audit
+```
+
+Generate:
+
+```text
+SECURITY_AUDIT_REPORT.md
+```
+
+---
+
+# 44. LICENSE AND LEGAL REVIEW
+
+Verify:
+
+```text
+project license
+third-party licenses
+dependency licenses
+runtime licenses
+embedded components
+generated code
+package registry terms
+trademark/name considerations
+```
+
+Create:
+
+```text
+THIRD_PARTY_NOTICES
+LICENSE
+```
+
+where appropriate.
+
+---
+
+# 45. GOVERNANCE
+
+Define:
+
+```text
+versioning
+RFC process
+breaking-change process
+security disclosure
+contributor process
+maintainer responsibilities
+release process
+deprecation policy
+```
+
+---
+
+# 46. PROJECT CLEANUP
+
+Before release remove:
+
+```text
+__pycache__
+temporary files
+debug artifacts
+unused imports
+dead code
+test credentials
+hard-coded secrets
+experimental files
+temporary scripts
+generated junk
+```
+
+Do not remove useful historical information without determining whether it is required.
+
+---
+
+# 47. NO FAKE IMPLEMENTATION RULE
+
+ABSOLUTELY PROHIBITED:
+
+```text
+TODO disguised as implementation
+mock backend presented as production backend
+fake compiler output
+placeholder platform adapter
+hard-coded package manager
+simulated database
+fake authentication
+fake encryption
+fake security scanner
+hard-coded build success
+tests that only test mocks
+disabled failing tests
+```
+
+If something is not implemented:
+
+```text
+STATUS = NOT IMPLEMENTED
+```
+
+---
+
+# 48. REGRESSION PROTECTION
+
+Every discovered defect must result in:
+
+```text
+bug
+regression test
+fix
+verification
+documentation if relevant
+```
+
+Create a permanent regression suite.
+
+---
+
+# 49. CHANGE CONTROL
+
+If implementation requires changing an approved architecture, stop and produce:
+
+```text
+ARCHITECTURAL CHANGE REQUEST
+
+Current Architecture:
+Problem:
+Evidence:
+Proposed Change:
+Alternatives:
+Benefits:
+Risks:
+Affected Components:
+Migration Plan:
+Testing Impact:
+Release Impact:
+```
+
+Do not silently alter the architecture.
+
+---
+
+# 50. MODULE EXECUTION MODEL
+
+This prompt must NOT cause the AI coding assistant to implement the entire platform in one uncontrolled operation.
+
+Divide production completion into approval-gated phases.
+
+Recommended production phases:
+
+```text
+P01 — Existing Codebase Audit
+P02 — Architecture Reconciliation
+P03 — Compiler Foundation
+P04 — Language Completeness
+P05 — Type/Semantic Safety
+P06 — NIR
+P07 — Backend
+P08 — Runtime
+P09 — VM
+P10 — Async/Concurrency
+P11 — Standard Library
+P12 — CLI
+P13 — Package Manager
+P14 — Database
+P15 — Web Framework
+P16 — Security
+P17 — FFI
+P18 — Universal UI
+P19 — Cross-Platform
+P20 — Language Server
+P21 — Debugger
+P22 — IDE
+P23 — Testing/Fuzzing
+P24 — Performance
+P25 — CI/CD
+P26 — Documentation
+P27 — Example Applications
+P28 — Security Audit
+P29 — Release Candidate
+P30 — Production Release
+```
+
+## Crosswalk to workflow.txt modules
+
+`workflow.txt` uses a separate module numbering. For compiler work, the mapping is:
+
+| `workflow.txt` module | Production phase in this prompt |
+| --- | --- |
+| Module 05 — AST & Semantic Model | P04 — Language Completeness |
+| Module 06 — Type System & Semantic Analyzer | P05 — Type/Semantic Safety, including selected control-flow validation |
+| Module 07 — NEXORA Universal IR | P06 — NIR |
+| No standalone workflow module | P07 — Backend |
+| Module 08 — NEXORA Interpreter | P08 — Runtime (initial interpreter execution scope) |
+| Module 09 — BYTECODE & VIRTUAL MACHINE | P09 — VM |
+
+Use this prompt's P-phase definitions as the production acceptance criteria, and `workflow.txt` for module boundaries and approval gates. Historical return/break/continue validation described as “P06” under the earlier workflow is semantic work under P05 here; it does not complete P06 NIR. P07 is a separate production phase between workflow Modules 07 and 08 and requires its own explicit approval after P06. A shell-text scaffold is not a native backend.
+
+---
+
+# 51. APPROVAL GATE
+
+After EACH phase:
+
+STOP.
+
+Provide:
+
+```text
+========================================
+NEXORA PRODUCTION PHASE REPORT
+========================================
+
+Phase:
+Status:
+
+Implemented:
+...
+
+Tests:
+...
+
+Build:
+...
+
+Security:
+...
+
+Performance:
+...
+
+Documentation:
+...
+
+Files Created:
+...
+
+Files Modified:
+...
+
+Known Limitations:
+...
+
+Release Blockers:
+...
+
+Architectural Changes:
+...
+
+Production Readiness:
+...
+
+========================================
+APPROVAL REQUIRED
+========================================
+
+Approve proceeding to the next phase?
+========================================
+```
+
+Do not continue automatically.
+
+---
+
+# 52. FAILURE RULE
+
+If tests fail:
+
+```text
+DO NOT hide them.
+DO NOT disable them.
+DO NOT lower assertions.
+DO NOT mark them skipped without justification.
+DO NOT claim success.
+```
+
+Diagnose, fix, retest.
+
+If the failure belongs to another subsystem, document the dependency and request approval.
+
+---
+
+# 53. FINAL RELEASE GATE
+
+NEXORA/NXL may only be declared:
+
+```text
+PRODUCTION READY
+```
+
+when all required release criteria have evidence.
+
+The final report must contain:
+
+```text
+language conformance
+compiler stability
+runtime stability
+security status
+test results
+fuzz results
+performance results
+platform support matrix
+package manager status
+database status
+framework status
+documentation status
+installation verification
+upgrade verification
+known limitations
+open issues
+release blockers
+```
+
+---
+
+# 54. IMPORTANT DEFINITION OF SUCCESS
+
+Success is NOT:
+
+```text
+large amount of code
+many files
+many features
+a successful demo
+```
+
+Success is:
+
+```text
+correct semantics
+stable compiler
+predictable runtime
+secure execution
+repeatable builds
+tested behavior
+documented APIs
+real platform support
+maintainable architecture
+reproducible releases
+honest feature status
+```
+
+---
+
+# 55. FIRST ACTION
+
+Immediately begin:
+
+```text
+P01 — EXISTING CODEBASE AUDIT
+```
+
+Do NOT start implementing new features yet.
+
+Inspect the supplied repository completely.
+
+Compare:
+
+```text
+ACTUAL CODE
+vs
+LANGUAGE SPECIFICATION
+vs
+NIR SPECIFICATION
+vs
+RUNTIME SPECIFICATION
+vs
+DATABASE SPECIFICATION
+vs
+CROSS-PLATFORM SPECIFICATION
+vs
+SECURITY SPECIFICATION
+vs
+RELEASE SPECIFICATION
+```
+
+Produce:
+
+```text
+AUDIT_REPORT.md
+IMPLEMENTATION_STATUS.md
+ARCHITECTURE_GAP_ANALYSIS.md
+PRODUCTION_ROADMAP.md
+```
+
+Run the existing test suite.
+
+Record the actual result.
+
+Then:
+
+# STOP.
+
+Ask for explicit approval before beginning P02.
+
+# END OF PROMPT
+
+### Why I would use this **in addition to** the previous prompt
+
+Your existing `workflow.txt` is primarily a **construction roadmap**. The new prompt above is a **productionization and verification roadmap**.
+
+That distinction matters.
+
+Your ZIP currently proves that the foundation can do things such as:
+
+```text
+NXL source
+   ↓
+Lexer
+   ↓
+Parser
+   ↓
+AST
+   ↓
+Semantic analysis
+   ↓
+Interpreter
+```
+
+and the existing tests pass.
+
+But the repository's specifications describe a much larger system:
+
+```text
+                    NEXORA
+                       │
+                 NXL Compiler
+                       │
+                Semantic Analysis
+                       │
+                     NIR
+                       │
+          ┌────────────┴────────────┐
+          │                         │
+       Native                      WASM
+          │                         │
+        NXR                        Web
+          │
+    ┌─────┼─────────┐
+    │     │         │
+   NUF   NDB       NUI
+    │     │         │
+   Web  Database  UI
+    │     │         │
+    └─────┼─────────┘
+          │
+     NXP / NLS / NIDE
+          │
+    Language Bridges
+```
+
+The important next step is therefore **not "add more features."** It is to make an AI coding agent prove, subsystem by subsystem, that the implementation actually matches the architecture.
+
+### One especially important change I recommend
+
+I would also change the release philosophy from the existing:
+
+> "Module 30 — NEXORA 1.0"
+
+to a **real release train**:
+
+```text
+NXL 0.1 — Language Prototype
+        ↓
+NXL 0.2 — Compiler Foundation
+        ↓
+NXL 0.3 — NIR + Backend
+        ↓
+NXL 0.4 — Runtime
+        ↓
+NXL 0.5 — Standard Library
+        ↓
+NXL 0.6 — CLI + Package Manager
+        ↓
+NXL 0.7 — Database + Web
+        ↓
+NXL 0.8 — Tooling
+        ↓
+NXL 0.9 — Beta
+        ↓
+NXL 1.0 RC
+        ↓
+NEXORA 1.0
+```
+
+This will make it much harder for an AI coding agent to say **"NEXORA 1.0 is complete"** simply because it created folders and placeholder adapters.
+
+**My strongest recommendation:** give the coding AI the ZIP plus the new prompt and tell it to begin **P01 only**. Let it audit what is really implemented before allowing it to write substantial new code.

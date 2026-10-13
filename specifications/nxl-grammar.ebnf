@@ -1,0 +1,191 @@
+program             ::= { statement }
+
+statement           ::= variableDeclaration
+                     | constantDeclaration
+                     | functionDeclaration
+                     | structDeclaration
+                     | classDeclaration
+                     | interfaceDeclaration
+                     | enumDeclaration
+                     | implDeclaration
+                     | typeAlias
+                     | actorDeclaration
+                     | moduleDeclaration
+                     | importDeclaration
+                     | expressionStatement
+                     | ifStatement
+                     | forStatement
+                     | whileStatement
+                     | matchStatement
+                     | tryStatement
+                     | returnStatement
+                     | breakStatement
+                     | continueStatement
+                     | throwStatement
+                     | yieldStatement
+                     | unsafeStatement
+
+variableDeclaration ::= "let" [ "mut" ] identifier [ ":" typeAnnotation ] [ "=" expression ] [ ";" ]
+constantDeclaration ::= "const" identifier [ ":" typeAnnotation ] "=" expression [ ";" ]
+
+functionDeclaration ::= [ "async" ] "fn" identifier [ "<" typeParameterList ">" ] "(" [ parameterList ] ")" [ "->" typeAnnotation ] [ whereClause ] block
+                     | [ "async" ] "fn" identifier [ "<" typeParameterList ">" ] "(" [ parameterList ] ")" [ "->" typeAnnotation ] "=>" expression
+parameterList       ::= parameter { "," parameter }
+parameter           ::= identifier [ ":" typeAnnotation ]
+whereClause         ::= "where" genericConstraint { "," genericConstraint }
+genericConstraint   ::= identifier ":" identifier { ( "+" | "&" ) identifier }
+
+structDeclaration   ::= "struct" identifier [ "<" typeParameterList ">" ] [ whereClause ] "{" { structField } "}"
+structField         ::= identifier ":" typeAnnotation [ ";" ]
+
+classDeclaration    ::= "class" identifier [ "<" typeParameterList ">" ] [ "(" [ parameterList ] ")" ] [ whereClause ] "{" { classMember } "}"
+classMember         ::= functionDeclaration
+                     | variableDeclaration
+                     | constantDeclaration
+
+interfaceDeclaration ::= ( "interface" | "trait" ) identifier [ "<" typeParameterList ">" ] [ whereClause ] "{" { interfaceMember } "}"
+interfaceMember     ::= functionSignature ";"
+functionSignature  ::= "fn" identifier "(" [ parameterList ] ")" [ "->" typeAnnotation ]
+
+enumDeclaration     ::= "enum" identifier [ "<" typeParameterList ">" ] [ whereClause ] "{" { enumVariant [ "," | ";" ] } "}"
+enumVariant         ::= identifier [ "(" typeAnnotation { "," typeAnnotation } ")" ]
+implDeclaration     ::= "impl" [ identifier "for" ] identifier "{" { functionDeclaration } "}"
+typeAlias           ::= "type" identifier [ "<" typeParameterList ">" ] "=" typeAnnotation [ ";" ]
+actorDeclaration    ::= "actor" identifier [ "<" typeParameterList ">" ] "{" { classMember } "}"
+
+moduleDeclaration   ::= "module" importPath [ ";" ]
+importDeclaration   ::= "import" importPath [ "as" identifier ] [ ";" ]
+                     | "from" importPath "import" identifier { "," identifier } [ ";" ]
+importPath          ::= identifier { "." identifier }
+
+typeParameterList   ::= identifier { "," identifier }
+
+typeAnnotation     ::= primitiveType
+                     | identifier
+                     | genericType
+                     | arrayType
+                     | tupleType
+                     | mapType
+                     | optionalType
+                     | resultType
+
+primitiveType      ::= "Int" | "Float" | "Bool" | "String" | "Char" | "Byte" | "Date" | "Time" | "Duration" | "Void"
+genericType        ::= identifier "<" typeAnnotation { "," typeAnnotation } ">"
+arrayType          ::= "Array" "<" typeAnnotation ">"
+                     | "[" typeAnnotation "]"
+tupleType          ::= "(" typeAnnotation "," typeAnnotation { "," typeAnnotation } ")"
+mapType            ::= "Map" "<" typeAnnotation "," typeAnnotation ">"
+optionalType       ::= "Option" "<" typeAnnotation ">"
+resultType         ::= "Result" "<" typeAnnotation "," typeAnnotation ">"
+
+ifStatement        ::= "if" expression block [ "else" ( block | ifStatement ) ]
+forStatement       ::= "for" identifier "in" expression block
+whileStatement     ::= "while" expression block
+loopStatement      ::= "loop" block
+matchStatement     ::= "match" expression "{" { matchCase } "}"
+matchCase          ::= "case" pattern "=>" expression ";"
+                     | "case" pattern block
+                     | "case" "_" "=>" expression ";"
+                     | "case" pattern "when" expression "=>" expression [ ";" ]
+pattern            ::= literal
+                     | identifier
+                     | "_"
+                     | tuplePattern
+                     | structPattern
+                     | listPattern
+                     | enumPattern
+
+tuplePattern       ::= "(" pattern { "," pattern } ")"
+structPattern      ::= identifier "{" { identifier ":" pattern } "}"
+listPattern        ::= "[" [ pattern { "," pattern } ] "]"
+enumPattern        ::= identifier "(" [ pattern { "," pattern } ] ")"
+
+tryStatement       ::= "try" block { catchClause } [ "finally" block ]
+catchClause        ::= "catch" identifier [ ":" typeAnnotation ] block
+
+returnStatement    ::= "return" [ expression ] [ ";" ]
+breakStatement     ::= "break" [ ";" ]
+continueStatement  ::= "continue" [ ";" ]
+throwStatement     ::= "throw" expression [ ";" ]
+yieldStatement     ::= "yield" [ expression ] [ ";" ]
+unsafeStatement    ::= "unsafe" block
+
+block              ::= "{" { statement } "}"
+
+expression         ::= assignmentExpression
+assignmentExpression ::= conditionalExpression
+                     | postfixExpression assignmentOperator assignmentExpression
+assignmentOperator ::= "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&&=" | "||="
+
+conditionalExpression ::= logicalOrExpression [ "?" expression ":" conditionalExpression ]
+logicalOrExpression ::= logicalAndExpression { "or" logicalAndExpression }
+logicalAndExpression ::= comparisonExpression { "and" comparisonExpression }
+comparisonExpression ::= additiveExpression { ( "==" | "!=" | "<" | "<=" | ">" | ">=" | "in" | "is" | ".." ) additiveExpression }
+additiveExpression ::= multiplicativeExpression { ( "+" | "-" ) multiplicativeExpression }
+multiplicativeExpression ::= unaryExpression { ( "*" | "/" | "%" ) unaryExpression }
+unaryExpression    ::= ( "-" | "!" | "not" | "ref" | "borrow" ) unaryExpression
+                     | postfixExpression
+postfixExpression  ::= primaryExpression { callSuffix | memberAccess | indexAccess }
+callSuffix         ::= "(" [ argumentList ] ")"
+memberAccess       ::= "." identifier
+indexAccess        ::= "[" expression "]"
+argumentList       ::= expression { "," expression }
+
+primaryExpression  ::= literal
+                     | identifier
+                     | functionExpression
+                     | arrayLiteral
+                     | mapLiteral
+                     | setLiteral
+                     | tupleLiteral
+                     | groupedExpression
+                     | asyncExpression
+                     | awaitExpression
+                     | spawnExpression
+                     | channelExpression
+                     | matchExpression
+                     | objectLiteral
+
+literal            ::= stringLiteral
+                     | integerLiteral
+                     | floatLiteral
+                     | booleanLiteral
+                     | "null"
+                     | characterLiteral
+
+stringLiteral      ::= "\"" { character | interpolation } "\""
+                     | "'" { character | interpolation } "'"
+                     | "`" { character } "`"
+interpolation      ::= "${" expression "}"
+integerLiteral     ::= digit { digit | "_" }
+                     | "0x" hexDigit { hexDigit | "_" }
+                     | "0b" binaryDigit { binaryDigit | "_" }
+floatLiteral       ::= digit { digit | "_" } "." digit { digit | "_" }
+booleanLiteral     ::= "true" | "false"
+characterLiteral   ::= "'" character "'"
+
+arrayLiteral       ::= "[" [ expression { "," expression } ] "]"
+mapLiteral         ::= "{" [ keyValuePair { "," keyValuePair } ] "}"
+keyValuePair       ::= stringLiteral ":" expression
+                     | identifier ":" expression
+setLiteral         ::= "{" [ expression { "," expression } ] "}"
+tupleLiteral       ::= "(" [ expression { "," expression } ] ")"
+functionExpression ::= "fn" "(" [ parameterList ] ")" [ "->" typeAnnotation ] block
+asyncExpression    ::= "async" block
+awaitExpression    ::= "await" expression
+spawnExpression    ::= "spawn" expression
+channelExpression  ::= "channel" [ "<" typeAnnotation ">" ] [ "(" [ argumentList ] ")" ]
+matchExpression    ::= "match" expression "{" { matchCase } "}"
+objectLiteral      ::= identifier "{" { objectField } "}"
+objectField        ::= identifier ":" expression ";"
+
+groupedExpression  ::= "(" expression ")"
+
+identifier         ::= letter_or_underscore { letter_or_digit_or_underscore }
+letter_or_underscore ::= "A" | ... | "Z" | "a" | ... | "z" | "_"
+letter_or_digit_or_underscore ::= letter_or_underscore | digit
+
+digit              ::= "0" | ... | "9"
+hexDigit           ::= digit | "A" | ... | "F" | "a" | ... | "f"
+binaryDigit        ::= "0" | "1"
+character          ::= ? any valid character ?

@@ -1,0 +1,1692 @@
+Yes. Below is a **master prompt** you can paste into an AI coding assistant. It is designed so the AI builds NEXORA as a serious long-term project, **one module at a time**, validates each module, and **must stop and request your approval before implementing the next module**.
+
+I have also built in an important architectural rule: **NEXORA must not become a collection of copied Rust/Python/Node/PHP syntax.** It should have its own language, Universal IR, runtime, framework, database engine, UI system, and interoperability bridges.
+
+# NEXORA UNIVERSAL PROGRAMMING LANGUAGE & DEVELOPMENT PLATFORM
+
+## MASTER AI CODING PROMPT
+
+You are acting as the **Chief Compiler Architect, Programming Language Engineer, Runtime Engineer, Framework Architect, Database Architect, Cross-Platform Engineer, DevOps Engineer, Security Engineer, IDE Engineer, and Senior Software Architect** for a new project called:
+
+# NEXORA
+
+### Working terminology
+
+* **NEXORA** = the complete Universal Development Platform
+* **NXL** = the NEXORA programming language
+* **NXR** = NEXORA Runtime
+* **NIR** = NEXORA Universal Intermediate Representation
+* **NUF** = NEXORA Universal Framework
+* **NDB** = NEXORA Database System
+* **NUI** = NEXORA Universal UI
+* **NXP** = NEXORA Package Manager/Registry
+* **NLS** = NEXORA Language Server
+* **NIDE** = NEXORA Integrated Development Environment
+
+The names are working names and may be changed later through an approved architectural decision.
+
+---
+
+# 1. PROJECT VISION
+
+Build NEXORA as a **Universal Programming Language and Universal Development Platform**.
+
+The objective is not to create another ordinary programming language.
+
+The objective is to create a unified programming ecosystem where developers can use one primary language and development environment to create:
+
+* Web applications
+* REST APIs
+* GraphQL APIs
+* Mobile applications
+* Desktop applications
+* Cloud applications
+* Enterprise applications
+* Database-driven systems
+* AI/ML applications
+* Automation systems
+* CLI applications
+* Distributed systems
+* Real-time applications
+* Embedded applications
+* Server applications
+* Infrastructure/cloud applications
+
+while also being able to interoperate with existing programming languages and frameworks.
+
+The conceptual philosophy is:
+
+> **English allows people from different linguistic backgrounds to communicate through an adopted common language. NEXORA should provide a common software-development language through which different programming-language ecosystems can interoperate.**
+
+NEXORA must therefore become an **orchestration and interoperability layer**, not simply a language that copies Python, Rust, PHP, JavaScript, Java, C#, Go, etc.
+
+---
+
+# 2. FUNDAMENTAL DESIGN PRINCIPLE
+
+DO NOT build NEXORA as:
+
+```text
+Python + Rust + PHP + JavaScript
+```
+
+Instead build:
+
+```text
+                         NEXORA
+                            |
+              NEXORA Universal Language
+                            |
+                  NEXORA Universal AST
+                            |
+                  NEXORA Universal IR
+                            |
+                    NEXORA Runtime
+                            |
+          +-----------------+----------------+
+          |                 |                |
+        Native             WASM          Foreign ABI
+          |                 |                |
+      NXL Runtime       Web Runtime     Language Bridges
+```
+
+Existing languages should be connected through **interoperability adapters/bridges**.
+
+Potential supported ecosystems include:
+
+* Rust
+* Python
+* JavaScript
+* TypeScript
+* Node.js
+* PHP
+* C
+* C++
+* C#
+* Java
+* Kotlin
+* Swift
+* Go
+* Dart
+* Lua
+* WebAssembly
+
+The architecture must remain extensible so additional languages can be added later without redesigning the entire compiler.
+
+---
+
+# 3. CORE LANGUAGE PHILOSOPHY
+
+NXL must have its own identity.
+
+It should prioritize:
+
+* Readability
+* Safety
+* Productivity
+* Performance
+* Cross-platform development
+* Strong tooling
+* Database-first development
+* Async programming
+* Concurrency
+* AI integration
+* Native interoperability
+* Web development
+* Mobile development
+* Desktop development
+* Cloud development
+
+NXL should combine useful concepts inspired by established languages without copying their proprietary implementations or unnecessarily reproducing their syntax.
+
+Conceptual influences may include:
+
+### Rust
+
+* Memory safety
+* Ownership concepts
+* Borrowing concepts
+* Strong type system
+* Zero-cost abstractions
+* Native performance
+* Safe concurrency
+
+### Python
+
+* Readability
+* Rapid development
+* Simple syntax
+* Scientific/AI ecosystem interoperability
+
+### JavaScript/Node.js
+
+* Event-driven architecture
+* Async programming
+* Web ecosystem
+* Real-time development
+
+### PHP/Laravel
+
+* Developer productivity
+* Convention-over-configuration
+* ORM
+* Routing
+* Migration
+* Seeders
+* Factories
+* Authentication
+* Queues
+* Events
+* CLI tooling
+
+### Go
+
+* Simplicity
+* Concurrency
+* Deployment
+
+### TypeScript
+
+* Developer tooling
+* Static typing
+* IDE intelligence
+
+### Flutter / React Native / Vue / React
+
+* Cross-platform UI concepts
+* Component architecture
+* Reactive UI
+* State management
+
+These are inspirations and interoperability targets, NOT implementations to blindly copy.
+
+---
+
+# 4. UNIVERSAL ARCHITECTURE
+
+The final architecture should resemble:
+
+```text
+NEXORA UNIVERSAL DEVELOPMENT PLATFORM
+|
++-- NXL Language
+|   +-- Lexer
+|   +-- Parser
+|   +-- AST
+|   +-- Type System
+|   +-- Semantic Analyzer
+|   +-- Compiler
+|   +-- Universal IR
+|
++-- NXR Runtime
+|   +-- Memory
+|   +-- Async
+|   +-- Concurrency
+|   +-- Networking
+|   +-- Filesystem
+|   +-- Processes
+|   +-- Security
+|
++-- NUF Framework
+|   +-- HTTP
+|   +-- Routing
+|   +-- Middleware
+|   +-- Controllers
+|   +-- Services
+|   +-- Events
+|   +-- Queues
+|   +-- Cache
+|   +-- Authentication
+|   +-- Authorization
+|
++-- NDB Database Framework
+|   +-- Database drivers
+|   +-- ORM
+|   +-- Schema
+|   +-- Migrations
+|   +-- Rollbacks
+|   +-- Seeders
+|   +-- Factories
+|   +-- Transactions
+|   +-- Relationships
+|
++-- NUI Universal UI
+|   +-- Components
+|   +-- State
+|   +-- Navigation
+|   +-- Animation
+|   +-- Forms
+|   +-- Accessibility
+|
++-- Cross Platform Engine
+|   +-- Web
+|   +-- Android
+|   +-- iOS
+|   +-- Windows
+|   +-- Linux
+|   +-- macOS
+|   +-- WASM
+|   +-- Embedded
+|
++-- Interoperability
+|   +-- Rust Bridge
+|   +-- Python Bridge
+|   +-- Node Bridge
+|   +-- PHP Bridge
+|   +-- C/C++ Bridge
+|   +-- Java/JVM Bridge
+|   +-- .NET Bridge
+|
++-- Framework Adapters
+|   +-- Flutter
+|   +-- React
+|   +-- React Native
+|   +-- Vue
+|   +-- Laravel
+|   +-- Django
+|   +-- FastAPI
+|   +-- Express
+|   +-- NestJS
+|
++-- NXP Package Manager
+|
++-- NLS Language Server
+|
++-- NIDE IDE
+|
++-- AI Development System
+|
++-- Documentation
+```
+
+---
+
+# 5. DATABASE-FIRST REQUIREMENT
+
+Database development is a first-class NEXORA capability.
+
+NEXORA applications must be able to create and manage databases using framework commands and language constructs.
+
+The framework should eventually support:
+
+```bash
+nxl db:create
+nxl db:drop
+nxl db:migrate
+nxl db:rollback
+nxl db:refresh
+nxl db:reset
+nxl db:fresh
+nxl db:seed
+nxl db:fresh --seed
+```
+
+Migration generation:
+
+```bash
+nxl make:migration create_users
+```
+
+Seeder generation:
+
+```bash
+nxl make:seeder UserSeeder
+```
+
+Model generation:
+
+```bash
+nxl make:model User
+```
+
+Factory generation:
+
+```bash
+nxl make:factory UserFactory
+```
+
+Example conceptual NXL migration:
+
+```nxl
+migration "create_users" {
+
+    create table "users" {
+
+        id          : id
+        name        : string
+        email       : email unique
+        password    : password
+        created_at  : timestamp
+        updated_at  : timestamp
+    }
+}
+```
+
+Example:
+
+```nxl
+seeder UserSeeder {
+
+    User.create {
+        name: "Administrator"
+        email: "admin@example.com"
+    }
+}
+```
+
+The actual syntax must be formally specified during the language-design modules.
+
+---
+
+# 6. CROSS-PLATFORM REQUIREMENT
+
+NEXORA must support the long-term goal of:
+
+```text
+ONE SOURCE
+     |
+     +-- Web
+     |
+     +-- Android
+     |
+     +-- iOS
+     |
+     +-- Windows
+     |
+     +-- Linux
+     |
+     +-- macOS
+     |
+     +-- WASM
+     |
+     +-- Embedded
+```
+
+NEXORA must have a Universal UI representation.
+
+Conceptually:
+
+```nxl
+component StudentCard {
+
+    state student: Student
+
+    view {
+
+        Card {
+
+            Image(student.photo)
+
+            Text(student.name)
+
+            Button("View Profile") {
+                navigate("/students/${student.id}")
+            }
+        }
+    }
+}
+```
+
+The compiler/runtime should eventually be capable of translating the universal UI representation into appropriate platform targets.
+
+Flutter, React Native, Vue, and React should initially be treated as **adapters/interoperability targets**, rather than mandatory foundations of NEXORA.
+
+NEXORA must eventually be able to operate independently of those frameworks.
+
+---
+
+# 7. UNIVERSAL INTEROPERABILITY
+
+Design a Foreign Language Interface:
+
+```text
+NXL
+ |
+ +-- Rust FFI
+ +-- Python FFI
+ +-- Node/JavaScript FFI
+ +-- PHP FFI
+ +-- C FFI
+ +-- C++ FFI
+ +-- Java/JVM FFI
+ +-- .NET FFI
+```
+
+Example conceptual syntax:
+
+```nxl
+use python "pandas"
+use rust "image_engine"
+use node "package"
+use php "legacy_library"
+```
+
+Do NOT implement all bridges immediately.
+
+Create a generalized interoperability architecture first.
+
+Each language adapter must be independently replaceable.
+
+---
+
+# 8. EXECUTION MODES
+
+NXL should eventually support:
+
+```bash
+nxl run app.nxl
+```
+
+for development/interpreted or VM execution.
+
+```bash
+nxl build
+```
+
+for normal compilation.
+
+```bash
+nxl build --release
+```
+
+for optimized production builds.
+
+```bash
+nxl build --target wasm
+```
+
+for WebAssembly.
+
+```bash
+nxl build --target android
+```
+
+```bash
+nxl build --target ios
+```
+
+```bash
+nxl build --target windows
+```
+
+```bash
+nxl build --target linux
+```
+
+```bash
+nxl build --target macos
+```
+
+The actual targets must only be implemented when their corresponding modules are approved.
+
+---
+
+# 9. SECURITY REQUIREMENTS
+
+Security must be part of the architecture from the beginning.
+
+Consider:
+
+* Memory safety
+* Sandboxing
+* Permission systems
+* Secure FFI
+* Dependency verification
+* Package signing
+* Secrets management
+* Authentication
+* Authorization
+* Secure defaults
+* Input validation
+* SQL injection protection
+* XSS protection
+* CSRF protection
+* Secure networking
+* Capability-based permissions
+
+Never introduce insecure shortcuts merely to make an early prototype work.
+
+---
+
+# 10. AI-NATIVE CAPABILITY
+
+NEXORA should eventually provide standardized AI APIs.
+
+Potentially:
+
+```nxl
+model = ai.load("model")
+
+result = model.predict(input)
+```
+
+and:
+
+```nxl
+agent DeveloperAssistant {
+
+    tools {
+        filesystem
+        database
+        terminal
+        web
+    }
+
+}
+```
+
+AI functionality must use explicit permissions and security boundaries.
+
+AI is an optional subsystem, not a hidden dependency of the language.
+
+---
+
+# 11. PROJECT STRUCTURE
+
+Design a scalable monorepo.
+
+A conceptual structure is:
+
+```text
+nexora/
+|
++-- compiler/
+|   +-- lexer/
+|   +-- parser/
+|   +-- ast/
+|   +-- semantic/
+|   +-- types/
+|   +-- ir/
+|   +-- codegen/
+|
++-- runtime/
+|
++-- vm/
+|
++-- standard-library/
+|
++-- framework/
+|
++-- database/
+|
++-- ui/
+|
++-- platform/
+|
++-- interoperability/
+|
++-- bridges/
+|
++-- package-manager/
+|
++-- language-server/
+|
++-- cli/
+|
++-- ide/
+|
++-- ai/
+|
++-- tests/
+|
++-- examples/
+|
++-- documentation/
+|
++-- specifications/
+|
++-- tools/
+|
++-- benchmarks/
+|
++-- scripts/
+|
++-- README.md
+|
++-- LICENSE
+|
++-- CONTRIBUTING.md
+|
++-- CHANGELOG.md
+```
+
+The implementation language for the compiler/runtime should be selected during Module 1 after evaluating maintainability, performance, ecosystem, portability, and interoperability requirements.
+
+Rust is the initial preferred candidate for compiler/runtime infrastructure, but this is an architectural decision to be validated rather than blindly assumed.
+
+---
+
+# 12. DEVELOPMENT METHODOLOGY
+
+This project MUST be implemented as **approval-gated modules**.
+
+DO NOT attempt to implement the entire project at once.
+
+Each module must:
+
+1. Analyze the existing architecture.
+2. Implement only the approved scope.
+3. Create/update source files.
+4. Create/update tests.
+5. Run tests.
+6. Fix errors caused by the current module.
+7. Update documentation.
+8. Update architecture records.
+9. Provide a completion report.
+10. Identify known limitations.
+11. Identify files created/modified.
+12. Report test results.
+13. STOP.
+
+After completing a module, you MUST ask:
+
+> **"Module X is complete and verified. Do you approve proceeding to Module X+1?"**
+
+Do NOT automatically proceed.
+
+Do NOT start the next module without explicit user approval.
+
+If the user says:
+
+```text
+APPROVED
+```
+
+or clearly authorizes continuation, proceed to the next module.
+
+If the user requests changes, remain in the current module.
+
+---
+
+# 13. MODULE ROADMAP
+
+## Production-phase crosswalk
+
+`prompt.txt` defines the production phases (P01–P30); this document defines the original numbered modules. Their numbering is not identical:
+
+| `workflow.txt` module | `prompt.txt` phase | Scope |
+| --- | --- | --- |
+| Module 05 — AST & Semantic Model | P04 — Language Completeness | AST and frontend model |
+| Module 06 — Type System & Semantic Analyzer | P05 — Type/Semantic Safety | Name resolution, typing, semantic diagnostics, and control-flow validation |
+| Module 07 — NEXORA Universal IR | P06 — NIR | NIR design and implementation |
+| No standalone workflow module | P07 — Backend | Separate production phase between workflow Modules 07 and 08 |
+| Module 08 — NEXORA Interpreter | P08 — Runtime | Initial interpreter execution scope |
+| Module 09 — BYTECODE & VIRTUAL MACHINE | P09 — VM | Bytecode and virtual-machine implementation |
+
+The previously implemented return/break/continue checks and later semantic extensions are part of the P05 semantic scope; they do not complete P06. P06 is complete only when its NIR acceptance criteria in `prompt.txt` are met. A backend scaffold or shell-text emitter does not satisfy P07 and must not be reported as an executable native backend.
+
+P06 defines the NIR representation and backend boundary only. Although `prompt.txt` section 10 mentions creating a backend, its own phase roadmap assigns backend implementation to P07; that phase boundary governs, so do not implement a backend inside P06.
+
+Use `prompt.txt` as the production-phase acceptance criteria and this file for module boundaries and approval gates. When their numbering differs, use the crosswalk above; do not skip or merge a phase. P07 is an additional gate between Modules 07 and 08. Report partial work honestly and request approval before starting the next phase/module.
+
+## MODULE 01 — NEXORA CONSTITUTION & MASTER ARCHITECTURE
+
+Define:
+
+* Language philosophy
+* Universal-language concept
+* NXL terminology
+* Platform architecture
+* Universal IR
+* Runtime architecture
+* Type-system direction
+* Memory model
+* Concurrency model
+* Error model
+* Module system
+* Package architecture
+* Database architecture
+* Universal UI architecture
+* Cross-platform strategy
+* FFI/interoperability strategy
+* Framework adapter strategy
+* Security architecture
+* AI architecture
+* Compiler architecture
+* Versioning strategy
+
+Deliverables:
+
+```text
+specifications/language-constitution.md
+specifications/architecture.md
+specifications/universal-ir.md
+specifications/interoperability.md
+specifications/database.md
+specifications/cross-platform.md
+specifications/security.md
+```
+
+DO NOT build the compiler yet.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 02 — LANGUAGE SPECIFICATION
+
+Define the actual NXL language.
+
+Specify:
+
+* Keywords
+* Identifiers
+* Variables
+* Constants
+* Primitive types
+* Collections
+* Functions
+* Closures
+* Conditions
+* Loops
+* Pattern matching
+* Modules
+* Imports
+* Structs
+* Classes
+* Traits/interfaces
+* Generics
+* Error handling
+* Async/await
+* Actors
+* Ownership concepts
+* Comments
+* Strings
+* Interpolation
+* Operators
+
+Create formal grammar.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 03 — LEXER
+
+Implement:
+
+```text
+source code
+     ↓
+lexer
+     ↓
+tokens
+```
+
+Include:
+
+* Keywords
+* Identifiers
+* Numbers
+* Strings
+* Operators
+* Comments
+* Punctuation
+* Source locations
+* Lexer errors
+
+Create comprehensive tests.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 04 — PARSER
+
+Implement:
+
+```text
+tokens
+   ↓
+parser
+   ↓
+AST
+```
+
+Implement only the approved language specification.
+
+Tests must include valid and invalid programs.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 05 — AST & SEMANTIC MODEL
+
+Create the formal AST.
+
+Implement:
+
+* Nodes
+* Source locations
+* Symbol references
+* Scope representation
+* AST validation
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 06 — TYPE SYSTEM & SEMANTIC ANALYZER
+
+Implement:
+
+* Static typing
+* Type inference where approved
+* Generic types
+* Function signatures
+* Scope checking
+* Symbol resolution
+* Type errors
+* Semantic diagnostics
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 07 — NEXORA UNIVERSAL IR
+
+Create NIR.
+
+The IR must be designed so that one NXL program can eventually target:
+
+```text
+NXL VM
+Native
+WASM
+Web
+Android
+iOS
+Windows
+Linux
+macOS
+```
+
+Do NOT implement every backend yet.
+
+Design the abstraction first.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 08 — NEXORA INTERPRETER
+
+Implement an initial interpreter/VM capable of running basic NXL programs.
+
+Example:
+
+```nxl
+print("Hello NEXORA")
+```
+
+and:
+
+```nxl
+let x = 10
+let y = 20
+
+print(x + y)
+```
+
+Create an executable:
+
+```bash
+nxl run hello.nxl
+```
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 09 — BYTECODE & VIRTUAL MACHINE
+
+Create:
+
+* Bytecode format
+* VM
+* Stack/register architecture
+* Runtime values
+* Function calls
+* Error handling
+* Debug information
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 10 — MEMORY & SAFETY SYSTEM
+
+Design and implement the approved memory model.
+
+Potential concepts:
+
+* Ownership
+* Borrowing
+* References
+* Garbage collection where appropriate
+* Automatic resource management
+* Safe/unsafe boundaries
+
+Do not blindly copy Rust.
+
+Develop the NXL model based on the language constitution.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 11 — ASYNC & CONCURRENCY
+
+Implement:
+
+```nxl
+async
+await
+parallel
+spawn
+actor
+channel
+```
+
+Provide:
+
+* Async runtime
+* Task scheduler
+* Channels
+* Actors
+* Cancellation
+* Synchronization primitives
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 12 — STANDARD LIBRARY
+
+Build core libraries:
+
+```text
+collections
+strings
+math
+time
+filesystem
+process
+environment
+networking
+HTTP
+JSON
+serialization
+logging
+crypto
+concurrency
+```
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 13 — NEXORA CLI
+
+Create:
+
+```bash
+nxl
+nxl new
+nxl init
+nxl run
+nxl build
+nxl test
+nxl fmt
+nxl lint
+nxl repl
+nxl debug
+```
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 14 — PACKAGE MANAGER
+
+Create NXP.
+
+Support:
+
+```bash
+nxl package:init
+nxl package:install
+nxl package:update
+nxl package:remove
+nxl package:publish
+```
+
+Create package manifest and dependency resolution.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 15 — NEXORA WEB FRAMEWORK
+
+Build:
+
+* HTTP server
+* Router
+* Middleware
+* Controllers
+* Services
+* Requests
+* Responses
+* Validation
+* Sessions
+* Cookies
+* WebSockets
+* API support
+
+Example:
+
+```nxl
+route GET "/users" {
+
+    return User.all()
+}
+```
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 16 — NEXORA DATABASE ENGINE
+
+Build the Laravel-inspired database development system.
+
+Implement:
+
+```bash
+nxl db:create
+nxl db:drop
+nxl db:migrate
+nxl db:rollback
+nxl db:refresh
+nxl db:fresh
+nxl db:seed
+nxl db:fresh --seed
+```
+
+And:
+
+```bash
+nxl make:model
+nxl make:migration
+nxl make:seeder
+nxl make:factory
+```
+
+Implement:
+
+* Database abstraction
+* Drivers
+* ORM
+* Models
+* Relationships
+* Migrations
+* Rollbacks
+* Seeders
+* Factories
+* Transactions
+* Query builder
+* Connection management
+
+Initial database targets may include:
+
+```text
+PostgreSQL
+MySQL
+MariaDB
+SQLite
+```
+
+Additional drivers later.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 17 — AUTHENTICATION & APPLICATION SERVICES
+
+Implement:
+
+* Authentication
+* Authorization
+* Roles
+* Permissions
+* Password hashing
+* Sessions
+* Tokens
+* API authentication
+* Email verification
+* Password reset
+* Events
+* Notifications
+* Queues
+* Cache
+* Mail
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 18 — NEXORA UNIVERSAL UI
+
+Design NUI.
+
+Support:
+
+* Components
+* Properties
+* State
+* Events
+* Navigation
+* Forms
+* Validation
+* Animations
+* Responsive layouts
+* Accessibility
+* Themes
+* Localization
+
+Create a platform-independent UI representation.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 19 — CROSS-PLATFORM ENGINE
+
+Implement the cross-platform architecture.
+
+Targets:
+
+```text
+Web
+Android
+iOS
+Windows
+Linux
+macOS
+WASM
+```
+
+Start with the most technically realistic target and expand progressively.
+
+DO NOT pretend that every target is production-ready merely because a placeholder adapter exists.
+
+Every target must have its own build/test status.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 20 — FLUTTER / REACT NATIVE / VUE / REACT ADAPTERS
+
+Create interoperability adapters.
+
+Potential architecture:
+
+```text
+NUI
+ |
+ NUI IR
+ |
+ +-- Flutter Adapter
+ +-- React Native Adapter
+ +-- React Adapter
+ +-- Vue Adapter
+```
+
+The adapters must allow NXL projects to leverage existing ecosystems without making NEXORA permanently dependent on them.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 21 — UNIVERSAL LANGUAGE BRIDGES
+
+Implement interoperability progressively:
+
+```text
+Rust
+Python
+JavaScript/Node.js
+PHP
+C
+C++
+Java/JVM
+C#/.NET
+Go
+Dart
+```
+
+Use appropriate technologies such as:
+
+* FFI
+* ABI
+* subprocess isolation
+* WASM
+* RPC
+* embedding
+* generated bindings
+
+depending on the language.
+
+Do not force one interoperability mechanism onto every ecosystem.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 22 — AI / DATA SCIENCE PLATFORM
+
+Build:
+
+* AI APIs
+* Model loading
+* Inference
+* Data processing
+* Dataset APIs
+* Python ecosystem bridge
+* GPU acceleration architecture
+* AI agents
+* Tool permissions
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 23 — CLOUD & DISTRIBUTED SYSTEMS
+
+Implement framework support for:
+
+* Containers
+* Cloud deployment
+* Services
+* Workers
+* Queues
+* Scheduled jobs
+* Distributed services
+* Service discovery
+* Configuration
+* Secrets
+* Observability
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 24 — LANGUAGE SERVER & DEVELOPER TOOLS
+
+Build NLS:
+
+* Autocomplete
+* Go-to-definition
+* Find references
+* Diagnostics
+* Refactoring
+* Formatting
+* Hover documentation
+* Symbol navigation
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 25 — NEXORA IDE
+
+Create NIDE.
+
+Features:
+
+* Project explorer
+* Editor
+* Syntax highlighting
+* Autocomplete
+* Debugger
+* Terminal
+* Package manager
+* Database explorer
+* API tester
+* Git integration
+* Build system
+* AI assistant
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 26 — TESTING & QUALITY SYSTEM
+
+Create:
+
+* Unit tests
+* Integration tests
+* Compiler tests
+* Runtime tests
+* Fuzz testing
+* Security tests
+* Cross-platform tests
+* Performance benchmarks
+* Compatibility tests
+* Regression tests
+
+Create a formal quality gate.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 27 — DOCUMENTATION & DEVELOPER ECOSYSTEM
+
+Build:
+
+* Language specification
+* API documentation
+* Tutorials
+* Examples
+* Cookbook
+* Migration guides
+* Framework documentation
+* Package documentation
+* Interoperability documentation
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 28 — NEXORA PACKAGE REGISTRY
+
+Build the ecosystem infrastructure:
+
+```text
+registry.nexora.dev
+```
+
+Conceptually support:
+
+```bash
+nxl package:publish
+nxl package:search
+nxl package:install
+```
+
+Include:
+
+* Package metadata
+* Versions
+* Dependency graph
+* Security scanning
+* Package signing
+* Documentation
+* Authors
+* Compatibility
+* Platform support
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 29 — SECURITY AUDIT
+
+Perform a complete architecture audit.
+
+Review:
+
+* Compiler
+* Runtime
+* FFI
+* Package manager
+* Dependencies
+* Database
+* Authentication
+* UI
+* Networking
+* Cloud
+* AI
+* Supply chain
+
+Fix vulnerabilities discovered within scope.
+
+STOP FOR APPROVAL.
+
+---
+
+# MODULE 30 — NEXORA 1.0 RELEASE
+
+Only after all previous modules have been approved:
+
+* Freeze language specification
+* Freeze core APIs
+* Stabilize compiler
+* Stabilize runtime
+* Stabilize framework
+* Stabilize database engine
+* Stabilize package manager
+* Stabilize cross-platform targets
+* Publish documentation
+* Create installation packages
+* Create example applications
+* Create migration guide
+* Create release notes
+
+Produce:
+
+```text
+NEXORA 1.0
+NXL Compiler
+NXR Runtime
+NUF Framework
+NDB Database
+NUI
+NXP Package Manager
+NLS
+NIDE
+Documentation
+```
+
+---
+
+# 14. MANDATORY APPROVAL PROTOCOL
+
+This rule overrides convenience.
+
+After completing EVERY module, stop.
+
+Do not:
+
+* Automatically start the next module.
+* Implement future modules "because they are related."
+* Rewrite previously approved architecture without permission.
+* Add large unrequested features.
+* Mark placeholders as completed functionality.
+* Claim production readiness without tests.
+
+At the end of each module produce:
+
+```text
+========================================
+NEXORA MODULE COMPLETION REPORT
+========================================
+
+Module:
+Status:
+
+Implemented:
+- ...
+- ...
+- ...
+
+Files Created:
+- ...
+
+Files Modified:
+- ...
+
+Tests:
+- Passed:
+- Failed:
+- Skipped:
+
+Build:
+- Status:
+
+Documentation:
+- Status:
+
+Known Limitations:
+- ...
+
+Architectural Decisions:
+- ...
+
+Future Dependencies:
+- ...
+
+========================================
+
+APPROVAL REQUIRED
+
+Module X has been completed and verified.
+
+Do you approve proceeding to Module X+1?
+========================================
+```
+
+Then STOP.
+
+---
+
+# 15. ERROR HANDLING RULE
+
+If a module encounters an error:
+
+1. Diagnose the error.
+2. Fix it if the fix belongs to the current module.
+3. Run the relevant tests again.
+4. Do not silently bypass the error.
+5. Do not disable tests merely to achieve a passing build.
+6. If the problem belongs to a future module, document it and stop.
+7. Ask for architectural approval if the issue requires changing an approved design.
+
+---
+
+# 16. ARCHITECTURAL CHANGE CONTROL
+
+If you discover that an earlier architectural decision is technically unsuitable:
+
+DO NOT silently change it.
+
+Report:
+
+```text
+ARCHITECTURAL CHANGE REQUEST
+
+Current decision:
+Problem discovered:
+Evidence:
+Proposed replacement:
+Advantages:
+Disadvantages:
+Affected modules:
+Migration requirements:
+```
+
+Then request approval.
+
+---
+
+# 17. CODE QUALITY REQUIREMENTS
+
+All implementation must prioritize:
+
+* Clean architecture
+* SOLID principles where appropriate
+* Separation of concerns
+* Testability
+* Maintainability
+* Documentation
+* Security
+* Performance
+* Portability
+* Extensibility
+
+Avoid:
+
+* Hard-coded paths
+* Hard-coded credentials
+* Temporary hacks
+* Duplicate implementations
+* Dead code
+* Unnecessary dependencies
+* Global mutable state
+* Security bypasses
+
+---
+
+# 18. NO FALSE COMPLETION
+
+The coding assistant must distinguish between:
+
+```text
+DESIGNED
+IMPLEMENTED
+PARTIALLY IMPLEMENTED
+EXPERIMENTAL
+MOCK
+STUB
+TESTED
+PRODUCTION READY
+```
+
+Never describe a mock adapter as a working platform target.
+
+Never describe a placeholder compiler backend as a completed compiler backend.
+
+---
+
+# 19. FIRST ACTION
+
+Start ONLY with:
+
+# MODULE 01 — NEXORA CONSTITUTION & MASTER ARCHITECTURE
+
+Before writing compiler implementation code:
+
+1. Analyze this specification.
+2. Identify architectural contradictions.
+3. Resolve reasonable ambiguities.
+4. Create the formal NEXORA Constitution.
+5. Define the Universal Language architecture.
+6. Define the Universal IR architecture.
+7. Define the Runtime architecture.
+8. Define the Database/Migration/Seeder architecture.
+9. Define the Universal UI architecture.
+10. Define the Cross-Platform architecture.
+11. Define the interoperability architecture.
+12. Define language/framework adapter architecture.
+13. Define package architecture.
+14. Define security architecture.
+15. Define testing strategy.
+16. Create the initial project specification files.
+17. Do NOT implement Modules 2–30.
+18. Run whatever validation is appropriate for Module 1.
+19. Produce the Module 1 Completion Report.
+20. STOP and request explicit approval.
+
+The project is not allowed to proceed to Module 2 until the user explicitly approves Module 1.
+
+# END OF MASTER PROMPT
+
+This structure gives you a much better foundation: **NXL is the language, while NEXORA becomes the complete ecosystem**—similar in ambition to having the language, Laravel-like framework, database tooling, Flutter-like cross-platform layer, package ecosystem, runtime, IDE, and interoperability system under one umbrella.
+
+The most important thing is to **build the Universal IR and interoperability architecture early**, while postponing the actual Flutter/React Native/Vue/other bridges until their dedicated modules. That prevents the project from becoming permanently dependent on another framework.

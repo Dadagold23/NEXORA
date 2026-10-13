@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  cross-build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: nxlc-linux-x86_64
+          - os: windows-latest
+            artifact: nxlc-windows-x86_64.exe
+          - os: macos-latest
+            artifact: nxlc-macos-aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace
+        working-directory: compiler
+      - run: cargo build --release
+        working-directory: compiler
+      - name: Stage artifact and hash
+        shell: bash
+        run: |
+          mkdir -p release
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp compiler/target/release/nxlc.exe release/${{ matrix.artifact }}
+          else
+            cp compiler/target/release/nxlc release/${{ matrix.artifact }}
+          fi
+          cd release
+          shasum -a 256 ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release/*
+
+  release:
+    needs: cross-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Flatten artifacts and list
+        run: |
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          ls -la dist/
+          sha256sum dist/* > dist/SHA256SUMS
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

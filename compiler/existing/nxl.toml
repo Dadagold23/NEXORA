@@ -1,0 +1,10 @@
+[package]
+name = "existing"
+version = "0.1.0"
+entry = "src/main.nxl"
+edition = "2024"
+target = "js"
+
+[database]
+driver = "sqlite"
+path = "database/database.sqlite"

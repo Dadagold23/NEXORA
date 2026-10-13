@@ -1,0 +1,1606 @@
+Yes. The best approach is **not to replace the previous master prompt**. The new prompt should be passed **after the previous NEXORA/NXL development prompt has been completed or loaded into the coding AI**, and it should explicitly tell the AI to continue from the existing repository and previous decisions.
+
+This continuation adds the missing **build → automated test → test release → your acceptance testing → approval → next module → release candidate → production** lifecycle.
+
+# NEXORA / NXL
+
+# PRODUCTION DEVELOPMENT, TESTING, USER ACCEPTANCE & RELEASE CONTINUATION PROMPT
+
+## CONTINUATION NOTICE
+
+This is a CONTINUATION of the previously supplied NEXORA/NXL Master Development Prompt.
+
+DO NOT restart the project.
+
+DO NOT redesign the project from scratch.
+
+DO NOT discard existing work.
+
+DO NOT assume that previous modules are incomplete merely because this prompt is being supplied.
+
+FIRST inspect the current repository and determine:
+
+1. What the previous development prompt required.
+2. Which modules have actually been implemented.
+3. Which modules are partially implemented.
+4. Which modules have only specifications.
+5. Which modules have tests.
+6. Which modules have passed tests.
+7. Which modules have been manually accepted.
+8. Which architecture decisions were already approved.
+9. Which architecture decisions remain pending.
+10. What the current project version is.
+
+The existing repository is the source of truth for implementation status.
+
+---
+
+# 1. PRIMARY OBJECTIVE
+
+Continue development of:
+
+# NEXORA
+
+Universal Programming Language & Development Platform
+
+with:
+
+```text
+NXL  = Programming Language
+NXR  = Runtime
+NIR  = Universal Intermediate Representation
+NUF  = Universal Framework
+NDB  = Database Platform
+NUI  = Universal UI
+NXP  = Package Manager
+NLS  = Language Server
+NIDE = Integrated Development Environment
+```
+
+The ultimate objective is to produce a genuine production-grade programming ecosystem capable of building real-world applications.
+
+The system must eventually support:
+
+```text
+CLI
+Web
+API
+Database
+Desktop
+Mobile
+Cloud
+AI/ML
+Automation
+Distributed systems
+Embedded systems
+WASM
+Infrastructure
+Enterprise applications
+```
+
+---
+
+# 2. CONTINUE FROM THE EXISTING CODE
+
+Before writing code, inspect the current repository.
+
+Create or update:
+
+```text
+IMPLEMENTATION_STATUS.md
+```
+
+Use these classifications:
+
+```text
+PLANNED
+DESIGNED
+PARTIALLY IMPLEMENTED
+IMPLEMENTED
+TESTED
+USER TESTED
+APPROVED
+EXPERIMENTAL
+MOCK
+STUB
+BLOCKED
+PRODUCTION READY
+```
+
+Never classify a feature as:
+
+```text
+PRODUCTION READY
+```
+
+merely because source files exist.
+
+---
+
+# 3. CURRENT DEVELOPMENT PRINCIPLE
+
+The project must now operate under this lifecycle:
+
+```text
+SPECIFICATION
+     ↓
+ARCHITECTURE
+     ↓
+IMPLEMENTATION
+     ↓
+AUTOMATED TESTING
+     ↓
+ENGINEERING VERIFICATION
+     ↓
+TEST BUILD
+     ↓
+USER ACCEPTANCE TESTING
+     ↓
+USER APPROVAL
+     ↓
+NEXT MODULE
+```
+
+This lifecycle applies to every major module.
+
+---
+
+# 4. DO NOT AUTO-PROCEED
+
+The AI coding agent MUST NOT automatically proceed from one major module to another.
+
+After completing a module:
+
+```text
+STOP
+```
+
+Generate the completion report.
+
+Generate the testing guide.
+
+Generate the test release if applicable.
+
+Ask for explicit user approval.
+
+Only continue when the user responds with an approval such as:
+
+```text
+APPROVED
+```
+
+or another clearly affirmative instruction.
+
+If the user reports a problem:
+
+```text
+DO NOT MOVE TO THE NEXT MODULE.
+```
+
+Remain on the current module until the issue is resolved.
+
+---
+
+# 5. THREE LEVELS OF TESTING
+
+Every production module must pass three testing levels.
+
+## LEVEL 1 — AUTOMATED TESTING
+
+The development system must test the implementation automatically.
+
+Examples:
+
+```text
+unit tests
+integration tests
+compiler tests
+parser tests
+semantic tests
+runtime tests
+regression tests
+security tests
+performance tests
+fuzz tests
+```
+
+---
+
+## LEVEL 2 — ENGINEERING VERIFICATION
+
+Verify:
+
+```text
+build
+installation
+dependencies
+cross-platform compatibility
+security
+performance
+resource usage
+documentation
+CLI behavior
+upgrade behavior
+failure recovery
+```
+
+---
+
+## LEVEL 3 — USER ACCEPTANCE TESTING
+
+The user must receive clear instructions to test the completed functionality.
+
+The AI must NEVER simply say:
+
+```text
+Module complete.
+```
+
+Instead provide:
+
+```text
+MODULE READY FOR USER ACCEPTANCE TESTING
+```
+
+with exact commands and expected results.
+
+---
+
+# 6. USER TEST ENVIRONMENT
+
+The primary initial development/test platform is:
+
+```text
+Windows x64
+```
+
+The AI must make it possible for the user to test NEXORA locally without requiring knowledge of compiler internals.
+
+The eventual workflow should be:
+
+```text
+NEXORA BUILD
+      ↓
+NXL COMPILER
+      ↓
+NXL EXECUTABLE
+      ↓
+INSTALL
+      ↓
+nxl doctor
+      ↓
+nxl test
+      ↓
+nxl new
+      ↓
+nxl run
+      ↓
+nxl build
+```
+
+---
+
+# 7. BUILDABLE TEST RELEASE
+
+Whenever a major implementation reaches test readiness, generate a testable build.
+
+Example:
+
+```text
+NEXORA-0.x.x-Windows-x64-Test.zip
+```
+
+or:
+
+```text
+NEXORA-0.x.x-Windows-x64-Installer.exe
+```
+
+The exact packaging mechanism may evolve.
+
+The important requirement is:
+
+# THE USER MUST BE ABLE TO INSTALL AND RUN THE TEST BUILD.
+
+---
+
+# 8. NXL VERSION COMMAND
+
+Implement:
+
+```bash
+nxl --version
+```
+
+Example:
+
+```text
+NXL Compiler 0.8.0
+NXR Runtime 0.8.0
+NEXORA Platform 0.8.0
+Target: x86_64-pc-windows
+Build: release
+```
+
+The exact format may evolve.
+
+---
+
+# 9. NXL DOCTOR
+
+Implement:
+
+```bash
+nxl doctor
+```
+
+It must inspect the development environment.
+
+Check:
+
+```text
+NXL compiler
+NXR runtime
+standard library
+package manager
+NDB
+NUF
+target toolchains
+WASM tools
+Android tools when applicable
+iOS tools when applicable
+C/C++ dependencies
+environment variables
+PATH
+cache
+package registry
+network connectivity
+permissions
+project configuration
+```
+
+Produce human-readable output.
+
+Also support machine-readable output where useful:
+
+```bash
+nxl doctor --json
+```
+
+---
+
+# 10. FIRST USER ACCEPTANCE TEST
+
+Every test release must contain a minimal smoke test.
+
+Example:
+
+Create:
+
+```text
+hello.nxl
+```
+
+with:
+
+```nxl
+fn main() {
+    print("Hello from NEXORA!")
+}
+```
+
+Then:
+
+```bash
+nxl run hello.nxl
+```
+
+Expected:
+
+```text
+Hello from NEXORA!
+```
+
+This confirms:
+
+```text
+compiler
+parser
+runtime
+standard library
+CLI
+execution
+```
+
+are operational.
+
+---
+
+# 11. PROJECT CREATION TEST
+
+Implement and test:
+
+```bash
+nxl new hello
+```
+
+Expected structure:
+
+```text
+hello/
+├── src/
+│   └── main.nxl
+├── tests/
+├── nxl.toml
+├── README.md
+└── .gitignore
+```
+
+Then:
+
+```bash
+cd hello
+nxl run
+```
+
+Expected:
+
+```text
+Hello from NEXORA!
+```
+
+---
+
+# 12. CHECK COMMAND
+
+Implement:
+
+```bash
+nxl check
+```
+
+This must perform static validation without necessarily executing the application.
+
+Example:
+
+```bash
+nxl check
+```
+
+Expected:
+
+```text
+Checking project...
+
+✓ Parsing
+✓ Name resolution
+✓ Type checking
+✓ Semantic analysis
+
+No errors found.
+```
+
+---
+
+# 13. TEST COMMAND
+
+Implement:
+
+```bash
+nxl test
+```
+
+It must discover and execute project tests.
+
+Example:
+
+```text
+NEXORA Test Runner
+
+Running 127 tests...
+
+✓ 127 passed
+✗ 0 failed
+⚠ 0 skipped
+
+Result: PASS
+```
+
+The actual numbers will depend on the project.
+
+---
+
+# 14. NEGATIVE TESTING
+
+The user must also be able to test invalid programs.
+
+Example:
+
+```nxl
+let age: Int = "hello"
+```
+
+Run:
+
+```bash
+nxl check
+```
+
+Expected:
+
+```text
+error[NXL....]: type mismatch
+
+expected: Int
+found: String
+```
+
+The compiler must:
+
+```text
+NOT crash
+NOT display a Python traceback
+NOT silently accept invalid code
+NOT produce corrupted output
+```
+
+---
+
+# 15. COMPILER FAILURE TEST
+
+Deliberately test malformed source.
+
+Examples:
+
+```text
+missing braces
+invalid tokens
+invalid syntax
+incorrect types
+undefined variables
+undefined functions
+invalid imports
+invalid generic parameters
+invalid ownership
+invalid pattern matching
+```
+
+The compiler must provide useful diagnostics.
+
+---
+
+# 16. REGRESSION TEST REQUIREMENT
+
+Every bug discovered during user testing must become a permanent automated regression test.
+
+Workflow:
+
+```text
+USER FINDS BUG
+      ↓
+REPRODUCE
+      ↓
+CREATE REGRESSION TEST
+      ↓
+FIX
+      ↓
+RUN TEST
+      ↓
+RUN COMPLETE TEST SUITE
+      ↓
+REBUILD TEST RELEASE
+      ↓
+USER RETESTS
+```
+
+Never simply patch a bug without protecting against recurrence.
+
+---
+
+# 17. TEST APPLICATIONS
+
+As the platform matures, create official acceptance applications.
+
+## Application 1
+
+```text
+NEXORA CLI Application
+```
+
+## Application 2
+
+```text
+NEXORA REST API
+```
+
+## Application 3
+
+```text
+NEXORA Database Application
+```
+
+## Application 4
+
+```text
+NEXORA Web Application
+```
+
+## Application 5
+
+```text
+NEXORA Authentication Application
+```
+
+## Application 6
+
+```text
+NEXORA Real-Time/WebSocket Application
+```
+
+## Application 7
+
+```text
+NEXORA Desktop Application
+```
+
+## Application 8
+
+```text
+NEXORA Mobile Application
+```
+
+## Application 9
+
+```text
+NEXORA WASM Application
+```
+
+Only create an application for a target once the underlying target has actually reached the required maturity.
+
+---
+
+# 18. NEXORA SHOWCASE APPLICATION
+
+Create a comprehensive reference application.
+
+The application should eventually exercise:
+
+```text
+NXL
+NXR
+NUF
+NDB
+NUI
+NXP
+authentication
+authorization
+REST
+WebSocket
+database
+ORM
+migrations
+seeders
+factories
+queues
+events
+cache
+logging
+configuration
+testing
+deployment
+```
+
+This becomes the primary end-to-end acceptance test.
+
+---
+
+# 19. DATABASE ACCEPTANCE TEST
+
+When NDB becomes available, the user must receive a test sequence similar to:
+
+```bash
+nxl db:create
+nxl db:migrate
+nxl db:seed
+nxl test
+nxl run
+```
+
+Test:
+
+```text
+database creation
+migration
+rollback
+refresh
+fresh
+seed
+factory
+CRUD
+relationships
+transactions
+failed transactions
+connection handling
+```
+
+The AI must provide the exact expected result for each test.
+
+---
+
+# 20. WEB ACCEPTANCE TEST
+
+When NUF becomes available:
+
+```bash
+nxl new api
+cd api
+nxl run
+```
+
+The user should be given an address such as:
+
+```text
+http://localhost:8080
+```
+
+Then provide explicit browser/API tests.
+
+Example:
+
+```text
+GET /
+GET /api/users
+POST /api/users
+GET /api/users/{id}
+PUT /api/users/{id}
+DELETE /api/users/{id}
+```
+
+The exact routes depend on the implementation.
+
+---
+
+# 21. PACKAGE MANAGER ACCEPTANCE TEST
+
+When NXP becomes available:
+
+```bash
+nxl package add <package>
+nxl install
+nxl update
+nxl remove <package>
+nxl list
+```
+
+Test:
+
+```text
+dependency resolution
+lockfile
+version conflict
+cache
+offline mode
+checksum
+package integrity
+failed installation
+rollback
+```
+
+---
+
+# 22. CROSS-PLATFORM ACCEPTANCE TESTING
+
+Do not claim universal support simply because a target option exists.
+
+For each platform:
+
+```text
+Windows
+Linux
+macOS
+Web/WASM
+Android
+iOS
+```
+
+provide:
+
+```text
+build command
+installation requirements
+test command
+sample application
+expected output
+known limitations
+support level
+```
+
+Use:
+
+```text
+PRODUCTION
+SUPPORTED
+EXPERIMENTAL
+PLANNED
+```
+
+as maturity classifications.
+
+---
+
+# 23. PLATFORM TEST MATRIX
+
+Maintain:
+
+```text
+PLATFORM_SUPPORT.md
+```
+
+Example:
+
+| Platform | Compile | Run | Tests | Package | Status    |
+| -------- | ------: | --: | ----: | ------: | --------- |
+| Windows  |       ✓ |   ✓ |     ✓ |       ✓ | Supported |
+| Linux    |         |     |       |         |           |
+| macOS    |         |     |       |         |           |
+| WASM     |         |     |       |         |           |
+| Android  |         |     |       |         |           |
+| iOS      |         |     |       |         |           |
+
+Do not fill a cell with ✓ unless it has evidence.
+
+---
+
+# 24. USER ACCEPTANCE TEST DOCUMENT
+
+Every major module must produce:
+
+```text
+UAT_<MODULE>.md
+```
+
+It must contain:
+
+```text
+Module
+Version
+Prerequisites
+Installation
+Test environment
+Test cases
+Commands
+Expected results
+Actual result field
+Pass/Fail field
+Known limitations
+Bug reporting instructions
+Approval section
+```
+
+---
+
+# 25. USER TEST REPORT
+
+Provide the user with a simple report format:
+
+```text
+NEXORA USER ACCEPTANCE TEST
+
+Module:
+Version:
+
+Test 1:
+Result: PASS / FAIL
+
+Test 2:
+Result: PASS / FAIL
+
+Test 3:
+Result: PASS / FAIL
+
+Observed Problems:
+...
+
+Screenshots/Logs:
+...
+
+Overall:
+APPROVED / CHANGES REQUIRED
+```
+
+---
+
+# 26. BUG REPORT COMMAND
+
+Where practical, implement:
+
+```bash
+nxl bug-report
+```
+
+This should collect safe diagnostic information such as:
+
+```text
+NXL version
+NXR version
+OS
+architecture
+target
+compiler configuration
+relevant logs
+project diagnostics
+```
+
+NEVER collect secrets or source code without explicit user permission.
+
+---
+
+# 27. LOG COLLECTION
+
+Provide:
+
+```bash
+nxl --verbose
+nxl --debug
+```
+
+where appropriate.
+
+Make diagnostic logging useful without exposing:
+
+```text
+passwords
+API keys
+tokens
+private keys
+database credentials
+session secrets
+```
+
+---
+
+# 28. TEST RELEASE NOTES
+
+Every test build must contain:
+
+```text
+CHANGELOG.md
+RELEASE_NOTES.md
+TESTING_GUIDE.md
+KNOWN_ISSUES.md
+```
+
+The release notes must state exactly:
+
+```text
+Implemented
+Changed
+Fixed
+Experimental
+Known limitations
+Breaking changes
+Testing status
+```
+
+---
+
+# 29. VERSIONING
+
+Use a controlled versioning system.
+
+Example:
+
+```text
+0.1.0
+0.2.0
+0.3.0
+...
+0.9.0
+1.0.0
+```
+
+The actual version may be determined by the approved release strategy.
+
+Never silently change versions.
+
+---
+
+# 30. ALPHA / BETA / RC / PRODUCTION
+
+Use:
+
+```text
+ALPHA
+```
+
+for incomplete but testable development.
+
+```text
+BETA
+```
+
+for feature-complete or near feature-complete testing.
+
+```text
+RC
+```
+
+for release-candidate validation.
+
+```text
+PRODUCTION
+```
+
+only after all required release gates have passed.
+
+---
+
+# 31. PRODUCTION RELEASE GATE
+
+Before NEXORA 1.0:
+
+### Compiler
+
+```text
+✓ language conformance
+✓ compiler stability
+✓ diagnostics
+✓ regression tests
+✓ fuzzing
+```
+
+### Runtime
+
+```text
+✓ stability
+✓ memory safety
+✓ concurrency
+✓ resource management
+✓ performance
+```
+
+### Standard Library
+
+```text
+✓ API stability
+✓ documentation
+✓ tests
+```
+
+### Database
+
+```text
+✓ migrations
+✓ rollback
+✓ ORM
+✓ transactions
+✓ security
+```
+
+### Framework
+
+```text
+✓ HTTP
+✓ routing
+✓ middleware
+✓ authentication
+✓ authorization
+✓ WebSockets
+✓ error handling
+```
+
+### Package Manager
+
+```text
+✓ dependency resolution
+✓ lockfile
+✓ integrity
+✓ registry
+✓ security
+```
+
+### Tooling
+
+```text
+✓ formatter
+✓ linter
+✓ language server
+✓ debugger
+✓ IDE integration
+```
+
+### Security
+
+```text
+✓ audit
+✓ dependency scan
+✓ fuzzing
+✓ secrets scan
+✓ FFI review
+```
+
+### Documentation
+
+```text
+✓ language reference
+✓ API reference
+✓ tutorials
+✓ deployment
+✓ troubleshooting
+```
+
+### User Acceptance
+
+```text
+✓ core tests completed by user
+✓ showcase application tested
+✓ release candidate tested
+✓ critical defects resolved
+```
+
+---
+
+# 32. FINAL PRODUCTION ACCEPTANCE
+
+NEXORA must not be declared production-ready merely because automated tests pass.
+
+The final acceptance requires:
+
+```text
+AUTOMATED TEST PASS
+        +
+ENGINEERING VERIFICATION PASS
+        +
+SECURITY GATE PASS
+        +
+USER ACCEPTANCE PASS
+```
+
+Only then:
+
+```text
+NEXORA 1.0
+```
+
+may be considered for release.
+
+---
+
+# 33. FINAL RELEASE PACKAGE
+
+The final release should contain, as appropriate:
+
+```text
+NEXORA-1.0.0-Windows-x64
+NEXORA-1.0.0-Linux-x64
+NEXORA-1.0.0-macOS
+NEXORA-1.0.0-WASM
+```
+
+and mobile/platform packages where genuinely supported.
+
+Also provide:
+
+```text
+source archive
+checksums
+release notes
+installation documentation
+language documentation
+API documentation
+security report
+SBOM
+license information
+```
+
+---
+
+# 34. FINAL RELEASE REPORT
+
+Create:
+
+```text
+FINAL_RELEASE_REPORT.md
+```
+
+containing:
+
+```text
+Project Version
+Release Date
+Supported Platforms
+Language Features
+Compiler Status
+Runtime Status
+NIR Status
+NDB Status
+NUF Status
+NUI Status
+NXP Status
+NLS Status
+NIDE Status
+Security Status
+Test Results
+Fuzz Results
+Performance Results
+Known Limitations
+Breaking Changes
+Migration Instructions
+Installation Instructions
+User Acceptance Results
+Release Approval
+```
+
+---
+
+# 35. IMPORTANT — DO NOT OVERBUILD
+
+Do not attempt to implement every NEXORA feature simultaneously.
+
+The project must be developed in vertical slices.
+
+For example:
+
+```text
+Language
+   ↓
+Compiler
+   ↓
+Runtime
+   ↓
+CLI
+   ↓
+Real application
+   ↓
+Testing
+   ↓
+User acceptance
+```
+
+Then expand.
+
+A smaller genuinely working system is preferable to a massive collection of placeholders.
+
+---
+
+# 36. IMPORTANT — DO NOT FAKE FEATURES
+
+Never implement:
+
+```text
+fake compiler
+fake backend
+fake runtime
+fake database
+fake package manager
+fake cross-platform target
+fake security
+fake authentication
+fake encryption
+fake IDE
+fake testing
+```
+
+If a feature is unavailable:
+
+```text
+NOT IMPLEMENTED
+```
+
+If experimental:
+
+```text
+EXPERIMENTAL
+```
+
+If simulated for development:
+
+```text
+MOCK — NOT PRODUCTION
+```
+
+---
+
+# 37. DEVELOPMENT PHASE APPROVAL
+
+After every major phase provide:
+
+```text
+=========================================
+NEXORA DEVELOPMENT PHASE COMPLETION
+=========================================
+
+Phase:
+Version:
+
+Implemented:
+...
+
+Automated Tests:
+...
+
+Engineering Verification:
+...
+
+Security:
+...
+
+Performance:
+...
+
+Build:
+...
+
+Test Release:
+...
+
+User Acceptance Test:
+...
+
+Known Issues:
+...
+
+Release Blockers:
+...
+
+Files Added:
+...
+
+Files Modified:
+...
+
+Files Removed:
+...
+
+Architecture Changes:
+...
+
+Current Status:
+...
+
+=========================================
+
+USER ACTION REQUIRED
+
+1. Install/test the supplied build.
+2. Follow TESTING_GUIDE.md.
+3. Complete UAT.
+4. Report problems or approve the phase.
+
+DO NOT PROCEED TO THE NEXT MAJOR PHASE
+UNTIL USER APPROVAL IS RECEIVED.
+=========================================
+```
+
+---
+
+# 38. WHEN THE USER REPORTS A FAILURE
+
+If the user says:
+
+```text
+It failed.
+```
+
+or provides:
+
+```text
+error
+screenshot
+log
+unexpected result
+```
+
+then:
+
+1. Reproduce the problem if possible.
+2. Determine the affected subsystem.
+3. Create a regression test.
+4. Fix the implementation.
+5. Run automated tests.
+6. Rebuild the test release.
+7. Update the UAT.
+8. Ask the user to retest.
+
+Do NOT move forward until the current acceptance test passes.
+
+---
+
+# 39. WHEN THE USER APPROVES
+
+When the user explicitly approves a module:
+
+Record:
+
+```text
+USER ACCEPTED
+```
+
+with:
+
+```text
+module
+version
+date
+test status
+known limitations
+```
+
+Then proceed to the next approved phase.
+
+Do not reinterpret unrelated statements as approval.
+
+---
+
+# 40. CONTINUATION FROM THE PREVIOUS MASTER PROMPT
+
+The previous NEXORA Master Prompt remains authoritative unless explicitly changed.
+
+This prompt adds:
+
+```text
+Production hardening
+Automated testing
+Engineering verification
+Build packaging
+Windows test release
+User acceptance testing
+Regression workflow
+Test applications
+Cross-platform test matrix
+Release candidates
+Security gates
+Production release gates
+```
+
+It does NOT cancel previously approved architecture.
+
+If a conflict is discovered:
+
+STOP.
+
+Produce:
+
+```text
+ARCHITECTURAL CHANGE REQUEST
+```
+
+and request approval.
+
+---
+
+# 41. FIRST ACTION NOW
+
+Do not immediately implement the entire production system.
+
+First inspect the current repository and previous implementation state.
+
+Then determine the next incomplete approved development phase.
+
+If the previous prompt has not yet completed its initial audit:
+
+```text
+START WITH AUDIT.
+```
+
+If the audit is complete:
+
+```text
+CONTINUE FROM THE NEXT APPROVED MODULE.
+```
+
+If a module is implemented but has not undergone testing:
+
+```text
+DO NOT START THE NEXT MODULE.
+```
+
+Instead:
+
+```text
+BUILD TEST RELEASE
+      ↓
+RUN AUTOMATED TESTS
+      ↓
+GENERATE TESTING GUIDE
+      ↓
+GENERATE USER ACCEPTANCE TEST
+      ↓
+STOP
+      ↓
+REQUEST USER APPROVAL
+```
+
+---
+
+# 42. ABSOLUTE RULE
+
+The ultimate development loop is:
+
+```text
+BUILD
+ ↓
+TEST
+ ↓
+VERIFY
+ ↓
+PACKAGE
+ ↓
+USER TESTS
+ ↓
+USER REPORTS
+ ↓
+FIX
+ ↓
+RETEST
+ ↓
+USER APPROVES
+ ↓
+NEXT MODULE
+```
+
+Never bypass the user acceptance stage for a major feature.
+
+Never claim production readiness without evidence.
+
+Never fabricate test results.
+
+Never hide failures.
+
+Never silently change architecture.
+
+Never automatically continue beyond an approval gate.
+
+# END OF CONTINUATION PROMPT
+
+### How to use this with the previous prompt
+
+The sequence should now be:
+
+**Prompt 1 — your original NEXORA Master Prompt**
+
+→ establishes the complete architecture and 30-module development roadmap.
+
+**Prompt 2 — the production engineering prompt**
+
+→ turns the architecture into actual implementation and hardening.
+
+**Prompt 3 — the prompt above**
+
+→ establishes the **real testing and release lifecycle**.
+
+So the AI coding agent's eventual workflow becomes:
+
+```text
+NEXORA SPECIFICATION
+        ↓
+MODULE DEVELOPMENT
+        ↓
+AUTOMATED TESTS
+        ↓
+BUILD NXL TEST RELEASE
+        ↓
+YOU INSTALL IT
+        ↓
+YOU RUN TESTING_GUIDE.md
+        ↓
+YOU TEST THE ACTUAL NXL LANGUAGE
+        ↓
+BUGS? ─────────────── YES ──→ FIX → REBUILD → RETEST
+        │
+        NO
+        ↓
+YOU APPROVE
+        ↓
+NEXT MODULE
+        ↓
+...
+        ↓
+RELEASE CANDIDATE
+        ↓
+FULL USER ACCEPTANCE
+        ↓
+NEXORA 1.0
+```
+
+This is the structure I would use for the ZIP you supplied. It prevents the coding AI from producing a huge amount of code and then simply declaring **"NEXORA is complete."** Instead, every significant capability has to become **implemented → testable → user-tested → approved** before the project advances.

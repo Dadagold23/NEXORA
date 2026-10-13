@@ -1,0 +1,5 @@
+﻿# APPROVAL RECORD
+Module: P06 (NIR)
+Status: APPROVED
+User approval: APPROVED
+Date: 2026-10-07 17:59:51

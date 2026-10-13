@@ -1,0 +1,4 @@
+﻿# GATE STATUS
+Lifecycle requires: Do not proceed to P07 until P06 NIR is complete and explicit approval granted.
+Current: P06 IN PROGRESS, P07 APPROVED.
+Requested: 'proceed' cannot advance past P06 until completion.
