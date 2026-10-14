@@ -61,6 +61,18 @@ jobs:
             sh scripts/package-release.sh "${{ matrix.target }}"
           fi
 
+      # Re-run the onboarding checklist against the archive this runner just
+      # produced. This runs before the upload so an artifact that fails
+      # installation or execution is never published.
+      - name: Verify the archive like a new user
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-install.ps1
+          else
+            sh scripts/verify-install.sh "dist/NEXORA-"*.tar.gz
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: NEXORA-${{ matrix.target }}
