@@ -1021,14 +1021,7 @@ fn compile_instruction(
         }
 
         nir::Instruction::Try { .. } => {
-            compile_try(
-                instr,
-                chunk,
-                value_slots,
-                name_slots,
-                next_slot,
-                loop_stack,
-            )?;
+            compile_try(instr, chunk, value_slots, name_slots, next_slot, loop_stack)?;
         }
 
         nir::Instruction::IteratorNext {
@@ -1065,7 +1058,10 @@ fn compile_instruction(
         }
 
         nir::Instruction::IndexGet {
-            result, object, index, ..
+            result,
+            object,
+            index,
+            ..
         } => {
             let obj_slot = *value_slots.get(object).unwrap_or(&0);
             let idx_slot = *value_slots.get(index).unwrap_or(&0);
@@ -1113,7 +1109,10 @@ fn compile_instruction(
         }
 
         nir::Instruction::FieldGet {
-            result, object, field, ..
+            result,
+            object,
+            field,
+            ..
         } => {
             let obj_slot = *value_slots.get(object).unwrap_or(&0);
             chunk.emit(Opcode::LoadLocal(obj_slot));
@@ -1253,7 +1252,10 @@ fn compile_instruction(
         }
 
         nir::Instruction::PatternIndex {
-            result, object, index, ..
+            result,
+            object,
+            index,
+            ..
         } => {
             let obj_slot = *value_slots.get(object).unwrap_or(&0);
             let idx_slot = *value_slots.get(index).unwrap_or(&0);
@@ -1265,7 +1267,10 @@ fn compile_instruction(
         }
 
         nir::Instruction::PatternField {
-            result, object, field, ..
+            result,
+            object,
+            field,
+            ..
         } => {
             let obj_slot = *value_slots.get(object).unwrap_or(&0);
             chunk.emit(Opcode::LoadLocal(obj_slot));
@@ -1351,14 +1356,28 @@ fn compile_try(
             let site_next = chunk.emit(Opcode::JumpIfFalse(0));
             chunk.emit(Opcode::LoadLocal(tmp_slot));
             chunk.emit(Opcode::StoreLocal(bind_slot));
-            compile_nested(&catch.body, chunk, value_slots, name_slots, next_slot, loop_stack)?;
+            compile_nested(
+                &catch.body,
+                chunk,
+                value_slots,
+                name_slots,
+                next_slot,
+                loop_stack,
+            )?;
             fin_sites.push(chunk.emit(Opcode::Jump(0)));
             let next_ip = chunk.code.len() as u32;
             chunk.patch_jump(site_next, next_ip);
         } else {
             chunk.emit(Opcode::LoadLocal(tmp_slot));
             chunk.emit(Opcode::StoreLocal(bind_slot));
-            compile_nested(&catch.body, chunk, value_slots, name_slots, next_slot, loop_stack)?;
+            compile_nested(
+                &catch.body,
+                chunk,
+                value_slots,
+                name_slots,
+                next_slot,
+                loop_stack,
+            )?;
             fin_sites.push(chunk.emit(Opcode::Jump(0)));
             saw_bare = true;
         }
@@ -1419,7 +1438,14 @@ fn compile_nested(
                 let cond_slot = *value_slots.get(condition).unwrap_or(&0);
                 chunk.emit(Opcode::LoadLocal(cond_slot));
                 let site_else = chunk.emit(Opcode::JumpIfFalse(0));
-                compile_nested(then_branch, chunk, value_slots, name_slots, next_slot, loop_stack)?;
+                compile_nested(
+                    then_branch,
+                    chunk,
+                    value_slots,
+                    name_slots,
+                    next_slot,
+                    loop_stack,
+                )?;
                 match else_branch {
                     Some(els) => {
                         let site_end = chunk.emit(Opcode::Jump(0));
@@ -1565,7 +1591,7 @@ fn nir_results(instr: &nir::Instruction) -> Vec<nir::ValueId> {
         | nir::Instruction::FieldGet { result, .. }
         | nir::Instruction::FieldSet { result, .. }
         | nir::Instruction::EnumNew { result, .. }
-        |         nir::Instruction::VariantName { result, .. } => vec![*result],
+        | nir::Instruction::VariantName { result, .. } => vec![*result],
         nir::Instruction::PatternIndex { result, .. } => vec![*result],
         nir::Instruction::PatternField { result, .. } => vec![*result],
         nir::Instruction::SpawnCall { result, .. }
@@ -1574,7 +1600,9 @@ fn nir_results(instr: &nir::Instruction) -> Vec<nir::ValueId> {
         | nir::Instruction::AwaitTask { result, .. }
         | nir::Instruction::ChannelNew { result, .. } => vec![*result],
         nir::Instruction::MethodCall {
-            result, receiver_out, ..
+            result,
+            receiver_out,
+            ..
         } => vec![*result, *receiver_out],
         nir::Instruction::Try {
             body,
@@ -2110,9 +2138,7 @@ impl Vm {
     /// Resolve `receiver.method` to a chunk name, or a catchable error.
     fn method_target(&self, receiver: &Value, method: &str) -> Result<String, String> {
         let type_name = match receiver {
-            Value::Object { type_name, .. } | Value::Enum { type_name, .. } => {
-                type_name.clone()
-            }
+            Value::Object { type_name, .. } | Value::Enum { type_name, .. } => type_name.clone(),
             other => {
                 return Err(format!(
                     "type '{}' has no method '{method}'",
@@ -2260,12 +2286,10 @@ impl Vm {
                     }
                     match self.call_function(&name, args) {
                         Ok((ret, _)) => self.stack.push(ret),
-                        Err(VmFault::Throw(value)) => {
-                            match self.handle_throw(depth, value) {
-                                Ok(()) => {}
-                                Err(value) => return Err(VmFault::Throw(value)),
-                            }
-                        }
+                        Err(VmFault::Throw(value)) => match self.handle_throw(depth, value) {
+                            Ok(()) => {}
+                            Err(value) => return Err(VmFault::Throw(value)),
+                        },
                         Err(fatal) => return Err(fatal),
                     }
                 }
@@ -2307,12 +2331,10 @@ impl Vm {
                             self.stack.push(ret);
                             self.stack.push(updated);
                         }
-                        Err(VmFault::Throw(value)) => {
-                            match self.handle_throw(depth, value) {
-                                Ok(()) => {}
-                                Err(value) => return Err(VmFault::Throw(value)),
-                            }
-                        }
+                        Err(VmFault::Throw(value)) => match self.handle_throw(depth, value) {
+                            Ok(()) => {}
+                            Err(value) => return Err(VmFault::Throw(value)),
+                        },
                         Err(fatal) => return Err(fatal),
                     }
                 }
@@ -2323,10 +2345,7 @@ impl Vm {
                         args[i] = self.stack.pop().unwrap_or(Value::Unit);
                     }
                     if self.program.chunk_by_name(&callee).is_none() {
-                        self.raise(
-                            depth,
-                            format!("cannot spawn unknown function '{callee}'"),
-                        )?;
+                        self.raise(depth, format!("cannot spawn unknown function '{callee}'"))?;
                         continue;
                     }
                     let task = self.spawn_call(callee.clone(), args);
@@ -2340,10 +2359,7 @@ impl Vm {
                     }
                     let receiver = self.stack.pop().unwrap_or(Value::Unit);
                     if matches!(receiver, Value::Channel(_)) {
-                        self.raise(
-                            depth,
-                            "cannot spawn a channel operation".to_owned(),
-                        )?;
+                        self.raise(depth, "cannot spawn a channel operation".to_owned())?;
                         continue;
                     }
                     let target = match self.method_target(&receiver, &method) {
@@ -2375,8 +2391,7 @@ impl Vm {
 
                 Opcode::CompleteTask => {
                     let value = self.stack.pop().unwrap_or(Value::Unit);
-                    self.stack
-                        .push(Value::Task(TaskShared::completed(value)));
+                    self.stack.push(Value::Task(TaskShared::completed(value)));
                 }
 
                 Opcode::ChannelNew => {
@@ -2435,7 +2450,8 @@ impl Vm {
 
                 Opcode::TypeName => {
                     let value = self.stack.pop().unwrap_or(Value::Unit);
-                    self.stack.push(Value::String(type_name_of(&value).to_owned()));
+                    self.stack
+                        .push(Value::String(type_name_of(&value).to_owned()));
                 }
 
                 Opcode::ToString => {
@@ -2445,8 +2461,7 @@ impl Vm {
 
                 Opcode::BuildArray(count) => {
                     let count = count as usize;
-                    let mut elements =
-                        vec![Value::Unit; self.stack.len().min(count)];
+                    let mut elements = vec![Value::Unit; self.stack.len().min(count)];
                     for slot in elements.iter_mut().rev() {
                         *slot = self.stack.pop().unwrap_or(Value::Unit);
                     }
@@ -2478,9 +2493,8 @@ impl Vm {
                             match args.get(i as usize).cloned() {
                                 Some(element) => self.stack.push(element),
                                 None => {
-                                    let value = Value::String(format!(
-                                        "payload index {i} out of bounds"
-                                    ));
+                                    let value =
+                                        Value::String(format!("payload index {i} out of bounds"));
                                     match self.handle_throw(depth, value) {
                                         Ok(()) => {}
                                         Err(value) => return Err(VmFault::Throw(value)),
@@ -2489,9 +2503,8 @@ impl Vm {
                             }
                         }
                         (object, index) => {
-                            let value = Value::String(format!(
-                                "cannot index {object} with {index}"
-                            ));
+                            let value =
+                                Value::String(format!("cannot index {object} with {index}"));
                             match self.handle_throw(depth, value) {
                                 Ok(()) => {}
                                 Err(value) => return Err(VmFault::Throw(value)),
@@ -2522,9 +2535,8 @@ impl Vm {
                             }
                         }
                         (object, index) => {
-                            let value = Value::String(format!(
-                                "cannot index {object} with {index}"
-                            ));
+                            let value =
+                                Value::String(format!("cannot index {object} with {index}"));
                             match self.handle_throw(depth, value) {
                                 Ok(()) => {}
                                 Err(value) => return Err(VmFault::Throw(value)),
@@ -2555,9 +2567,8 @@ impl Vm {
                             self.stack.push(Value::Object { type_name, fields });
                         }
                         object => {
-                            let value = Value::String(format!(
-                                "cannot set field '{name}' on {object}"
-                            ));
+                            let value =
+                                Value::String(format!("cannot set field '{name}' on {object}"));
                             match self.handle_throw(depth, value) {
                                 Ok(()) => {}
                                 Err(value) => return Err(VmFault::Throw(value)),
@@ -2573,9 +2584,7 @@ impl Vm {
                             match fields.iter().find(|(field, _)| field == &name) {
                                 Some((_, value)) => self.stack.push(value.clone()),
                                 None => {
-                                    let value = Value::String(format!(
-                                        "unknown field '{name}'"
-                                    ));
+                                    let value = Value::String(format!("unknown field '{name}'"));
                                     match self.handle_throw(depth, value) {
                                         Ok(()) => {}
                                         Err(value) => return Err(VmFault::Throw(value)),
@@ -2584,9 +2593,8 @@ impl Vm {
                             }
                         }
                         object => {
-                            let value = Value::String(format!(
-                                "cannot read field '{name}' on {object}"
-                            ));
+                            let value =
+                                Value::String(format!("cannot read field '{name}' on {object}"));
                             match self.handle_throw(depth, value) {
                                 Ok(()) => {}
                                 Err(value) => return Err(VmFault::Throw(value)),
@@ -2615,9 +2623,7 @@ impl Vm {
                 Opcode::VariantName => {
                     let value = self.stack.pop().unwrap_or(Value::Unit);
                     match value {
-                        Value::Enum { variant, .. } => {
-                            self.stack.push(Value::String(variant))
-                        }
+                        Value::Enum { variant, .. } => self.stack.push(Value::String(variant)),
                         _ => self.stack.push(Value::String(String::new())),
                     }
                 }
@@ -2704,9 +2710,7 @@ impl Vm {
                             self.stack.push(Value::Integer(position as i64 + 1));
                         }
                         iterable => {
-                            let value = Value::String(format!(
-                                "{iterable} is not iterable"
-                            ));
+                            let value = Value::String(format!("{iterable} is not iterable"));
                             match self.handle_throw(depth, value) {
                                 Ok(()) => {}
                                 Err(value) => return Err(VmFault::Throw(value)),
@@ -2947,22 +2951,17 @@ pub fn execute_program(program: &CompiledProgram) -> Result<VmResult, Diagnostic
     let mut vm = Vm::with_output(Arc::new(program.clone()), Arc::clone(&output));
     let return_value = vm.run().map_err(|fault| match fault {
         // An uncaught exception keeps the historical message shape.
-        VmFault::Throw(value) => {
-            Diagnostic::error("NXL9001", format!("runtime error: {value}"), Span::default())
-        }
+        VmFault::Throw(value) => Diagnostic::error(
+            "NXL9001",
+            format!("runtime error: {value}"),
+            Span::default(),
+        ),
         VmFault::Fatal(message) => Diagnostic::error("NXL9001", message, Span::default()),
     })?;
     // Joined tasks are done writing (leaked threads on error paths may
     // still hold the Arc, so clone under the lock instead of unwrapping).
-    let output = output
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
-    Ok(VmResult::with_spans(
-        output,
-        return_value,
-        vm.debug_spans,
-    ))
+    let output = output.lock().map(|guard| guard.clone()).unwrap_or_default();
+    Ok(VmResult::with_spans(output, return_value, vm.debug_spans))
 }
 
 /// Compile a NXL source file and execute it in the VM.

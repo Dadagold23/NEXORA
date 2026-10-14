@@ -329,8 +329,7 @@ impl<'m> JsBackend<'m> {
         } else {
             js_ident(&function.name).to_owned()
         };
-        writeln!(self.out, "function {}({}) {{", js_name, params.join(", "))
-            .unwrap();
+        writeln!(self.out, "function {}({}) {{", js_name, params.join(", ")).unwrap();
         self.indent = 1;
 
         // Emit blocks in order; skip blocks that were inlined into a Branch
@@ -350,11 +349,7 @@ impl<'m> JsBackend<'m> {
         if is_method {
             // Falling off the end still honours the [value, self] protocol.
             if let Some(name) = self.method_self.clone() {
-                let s = self
-                    .name_vars
-                    .get(&name)
-                    .cloned()
-                    .unwrap_or(name);
+                let s = self.name_vars.get(&name).cloned().unwrap_or(name);
                 self.line(&format!("return [undefined, {s}];"));
             }
             self.indent = 0;
@@ -397,12 +392,10 @@ impl<'m> JsBackend<'m> {
     /// The self variable resolves through `name_vars` at each return site
     /// because stores rebind it over the method body.
     fn emit_return(&mut self, value: Option<ValueId>) {
-        let method_self = self.method_self.clone().and_then(|name| {
-            self.name_vars
-                .get(&name)
-                .cloned()
-                .or(Some(name))
-        });
+        let method_self = self
+            .method_self
+            .clone()
+            .and_then(|name| self.name_vars.get(&name).cloned().or(Some(name)));
         match (method_self, value) {
             (Some(s), Some(v)) => {
                 let js = self.var(v);
@@ -640,9 +633,7 @@ impl<'m> JsBackend<'m> {
                 let cursor = self.var(*index);
                 let has = self.var(*has_next);
                 let value = self.var(*item);
-                self.line(&format!(
-                    "let __nxl_seq = __nxl_iter({sequence});"
-                ));
+                self.line(&format!("let __nxl_seq = __nxl_iter({sequence});"));
                 self.line(&format!("let {has} = {cursor} < __nxl_seq.length;"));
                 self.line(&format!(
                     "let {value} = {has} ? __nxl_seq[{cursor}] : undefined;"
@@ -756,14 +747,19 @@ impl<'m> JsBackend<'m> {
                 self.line(&format!("throw {src};"));
             }
 
-            Instruction::ArrayNew { result, elements, .. } => {
+            Instruction::ArrayNew {
+                result, elements, ..
+            } => {
                 let parts: Vec<String> = elements.iter().map(|e| self.var(*e)).collect();
                 let v = self.var(*result);
                 self.line(&format!("let {v} = [{}];", parts.join(", ")));
             }
 
             Instruction::IndexGet {
-                result, object, index, ..
+                result,
+                object,
+                index,
+                ..
             } => {
                 let obj = self.var(*object);
                 let idx = self.var(*index);
@@ -782,9 +778,7 @@ impl<'m> JsBackend<'m> {
                 let idx = self.var(*index);
                 let val = self.var(*value);
                 let v = self.var(*result);
-                self.line(&format!(
-                    "let {v} = __nxl_index_set({obj}, {idx}, {val});"
-                ));
+                self.line(&format!("let {v} = __nxl_index_set({obj}, {idx}, {val});"));
             }
 
             Instruction::StructNew {
@@ -802,7 +796,10 @@ impl<'m> JsBackend<'m> {
             }
 
             Instruction::FieldGet {
-                result, object, field, ..
+                result,
+                object,
+                field,
+                ..
             } => {
                 let obj = self.var(*object);
                 let v = self.var(*result);
@@ -848,18 +845,22 @@ impl<'m> JsBackend<'m> {
             }
 
             Instruction::PatternIndex {
-                result, object, index, ..
+                result,
+                object,
+                index,
+                ..
             } => {
                 let obj = self.var(*object);
                 let idx = self.var(*index);
                 let v = self.var(*result);
-                self.line(&format!(
-                    "let {v} = __nxl_pattern_index({obj}, {idx});"
-                ));
+                self.line(&format!("let {v} = __nxl_pattern_index({obj}, {idx});"));
             }
 
             Instruction::PatternField {
-                result, object, field, ..
+                result,
+                object,
+                field,
+                ..
             } => {
                 let obj = self.var(*object);
                 let v = self.var(*result);
@@ -877,8 +878,7 @@ impl<'m> JsBackend<'m> {
                 ..
             } => {
                 let recv = self.var(*receiver);
-                let args: Vec<String> =
-                    arguments.iter().map(|a| self.var(*a)).collect();
+                let args: Vec<String> = arguments.iter().map(|a| self.var(*a)).collect();
                 let v = self.var(*result);
                 let s = self.var(*receiver_out);
                 self.line(&format!(
@@ -970,8 +970,9 @@ impl<'m> JsBackend<'m> {
 
             // Handler-protocol instructions are expanded before emission and
             // never survive into finished blocks; ignore defensively.
-            Instruction::Catch { .. } | Instruction::PushHandler { .. } | Instruction::PopHandler { .. } => {
-            }
+            Instruction::Catch { .. }
+            | Instruction::PushHandler { .. }
+            | Instruction::PopHandler { .. } => {}
 
             // These are structural; handled by the CFG builder — they should
             // not appear in basic block instruction lists after lowering.
@@ -1348,9 +1349,7 @@ fn contains_return(instructions: &[Instruction]) -> bool {
             ..
         } => {
             contains_return(body)
-                || catches
-                    .iter()
-                    .any(|catch| contains_return(&catch.body))
+                || catches.iter().any(|catch| contains_return(&catch.body))
                 || finally.as_ref().is_some_and(|block| contains_return(block))
         }
         _ => false,
@@ -1511,9 +1510,9 @@ impl<'m> RustBackend<'m> {
     }
 
     /// `function` is only forwarded when recursing into nested regions (a `try`
-/// body or handler).
-#[allow(clippy::only_used_in_recursion)]
-fn emit_instruction(
+    /// body or handler).
+    #[allow(clippy::only_used_in_recursion)]
+    fn emit_instruction(
         &mut self,
         instruction: &Instruction,
         function: &Function,
@@ -1608,13 +1607,18 @@ fn emit_instruction(
                 let v = self.var(*result);
                 self.line(&format!("let mut {v} = format!(\"{{}}\", {src});"));
             }
-            Instruction::ArrayNew { result, elements, .. } => {
+            Instruction::ArrayNew {
+                result, elements, ..
+            } => {
                 let parts: Vec<String> = elements.iter().map(|e| self.var(*e)).collect();
                 let v = self.var(*result);
                 self.line(&format!("let mut {v} = vec![{}];", parts.join(", ")));
             }
             Instruction::IndexGet {
-                result, object, index, ..
+                result,
+                object,
+                index,
+                ..
             } => {
                 let obj = self.var(*object);
                 let idx = self.var(*index);
@@ -1649,7 +1653,10 @@ fn emit_instruction(
                     *span,
                 ));
             }
-            Instruction::StructNew { span, .. } | Instruction::FieldGet { span, .. } | Instruction::FieldSet { span, .. } | Instruction::EnumNew { span, .. } => {
+            Instruction::StructNew { span, .. }
+            | Instruction::FieldGet { span, .. }
+            | Instruction::FieldSet { span, .. }
+            | Instruction::EnumNew { span, .. } => {
                 return Err(Diagnostic::error(
                     "NXL2007",
                     "the Rust backend does not support composite data yet",
@@ -1694,10 +1701,7 @@ fn emit_instruction(
                 span,
                 ..
             } => {
-                if catches
-                    .iter()
-                    .any(|catch| catch.annotation.is_some())
-                {
+                if catches.iter().any(|catch| catch.annotation.is_some()) {
                     return Err(Diagnostic::error(
                         "NXL2007",
                         "the Rust backend does not support `catch e: Type` yet; catch without a type instead",
@@ -1828,7 +1832,7 @@ fn emit_instruction(
         Ok(())
     }
 
-fn emit_entry_point(&mut self) {
+    fn emit_entry_point(&mut self) {
         if let Some(entry) = &self.module.entry_point {
             let name = rust_safe(entry);
             if name != "main" {
@@ -2014,10 +2018,13 @@ fn instruction_results(instruction: &Instruction) -> Vec<ValueId> {
         | Instruction::ChannelReceive { result, .. }
         | Instruction::ForeignCall { result, .. } => vec![*result],
         Instruction::IteratorNext { has_next, item, .. } => vec![*has_next, *item],
-        Instruction::PatternIndex { result, .. }
-        | Instruction::PatternField { result, .. } => vec![*result],
+        Instruction::PatternIndex { result, .. } | Instruction::PatternField { result, .. } => {
+            vec![*result]
+        }
         Instruction::MethodCall {
-            result, receiver_out, ..
+            result,
+            receiver_out,
+            ..
         } => vec![*result, *receiver_out],
         Instruction::ArrayNew { result, .. }
         | Instruction::IndexGet { result, .. }
@@ -2033,4 +2040,3 @@ fn instruction_results(instruction: &Instruction) -> Vec<ValueId> {
         _ => Vec::new(),
     }
 }
-

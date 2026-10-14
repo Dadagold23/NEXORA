@@ -54,9 +54,9 @@ pub fn parse_imports(program: &Program) -> Vec<ModuleImport> {
             let dotted = path.join(".");
             if selected.is_empty() {
                 out.push(ModuleImport::Whole {
-                    alias: alias.clone().unwrap_or_else(|| {
-                        path.last().cloned().unwrap_or_default()
-                    }),
+                    alias: alias
+                        .clone()
+                        .unwrap_or_else(|| path.last().cloned().unwrap_or_default()),
                     path: dotted,
                 });
             } else {
@@ -206,11 +206,8 @@ pub fn compile_modules(modules: &mut [ProjectModule]) -> Result<crate::nir::Modu
     let mut files = Vec::with_capacity(modules.len());
     for module in modules {
         let context = module_context(module);
-        let hir = crate::hir::analyze_module(
-            &module.program,
-            module.source_name.clone(),
-            &context,
-        )?;
+        let hir =
+            crate::hir::analyze_module(&module.program, module.source_name.clone(), &context)?;
         let imports = parse_imports(&module.program);
         let aliases = file_aliases(&module.path, &module.program, &imports);
         files.push(crate::nir::ProjectFile {
@@ -284,10 +281,7 @@ pub fn compile_project(entry_file: &Path) -> Result<crate::nir::Module, Diagnost
     let text = std::fs::read_to_string(entry_file).map_err(|e| {
         Diagnostic::error(
             "NXL12006",
-            format!(
-                "cannot read '{}': {e}",
-                entry_file.to_string_lossy()
-            ),
+            format!("cannot read '{}': {e}", entry_file.to_string_lossy()),
             Span::default(),
         )
     })?;

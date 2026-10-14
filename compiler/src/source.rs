@@ -21,10 +21,18 @@ pub struct SourceFile {
 }
 
 impl SourceFile {
+    /// Build a source file, stripping a leading UTF-8 byte-order mark.
+    ///
+    /// Windows editors and PowerShell's default `utf8` encoding write a BOM,
+    /// and without this the very first character of such a file fails to lex.
     pub fn new(name: impl Into<String>, text: impl Into<String>) -> Self {
+        let mut text = text.into();
+        if text.starts_with('\u{feff}') {
+            text.drain(..'\u{feff}'.len_utf8());
+        }
         Self {
             name: name.into(),
-            text: text.into(),
+            text,
         }
     }
 

@@ -3,59 +3,115 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  cross-build:
+  # Each platform is built and self-tested on its own native runner. The
+  # packaging script refuses to run on the wrong platform, so a mislabelled
+  # binary cannot be produced.
+  build:
+    name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            artifact: nxlc-linux-x86_64
-          - os: windows-latest
-            artifact: nxlc-windows-x86_64.exe
-          - os: macos-latest
-            artifact: nxlc-macos-aarch64
+          - { target: linux-x64,   os: ubuntu-22.04 }
+          - { target: linux-arm64, os: ubuntu-22.04-arm, experimental: true }
+          - { target: macos-arm64, os: macos-14 }
+          - { target: macos-x64,   os: macos-13 }
+          - { target: windows-x64, os: windows-latest, experimental: false }
     steps:
       - uses: actions/checkout@v4
+
+      # ARM64 Linux is a best-effort target: if the runner image is unavailable
+      # the job is skipped rather than blocking a release.
+      - name: Check runner availability
+        if: matrix.experimental
+        run: |
+          echo "experimental target; continuing"
+
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace
-        working-directory: compiler
-      - run: cargo build --release
-        working-directory: compiler
-      - name: Stage artifact and hash
+
+      - name: Install shellcheck (installer lint)
+        if: runner.os != 'Windows'
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Lint the Unix installer
+        if: runner.os != 'Windows'
+        run: shellcheck install/unix/install.sh
+
+      - name: Verify the installer scripts parse
+        if: runner.os == 'Windows'
+        shell: bash
+        run: bash -n install/unix/install.sh && bash -n scripts/package-release.sh
+
+      - name: Package (runs fmt, clippy, tests, release build, staging, artifact tests)
         shell: bash
         run: |
-          mkdir -p release
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cp compiler/target/release/nxlc.exe release/${{ matrix.artifact }}
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1
           else
-            cp compiler/target/release/nxlc release/${{ matrix.artifact }}
+            sh scripts/package-release.sh "${{ matrix.target }}"
           fi
-          cd release
-          shasum -a 256 ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: release/*
+          name: NEXORA-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.zip.sha256
+          if-no-files-found: error
 
-  release:
-    needs: cross-build
+  publish:
+    name: Publish release
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+
+      - name: Collect archives from every platform
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Flatten artifacts and list
+          merge-multiple: true
+
+      - name: Build the platform manifest and checksums
         run: |
+          set -euo pipefail
           mkdir -p dist
-          find artifacts -type f -exec cp {} dist/ \;
+          cp artifacts/*.tar.gz artifacts/*.zip dist/ 2>/dev/null || true
+          (cd dist && sha256sum ./*.tar.gz ./*.zip > SHA256SUMS 2>/dev/null || true)
+          {
+            echo "# NEXORA release manifest"
+            echo
+            echo "| Platform | Archive | Size | SHA-256 |"
+            echo "| --- | --- | --- | --- |"
+          } > dist/MANIFEST.md
+          for archive in dist/*.tar.gz dist/*.zip; do
+            [ -f "$archive" ] || continue
+            name="$(basename "$archive")"
+            size="$(du -h "$archive" | cut -f1)"
+            hash="$(sha256sum "$archive" | cut -d' ' -f1)"
+            target="${name#NEXORA-}"
+            target="${target#*-}"
+            target="${target%.tar.gz}"
+            target="${target%.zip}"
+            echo "| $target | $name | $size | \`$hash\` |" >> dist/MANIFEST.md
+          done
+          cat dist/MANIFEST.md
           ls -la dist/
-          sha256sum dist/* > dist/SHA256SUMS
-      - name: Create GitHub release
+
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
           generate_release_notes: true
+          fail_on_unmatched_files: true

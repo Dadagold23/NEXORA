@@ -75,7 +75,8 @@ fn lsp_initialize_and_symbol_rpc() {
 
 #[test]
 fn unknown_method_returns_method_not_found() {
-    let resp = nls::handle_message(r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/notAFeature"}"#);
+    let resp =
+        nls::handle_message(r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/notAFeature"}"#);
     assert!(resp.contains("method not found"), "{resp}");
 }
 
@@ -122,7 +123,10 @@ fn workspace_rename_is_cross_file_and_code_only() {
 fn code_actions_suggest_rename_for_known_symbols() {
     let mut ws = nls::Workspace::new();
     ws.add_file("a.nxl", "fn known() {}\n");
-    assert!(ws.code_actions("known").iter().any(|a| a.contains("Rename")));
+    assert!(ws
+        .code_actions("known")
+        .iter()
+        .any(|a| a.contains("Rename")));
     assert!(ws.code_actions("missing").is_empty());
 }
 

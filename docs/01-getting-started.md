@@ -1,33 +1,63 @@
 # Getting Started
 
-Requirements: Rust stable (for the `nxlc` toolchain crate). Python prototype is reference-only.
+## Install
+
+Download the release package for your platform and run its installer — see
+[`02-installation.md`](02-installation.md). After installing you have `nxlc`
+(the compiler) and can use the shorter `nexora` spelling for project work.
+
+## Build from source
+
+Requirements: Rust stable.
 
 ```bash
 cd compiler
 cargo build --release
-cargo test --workspace
+cargo test
 ```
 
-Create a project:
+## Create and run a project
 
 ```bash
-nxlc new hello
+nexora new console hello
 cd hello
-nxlc run          # executes src/main.nxl through the JS-runtime bridge
-nxlc check        # type-check without output
-nxlc doctor       # toolchain diagnostics
+nexora run          # Hello, NXL!
+nexora check        # type-check without output
+nexora build --release
+nexora test         # compile and run everything in tests/
+nexora doctor       # toolchain diagnostics
 ```
 
-Layout created by `nxl init`:
+`nexora` and `nxlc` are the same tool: `nexora` is the project-facing spelling
+and `nxlc` the compiler spelling. Both accept every command.
+
+The `console` template is the only one that exists today. `nexora new web ...`
+is refused with an explanation, because NXL has no web development server and a
+generated project that cannot run would be worse than an error.
+
+`nexora dev` (the proposed web workflow) is likewise refused rather than
+silently doing nothing.
+
+## Project layout created by `nexora new console`:
 
 ```text
 hello/
-  nxl.toml          # [package] + [database] + [web] metadata
-  src/main.nxl
-  database/migrations/
-  database/seeders/
-  database/factories/
-  build/            # build artifacts (gitignored)
+  nxl.toml          # [package] metadata and the entry point
+  src/main.nxl      # program entry point
+  tests/basic.nxl   # compiled and run by `nexora test`
+  README.md         # project-specific notes
+  .gitignore
 ```
 
-Next: [CLI Reference](02-cli-reference.md).
+`nxl init` creates the same layout in the current directory using the current
+directory's name.
+
+Layout created by `nxl init`:
+
+After building, artifacts land in `build/` (gitignored):
+
+```text
+hello/build/            # build artifacts
+```
+
+Next: [CLI Reference](03-cli-reference.md).

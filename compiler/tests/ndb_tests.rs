@@ -271,14 +271,25 @@ fn unsupported_driver_is_honest_error() {
 
 #[test]
 fn known_driver_names_are_recognized() {
-    for name in ["sqlite", "postgres", "postgresql", "pg", "mysql", "mariadb", "maria"] {
+    for name in [
+        "sqlite",
+        "postgres",
+        "postgresql",
+        "pg",
+        "mysql",
+        "mariadb",
+        "maria",
+    ] {
         assert!(
             ndb::Driver::from_name(name).is_some(),
             "driver '{name}' should be recognized"
         );
     }
     assert!(ndb::Driver::from_name("oracle").is_none());
-    assert_eq!(ndb::Driver::from_name("POSTGRES").unwrap().name(), "postgres");
+    assert_eq!(
+        ndb::Driver::from_name("POSTGRES").unwrap().name(),
+        "postgres"
+    );
 }
 
 #[test]
@@ -391,8 +402,16 @@ fn orm_model_crud_roundtrip() {
     ndb::migrate(&dir).unwrap();
 
     let mut db = ndb::Database::open(&dir).unwrap();
-    db.model_insert(&User { id: 1, name: "ada".into() }).unwrap();
-    db.model_insert(&User { id: 2, name: "bob".into() }).unwrap();
+    db.model_insert(&User {
+        id: 1,
+        name: "ada".into(),
+    })
+    .unwrap();
+    db.model_insert(&User {
+        id: 2,
+        name: "bob".into(),
+    })
+    .unwrap();
     assert_eq!(db.model_count::<User>().unwrap(), 2);
 
     let all: Vec<User> = db.model_all::<User>().unwrap();
@@ -402,7 +421,13 @@ fn orm_model_crud_roundtrip() {
         .model_find::<User>("id", ndb::Value::Int(2))
         .unwrap()
         .unwrap();
-    assert_eq!(found, User { id: 2, name: "bob".into() });
+    assert_eq!(
+        found,
+        User {
+            id: 2,
+            name: "bob".into()
+        }
+    );
     assert!(db
         .model_find::<User>("id", ndb::Value::Int(99))
         .unwrap()
@@ -440,7 +465,11 @@ fn connection_pool_reuses_and_bounds_connections() {
 
     {
         let mut c = pool.get().unwrap();
-        assert_eq!(pool.live_count(), 1, "connection should be reused, not reopened");
+        assert_eq!(
+            pool.live_count(),
+            1,
+            "connection should be reused, not reopened"
+        );
         assert_eq!(c.count(&ndb::Query::table("users")).unwrap(), 1);
     }
     assert_eq!(pool.idle_count(), 1);

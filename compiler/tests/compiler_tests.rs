@@ -1917,7 +1917,15 @@ mod cli_tests {
         assert_eq!(
             parse_args(&args(&["new", "myapp"])).unwrap(),
             Command::New {
-                name: "myapp".into()
+                name: "myapp".into(),
+                template: None
+            }
+        );
+        assert_eq!(
+            parse_args(&args(&["new", "console", "myapp"])).unwrap(),
+            Command::New {
+                name: "myapp".into(),
+                template: Some("console".into())
             }
         );
     }
@@ -2467,7 +2475,7 @@ mod cli_tests {
 mod pkg_tests {
     use nxl_compiler::cli::{
         cmd_pkg_add, cmd_pkg_audit, cmd_pkg_install, cmd_pkg_publish, cmd_pkg_remove, cmd_pkg_tree,
-        parse_args, Command,
+        parse_args, AddRequest, Command,
     };
     use nxl_compiler::pkg::{
         audit, checksum, Advisory, AuditSeverity, DepSource, DependencyGraph, DependencyResolver,
@@ -2516,9 +2524,29 @@ mod pkg_tests {
 
     #[test]
     fn pkg_version_parse_invalid() {
-        assert!(Version::parse("1.2").is_err());
         assert!(Version::parse("abc").is_err());
         assert!(Version::parse("1.x.3").is_err());
+        assert!(Version::parse("1.2.3.4").is_err());
+        assert!(Version::parse("").is_err());
+    }
+
+    #[test]
+    fn pkg_version_parse_accepts_partial_versions() {
+        // `1` and `1.2` appear in manifests and CLI arguments often enough to
+        // be accepted rather than breaking an otherwise valid project.
+        assert_eq!(Version::parse("1").unwrap(), Version::new(1, 0, 0));
+        assert_eq!(Version::parse("1.2").unwrap(), Version::new(1, 2, 0));
+        assert_eq!(Version::parse("v2.3").unwrap(), Version::new(2, 3, 0));
+        assert_eq!(Version::parse("1.2.3").unwrap(), Version::new(1, 2, 3));
+        assert_eq!(
+            Version::parse("1.2.3-beta").unwrap(),
+            Version {
+                major: 1,
+                minor: 2,
+                patch: 3,
+                pre: Some("beta".to_owned())
+            }
+        );
     }
 
     #[test]
@@ -2941,7 +2969,23 @@ mod pkg_tests {
             cs.chars().all(|c| c.is_ascii_hexdigit()),
             "checksum must be hex: {cs}"
         );
-        assert_eq!(cs.len(), 16);
+        // Package integrity uses SHA-256, not a short non-cryptographic hash.
+        assert_eq!(cs.len(), 64, "expected a SHA-256 digest: {cs}");
+    }
+
+    #[test]
+    fn pkg_checksum_matches_sha256_vectors() {
+        // A non-cryptographic stand-in could not detect tampering, which is
+        // the whole reason a checksum is recorded in nxl.lock.
+        assert_eq!(
+            checksum(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            checksum(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_ne!(checksum(b"a"), checksum(b"b"));
     }
 
     // ── Audit ─────────────────────────────────────────────────────────────────
@@ -3159,21 +3203,38 @@ mod pkg_tests {
             parse_args(&["add".into(), "serde".into()]).unwrap(),
             Command::PkgAdd {
                 name: "serde".into(),
-                req: None
+                req: None,
+                path: None,
             }
         );
         assert_eq!(
             parse_args(&["add".into(), "serde".into(), "^1.0".into()]).unwrap(),
             Command::PkgAdd {
                 name: "serde".into(),
-                req: Some("^1.0".into())
+                req: Some("^1.0".into()),
+                path: None,
+            }
+        );
+        assert_eq!(
+            parse_args(&[
+                "add".into(),
+                "serde".into(),
+                "--path".into(),
+                "../vendor/serde".into()
+            ])
+            .unwrap(),
+            Command::PkgAdd {
+                name: "serde".into(),
+                req: None,
+                path: Some("../vendor/serde".into()),
             }
         );
         assert_eq!(
             parse_args(&["pkg".into(), "add".into(), "serde".into()]).unwrap(),
             Command::PkgAdd {
                 name: "serde".into(),
-                req: None
+                req: None,
+                path: None,
             }
         );
 
@@ -3216,30 +3277,110 @@ mod pkg_tests {
         let audit_res = cmd_pkg_audit(&tmp).unwrap();
         assert!(audit_res.contains("0 vulnerabilities"));
 
-        let pub_res = cmd_pkg_publish();
-        assert!(pub_res.contains("NOT IMPLEMENTED"));
+        let pub_err = cmd_pkg_publish().expect_err("publishing must not report success");
+        assert_eq!(pub_err.code, "NXL13010", "{pub_err:?}");
 
         fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
-    fn pkg_cli_cmd_pkg_add_and_remove() {
+    fn pkg_cli_add_path_dependency_installs_and_removes() {
         let tmp = tmp_dir("cli_add_remove");
         let toml = "[package]\nname = \"add_app\"\nversion = \"0.1.0\"\n";
         fs::write(tmp.join("nxl.toml"), toml).unwrap();
 
-        // Add
-        let add_res = cmd_pkg_add(&tmp, "test-pkg", Some("1.0.0")).unwrap();
-        assert!(add_res.contains("test-pkg"));
-        let manifest_content = fs::read_to_string(tmp.join("nxl.toml")).unwrap();
-        assert!(manifest_content.contains("test-pkg"));
+        // A real package on disk, referenced by path.
+        let vendor = tmp.join("vendor");
+        fs::create_dir_all(vendor.join("src")).unwrap();
+        fs::write(
+            vendor.join("nxl.toml"),
+            "[package]\nname = \"test-pkg\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        fs::write(vendor.join("src/main.nxl"), "print(\"vendor\");").unwrap();
 
-        // Remove
+        let add_res = cmd_pkg_add(
+            &tmp,
+            AddRequest::Path {
+                name: "test-pkg",
+                path: "vendor",
+            },
+        )
+        .unwrap();
+        assert!(add_res.contains("test-pkg"), "{add_res}");
+        let manifest_content = fs::read_to_string(tmp.join("nxl.toml")).unwrap();
+        assert!(
+            manifest_content.contains("test-pkg = \"path:vendor\""),
+            "{manifest_content}"
+        );
+        // A path dependency resolves, so it is recorded in the lock file.
+        let lock = fs::read_to_string(tmp.join("nxl.lock")).unwrap();
+        assert!(lock.contains("test-pkg"), "{lock}");
+
         let rem_res = cmd_pkg_remove(&tmp, "test-pkg").unwrap();
-        assert!(rem_res.contains("Removed 'test-pkg'"));
+        assert!(rem_res.contains("test-pkg"), "{rem_res}");
         let manifest_after = fs::read_to_string(tmp.join("nxl.toml")).unwrap();
-        assert!(!manifest_after.contains("test-pkg ="));
+        assert!(!manifest_after.contains("test-pkg ="), "{manifest_after}");
 
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn pkg_cli_add_registry_dependency_fails_honestly() {
+        let tmp = tmp_dir("cli_add_registry");
+        fs::write(
+            tmp.join("nxl.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        // There is no live registry, so this must fail loudly rather than
+        // reporting a success that never happened.
+        let err = cmd_pkg_add(
+            &tmp,
+            AddRequest::Registry {
+                name: "not-published",
+                req: Some("^1.0"),
+            },
+        )
+        .expect_err("unknown packages must not resolve");
+        assert_eq!(err.code, "NXL13006", "{err:?}");
+        assert!(
+            err.message.contains("no live registry"),
+            "the error should explain why: {err:?}"
+        );
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn pkg_cli_add_rejects_a_missing_path_dependency() {
+        let tmp = tmp_dir("cli_add_bad_path");
+        fs::write(
+            tmp.join("nxl.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let err = cmd_pkg_add(
+            &tmp,
+            AddRequest::Path {
+                name: "ghost",
+                path: "nowhere",
+            },
+        )
+        .expect_err("a missing path dependency must fail");
+        assert_eq!(err.code, "NXL13009", "{err:?}");
+        // Nothing may be written for a dependency that does not exist.
+        let manifest = fs::read_to_string(tmp.join("nxl.toml")).unwrap();
+        assert!(!manifest.contains("ghost"), "{manifest}");
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn pkg_cli_publish_is_refused_not_faked() {
+        let err = cmd_pkg_publish().expect_err("publishing must not report success");
+        assert_eq!(err.code, "NXL13010", "{err:?}");
     }
 }

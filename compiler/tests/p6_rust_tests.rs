@@ -80,7 +80,10 @@ fn native_finally_reraises_uncaught() {
     if !rust_available() {
         return;
     }
-    let source = nxl_compiler::source::SourceFile::new("native_reraise.nxl", "try { throw \"boom\"; } finally { print(\"cleanup\"); }");
+    let source = nxl_compiler::source::SourceFile::new(
+        "native_reraise.nxl",
+        "try { throw \"boom\"; } finally { print(\"cleanup\"); }",
+    );
     let artifact = nxl_compiler::backend::compile_native(&source).expect("emit");
     assert!(
         artifact.source.contains("resume_unwind"),
@@ -92,10 +95,16 @@ fn native_finally_reraises_uncaught() {
 #[test]
 fn native_rejects_unsupported_control_flow_loudly() {
     for (name, program) in [
-        ("native_branch", "let flag = true; if flag { print(1); } else { print(2); }"),
+        (
+            "native_branch",
+            "let flag = true; if flag { print(1); } else { print(2); }",
+        ),
         ("native_while", "let mut i = 0; while i < 3 { i = i + 1; }"),
         ("native_forin", "for v in [1, 2] { print(v); }"),
-        ("native_jump", "let mut i = 0; while true { if i > 2 { break; } i = i + 1; }"),
+        (
+            "native_jump",
+            "let mut i = 0; while true { if i > 2 { break; } i = i + 1; }",
+        ),
     ] {
         let source = nxl_compiler::source::SourceFile::new(name, program);
         let err = nxl_compiler::backend::compile_native(&source)

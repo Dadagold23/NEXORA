@@ -87,9 +87,14 @@ impl Version {
             (s, None)
         };
         let parts: Vec<&str> = core.split('.').collect();
-        if parts.len() != 3 {
-            return Err(PkgError::new("NXL13001", format!("invalid version '{s}'")));
-        }
+        // `1` and `1.2` are common enough in manifests and CLI arguments that
+        // they must mean `1.0.0` and `1.2.0` rather than failing outright.
+        let parts: Vec<&str> = match parts.len() {
+            1 => vec![parts[0], "0", "0"],
+            2 => vec![parts[0], parts[1], "0"],
+            3 => parts,
+            _ => return Err(PkgError::new("NXL13001", format!("invalid version '{s}'"))),
+        };
         let parse_u32 = |p: &str| {
             p.parse::<u32>()
                 .map_err(|_| PkgError::new("NXL13001", format!("invalid version component '{p}'")))
@@ -589,24 +594,44 @@ pub struct ResolvedPackage {
 }
 
 /// Resolves a dependency graph from a manifest and a registry.
+///
+/// Path dependencies are resolved from disk relative to the project, so they
+/// work without a live registry. Registry dependencies require the registry to
+/// contain a matching version and fail with an actionable error otherwise.
 pub struct DependencyResolver<'a> {
     registry: &'a Registry,
+    base: PathBuf,
 }
 
 impl<'a> DependencyResolver<'a> {
     pub fn new(registry: &'a Registry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            base: PathBuf::from("."),
+        }
+    }
+
+    /// Resolve path dependencies relative to this directory (the project root).
+    pub fn with_base(mut self, base: impl Into<PathBuf>) -> Self {
+        self.base = base.into();
+        self
     }
 
     /// Resolve all dependencies declared in `manifest` into a flat list.
     ///
     /// Returns `Err` if any dependency cannot be satisfied or a version
-    /// conflict is detected.
+    /// conflict is detected. Each dependency carries its own base directory,
+    /// because a package's own path dependencies are relative to that
+    /// package, not to the project root.
     pub fn resolve(&self, manifest: &Manifest) -> PkgResult<Vec<ResolvedPackage>> {
         let mut resolved: HashMap<String, ResolvedPackage> = HashMap::new();
-        let mut queue: Vec<ManifestDep> = manifest.dependencies.clone();
+        let mut queue: Vec<(ManifestDep, PathBuf)> = manifest
+            .dependencies
+            .iter()
+            .map(|dep| (dep.clone(), self.base.clone()))
+            .collect();
 
-        while let Some(dep) = queue.pop() {
+        while let Some((dep, base)) = queue.pop() {
             if let Some(existing) = resolved.get(&dep.name) {
                 // Already resolved — check the pinned version satisfies this req.
                 if !dep.req.matches(&existing.version) {
@@ -621,23 +646,92 @@ impl<'a> DependencyResolver<'a> {
                 continue;
             }
 
-            // Try registry; if not found but a different version is already
-            // resolved, that is a conflict rather than a missing package.
-            let pkg = self.registry.resolve(&dep.name, &dep.req)?;
-            // Queue transitive dependencies.
-            if let Some(sub_manifest) = self.registry.manifest(&dep.name, &pkg.version) {
-                for sub_dep in &sub_manifest.dependencies {
-                    if !resolved.contains_key(&sub_dep.name) {
-                        queue.push(sub_dep.clone());
-                    }
+            let pkg = match &dep.source {
+                DepSource::Path(relative) => {
+                    let (pkg, sub_deps) = self.resolve_path(&dep.name, relative, &base)?;
+                    // The package's own dependencies are relative to it.
+                    let package_dir = match &pkg.source {
+                        DepSource::Path(dir) => dir.clone(),
+                        _ => base.clone(),
+                    };
+                    queue.extend(sub_deps.into_iter().map(|d| (d, package_dir.clone())));
+                    pkg
                 }
-            }
+                _ => {
+                    let pkg = self.registry.resolve(&dep.name, &dep.req)?;
+                    // Queue transitive dependencies.
+                    if let Some(sub_manifest) = self.registry.manifest(&dep.name, &pkg.version) {
+                        for sub_dep in &sub_manifest.dependencies {
+                            if !resolved.contains_key(&sub_dep.name) {
+                                queue.push((sub_dep.clone(), self.base.clone()));
+                            }
+                        }
+                    }
+                    pkg
+                }
+            };
             resolved.insert(dep.name.clone(), pkg);
         }
 
         let mut result: Vec<ResolvedPackage> = resolved.into_values().collect();
         result.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(result)
+    }
+
+    /// Load a path dependency from disk and verify it matches what the
+    /// manifest claims. Returns the resolved package and its own dependencies.
+    fn resolve_path(
+        &self,
+        name: &str,
+        relative: &Path,
+        base: &Path,
+    ) -> PkgResult<(ResolvedPackage, Vec<ManifestDep>)> {
+        let dir = normalize(&base.join(relative));
+        if !dir.join("nxl.toml").exists() {
+            return Err(PkgError::new(
+                "NXL13009",
+                format!(
+                    "path dependency '{name}' -> {} has no nxl.toml",
+                    dir.display()
+                ),
+            ));
+        }
+        let manifest = Manifest::load(&dir).map_err(|e| {
+            PkgError::new(
+                "NXL13009",
+                format!(
+                    "path dependency '{name}' -> {} has an unreadable manifest: {}",
+                    dir.display(),
+                    e.message
+                ),
+            )
+        })?;
+        // A name mismatch is almost always a copy/paste error worth catching
+        // now rather than at runtime.
+        if !manifest.name.is_empty() && manifest.name != name {
+            return Err(PkgError::new(
+                "NXL13009",
+                format!(
+                    "path dependency '{name}' points at package '{}' ({})",
+                    manifest.name,
+                    dir.display()
+                ),
+            ));
+        }
+        let deps = manifest
+            .dependencies
+            .iter()
+            .map(|d| format!("{}@{}", d.name, d.req))
+            .collect();
+        Ok((
+            ResolvedPackage {
+                name: name.to_owned(),
+                version: manifest.version.clone(),
+                source: DepSource::Path(dir),
+                dependencies: deps,
+            },
+            manifest.dependencies,
+        ))
     }
 }
 
@@ -690,10 +784,18 @@ impl Registry {
             .collect();
 
         if candidates.is_empty() {
+            // Without a live registry (none exists yet) the only installable
+            // dependencies are local paths, so say that instead of pretending
+            // the package might appear later.
+            let hint = if self.entries.is_empty() {
+                "; no live registry is configured yet - use a path dependency (`nxl pkg add --path <dir>`) or vendor the package"
+            } else {
+                ""
+            };
             return Err(PkgError::new(
                 "NXL13006",
                 format!(
-                    "package '{}' matching '{}' not found in registry",
+                    "package '{}' matching '{}' not found in registry{hint}",
                     name, req
                 ),
             ));
@@ -736,6 +838,30 @@ impl Registry {
 }
 
 // ── Package cache ─────────────────────────────────────────────────────────────
+
+/// Collapse `.` and `..` in a path without touching the filesystem, so a
+/// dependency written as `../lib` reports a clean location.
+fn normalize(path: &Path) -> PathBuf {
+    let mut out: Vec<std::ffi::OsString> = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str().to_os_string()),
+        }
+    }
+    let mut result = PathBuf::new();
+    for part in out {
+        result.push(part);
+    }
+    if result.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        result
+    }
+}
 
 /// Local on-disk package cache at `.nxl-cache/`.
 pub struct PackageCache {
@@ -807,17 +933,94 @@ fn dirs_or_temp() -> PathBuf {
 
 // ── Checksum ──────────────────────────────────────────────────────────────────
 
-/// Compute a deterministic checksum for package content.
+/// Compute a SHA-256 digest of package content, hex encoded.
 ///
-/// Uses a simple FNV-1a 64-bit hash as a stand-in for SHA-256.
-/// Full cryptographic checksums require the P16 crypto module.
+/// Package integrity must use a cryptographic hash: the previous FNV-1a
+/// stand-in could not detect tampering, which is the whole point of recording
+/// a checksum in `nxl.lock`.
 pub fn checksum(data: &[u8]) -> String {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for &byte in data {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
+    sha256::hex(data)
+}
+
+/// SHA-256 (FIPS 180-4), implemented here so package integrity works offline
+/// without an external dependency. Verified against the standard test vectors.
+mod sha256 {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    pub fn hex(data: &[u8]) -> String {
+        let mut h: [u32; 8] = [
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
+        ];
+
+        let mut message = data.to_vec();
+        let bit_len = (data.len() as u64).wrapping_mul(8);
+        message.push(0x80);
+        while message.len() % 64 != 56 {
+            message.push(0);
+        }
+        message.extend_from_slice(&bit_len.to_be_bytes());
+
+        for chunk in message.chunks(64) {
+            let mut w = [0u32; 64];
+            for (i, word) in chunk.chunks(4).enumerate() {
+                w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+            }
+            for i in 16..64 {
+                let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+                let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+                w[i] = w[i - 16]
+                    .wrapping_add(s0)
+                    .wrapping_add(w[i - 7])
+                    .wrapping_add(s1);
+            }
+
+            let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
+            for i in 0..64 {
+                let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+                let choose = (e & f) ^ ((!e) & g);
+                let temp1 = hh
+                    .wrapping_add(s1)
+                    .wrapping_add(choose)
+                    .wrapping_add(K[i])
+                    .wrapping_add(w[i]);
+                let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+                let majority = (a & b) ^ (a & c) ^ (b & c);
+                let temp2 = s0.wrapping_add(majority);
+
+                hh = g;
+                g = f;
+                f = e;
+                e = d.wrapping_add(temp1);
+                d = c;
+                c = b;
+                b = a;
+                a = temp1.wrapping_add(temp2);
+            }
+            for (slot, value) in h.iter_mut().zip([a, b, c, d, e, f, g, hh]) {
+                *slot = slot.wrapping_add(value);
+            }
+        }
+
+        let mut out = String::with_capacity(64);
+        for word in h {
+            for byte in word.to_be_bytes() {
+                out.push_str(&format!("{byte:02x}"));
+            }
+        }
+        out
     }
-    format!("{hash:016x}")
 }
 
 // ── Package manager ───────────────────────────────────────────────────────────
@@ -849,7 +1052,7 @@ impl PackageManager {
     /// the package cache.
     pub fn install(&mut self, dir: &Path) -> PkgResult<InstallReport> {
         let manifest = Manifest::load(dir)?;
-        let resolver = DependencyResolver::new(&self.registry);
+        let resolver = DependencyResolver::new(&self.registry).with_base(dir);
         let resolved = resolver.resolve(&manifest)?;
 
         let mut lock = LockFile::new();
@@ -911,7 +1114,7 @@ impl PackageManager {
     /// Compute dependency graph for project.
     pub fn graph(&self, dir: &Path) -> PkgResult<DependencyGraph> {
         let manifest = Manifest::load(dir)?;
-        let resolver = DependencyResolver::new(&self.registry);
+        let resolver = DependencyResolver::new(&self.registry).with_base(dir);
         let resolved = resolver.resolve(&manifest)?;
         Ok(DependencyGraph::build(&manifest, &resolved))
     }

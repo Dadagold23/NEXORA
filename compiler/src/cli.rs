@@ -1,9 +1,10 @@
-﻿//! P12 — NXL command-line interface.
+//! P12 — NXL command-line interface.
 //!
 //! Implements project scaffolding, build/check/fmt/test, doctor,
 //! package-manager integration (P13), NDB scaffolds (P14) and
 //! stubbed auxiliary commands.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -63,35 +64,78 @@ fn err(code: &str, msg: impl Into<String>) -> CliError {
 pub enum Command {
     Help,
     Version,
-    New { name: String },
+    New {
+        name: String,
+        template: Option<String>,
+    },
+    /// `nexora dev`: the proposed web development server.
+    Dev,
+    /// `nexora test`: run the project's tests.
+    ProjectTest,
     Init,
-    Run { file: Option<String> },
-    Build { release: bool },
-    Check { file: Option<String> },
-    Fmt { file: Option<String> },
-    Lint { file: Option<String> },
+    Run {
+        file: Option<String>,
+    },
+    Build {
+        release: bool,
+    },
+    Check {
+        file: Option<String>,
+    },
+    Fmt {
+        file: Option<String>,
+    },
+    Lint {
+        file: Option<String>,
+    },
     Clean,
-    Test { filter: Option<String> },
-    PkgInstall { offline: bool },
-    PkgAdd { name: String, req: Option<String> },
-    PkgRemove { name: String },
+    Test {
+        filter: Option<String>,
+    },
+    PkgInstall {
+        offline: bool,
+    },
+    PkgAdd {
+        name: String,
+        req: Option<String>,
+        path: Option<String>,
+    },
+    PkgRemove {
+        name: String,
+    },
     PkgUpdate,
     PkgAudit,
     PkgTree,
     PkgPublish,
+    PkgSearch {
+        term: Option<String>,
+    },
+    PkgInfo {
+        name: String,
+    },
     DbCreate,
     DbDrop,
     DbMigrate,
     DbRollback,
     DbRefresh,
-    DbFresh { seed: bool },
+    DbFresh {
+        seed: bool,
+    },
     DbSeed,
     DbStatus,
     DbAudit,
-    MakeModel { name: String },
-    MakeMigration { name: String },
-    MakeSeeder { name: String },
-    MakeFactory { name: String },
+    MakeModel {
+        name: String,
+    },
+    MakeMigration {
+        name: String,
+    },
+    MakeSeeder {
+        name: String,
+    },
+    MakeFactory {
+        name: String,
+    },
     Bridge,
     Ide,
     Bench,
@@ -99,9 +143,33 @@ pub enum Command {
     Platforms,
     Serve,
     Repl,
-    Debug { file: String },
+    Debug {
+        file: String,
+    },
     Docs,
     Doctor,
+}
+
+/// Split `add` arguments into positionals (`name`, optional requirement) and
+/// the value of `--path`, which may appear anywhere after the subcommand.
+fn split_add_args(args: &[String]) -> (Vec<String>, Option<String>) {
+    let mut positional = Vec::new();
+    let mut path = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--path" => {
+                path = args.get(index + 1).cloned();
+                index += 2;
+            }
+            "--offline" => index += 1,
+            other => {
+                positional.push(other.to_owned());
+                index += 1;
+            }
+        }
+    }
+    (positional, path)
 }
 
 pub fn parse_args(args: &[String]) -> CliResult<Command> {
@@ -118,10 +186,25 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
             if args.len() < 2 {
                 return Err(err("NXL12002", "new: missing project name"));
             }
-            Ok(Command::New {
-                name: args[1].clone(),
-            })
+            // `new console hello`, `new --template console hello` and
+            // `new --template=console hello` all work.
+            let (template, name) = match args.get(1).map(String::as_str) {
+                Some(flag) if flag.starts_with("--template=") => (
+                    Some(flag["--template=".len()..].to_owned()),
+                    args.get(2).cloned(),
+                ),
+                Some("--template") => (args.get(2).cloned(), args.get(3).cloned()),
+                Some(candidate) if TEMPLATES.contains(&candidate) => {
+                    (Some(candidate.to_owned()), args.get(2).cloned())
+                }
+                Some(candidate) => (None, Some(candidate.to_owned())),
+                None => (None, None),
+            };
+            let name = name.ok_or_else(|| err("NXL12002", "new: missing project name"))?;
+            Ok(Command::New { name, template })
         }
+        "dev" | "serve:web" => Ok(Command::Dev),
+        "project:test" => Ok(Command::ProjectTest),
         "init" => Ok(Command::Init),
         "run" => Ok(Command::Run {
             file: args.get(1).cloned(),
@@ -157,36 +240,71 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
             offline: args.iter().any(|a| a == "--offline"),
         }),
         "package:install" => Ok(Command::PkgInstall { offline: false }),
-        "pkg" => {
+        "pkg" | "package" => {
             if args.len() < 2 {
-                return Err(err("NXL12002", "pkg: missing subcommand"));
+                return Err(err(
+                    "NXL12002",
+                    "pkg: missing subcommand (try: install, add, remove, update, tree, audit, search, info)",
+                ));
             }
-            match args[1].as_str() {
+            let sub = args[1].as_str();
+            let rest = &args[2..];
+            let has_flag = |name: &str| rest.iter().any(|a| a == name);
+            match sub {
                 "install" => Ok(Command::PkgInstall {
-                    offline: args.iter().any(|a| a == "--offline"),
+                    offline: has_flag("--offline"),
                 }),
                 "add" => {
-                    if args.len() < 3 {
-                        return Err(err("NXL12002", "pkg add: missing package name"));
-                    }
+                    let (positional, path) = split_add_args(rest);
+                    let name = positional
+                        .first()
+                        .cloned()
+                        .ok_or_else(|| err("NXL12002", "pkg add: missing package name"))?;
                     Ok(Command::PkgAdd {
-                        name: args[2].clone(),
-                        req: args.get(3).cloned(),
+                        name,
+                        req: positional.get(1).cloned(),
+                        path,
                     })
                 }
-                _ => Err(err(
+                "remove" | "rm" => {
+                    let name = rest
+                        .first()
+                        .cloned()
+                        .ok_or_else(|| err("NXL12002", "pkg remove: missing package name"))?;
+                    Ok(Command::PkgRemove { name })
+                }
+                "update" | "upgrade" => Ok(Command::PkgUpdate),
+                "audit" => Ok(Command::PkgAudit),
+                "tree" | "deps" => Ok(Command::PkgTree),
+                "publish" => Ok(Command::PkgPublish),
+                "search" | "find" => Ok(Command::PkgSearch {
+                    term: rest.first().cloned(),
+                }),
+                "info" | "show" => {
+                    let name = rest
+                        .first()
+                        .cloned()
+                        .ok_or_else(|| err("NXL12002", "pkg info: missing package name"))?;
+                    Ok(Command::PkgInfo { name })
+                }
+                other => Err(err(
                     "NXL12003",
-                    format!("unknown pkg subcommand '{}'", args[1]),
+                    format!(
+                        "unknown pkg subcommand '{other}' (try: install, add, remove, update, tree, audit, search, info)"
+                    ),
                 )),
             }
         }
         "add" => {
-            if args.len() < 2 {
-                return Err(err("NXL12002", "add: missing package name"));
-            }
+            let (positional, path) = split_add_args(&args[1..]);
+            let name = positional
+                .first()
+                .cloned()
+                .ok_or_else(|| err("NXL12002", "add: missing package name"))?;
             Ok(Command::PkgAdd {
-                name: args[1].clone(),
-                req: args.get(2).cloned(),
+                name,
+                req: positional.get(1).cloned(),
+                path,
             })
         }
         "remove" => {
@@ -210,28 +328,36 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
         "audit" => Ok(Command::PkgAudit),
         "tree" | "deps" => Ok(Command::PkgTree),
         "publish" => Ok(Command::PkgPublish),
+        "search" | "find" => Ok(Command::PkgSearch {
+            term: args.get(1).cloned(),
+        }),
+        "info" | "show" => {
+            let name = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| err("NXL12002", "info: missing package name"))?;
+            Ok(Command::PkgInfo { name })
+        }
         "serve" => Ok(Command::Serve),
         "bridge" => Ok(Command::Bridge),
         "ide" => Ok(Command::Ide),
         "bench" => Ok(Command::Bench),
         "lsp" => Ok(Command::Lsp),
         "platforms" => Ok(Command::Platforms),
-        s if s.starts_with("db:") || s == "db" => {
-            match s {
-                "db:create" => Ok(Command::DbCreate),
-                "db:drop" => Ok(Command::DbDrop),
-                "db:migrate" => Ok(Command::DbMigrate),
-                "db:rollback" => Ok(Command::DbRollback),
-                "db:refresh" => Ok(Command::DbRefresh),
-                "db:seed" => Ok(Command::DbSeed),
-                "db:status" => Ok(Command::DbStatus),
-                "db:audit" => Ok(Command::DbAudit),
-                "db:fresh" => Ok(Command::DbFresh {
-                    seed: args.iter().any(|a| a == "--seed"),
-                }),
-                _ => Err(err("NXL12003", format!("unknown command '{s}'"))),
-            }
-        }
+        s if s.starts_with("db:") || s == "db" => match s {
+            "db:create" => Ok(Command::DbCreate),
+            "db:drop" => Ok(Command::DbDrop),
+            "db:migrate" => Ok(Command::DbMigrate),
+            "db:rollback" => Ok(Command::DbRollback),
+            "db:refresh" => Ok(Command::DbRefresh),
+            "db:seed" => Ok(Command::DbSeed),
+            "db:status" => Ok(Command::DbStatus),
+            "db:audit" => Ok(Command::DbAudit),
+            "db:fresh" => Ok(Command::DbFresh {
+                seed: args.iter().any(|a| a == "--seed"),
+            }),
+            _ => Err(err("NXL12003", format!("unknown command '{s}'"))),
+        },
         s if s.starts_with("make:") => {
             if args.len() < 2 && !s.contains(' ') {
                 return Err(err("NXL12002", format!("{s}: missing name")));
@@ -241,7 +367,8 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
                 Some((k, n)) => (k, Some(n.to_string())),
                 None => (s, args.get(1).cloned()),
             };
-            let name = inline_name.ok_or_else(|| err("NXL12002", format!("{kind}: missing name")))?;
+            let name =
+                inline_name.ok_or_else(|| err("NXL12002", format!("{kind}: missing name")))?;
             match kind {
                 "make:model" => Ok(Command::MakeModel { name }),
                 "make:migration" => Ok(Command::MakeMigration { name }),
@@ -252,7 +379,11 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
         }
         other => {
             // `make:model Name` split across two args.
-            if other == "make:model" || other == "make:migration" || other == "make:seeder" || other == "make:factory" {
+            if other == "make:model"
+                || other == "make:migration"
+                || other == "make:seeder"
+                || other == "make:factory"
+            {
                 if args.len() < 2 {
                     return Err(err("NXL12002", format!("{other}: missing name")));
                 }
@@ -278,12 +409,13 @@ USAGE:
     nxl <COMMAND> [OPTIONS]
 
 COMMANDS:
-    new <name>        Create a new NXL project
+    new [console] <name>   Create a new NXL project from a template
     init              Initialise a project in the current directory
     run [file]        Run a NXL program
     build             Compile the project (debug)
     build --release   Compile the project (release)
     check [file]      Type-check without producing output
+    dev               Web development server (NOT IMPLEMENTED)
     fmt [file]        Format source files
     lint [file]       Lint source files
     clean             Remove build artifacts
@@ -389,8 +521,7 @@ impl Default for ProjectConfig {
 fn strip_quotes(s: &str) -> String {
     let s = s.trim();
     if s.len() >= 2
-        && ((s.starts_with('"') && s.ends_with('"'))
-            || (s.starts_with('\'') && s.ends_with('\'')))
+        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
     {
         s[1..s.len() - 1].to_owned()
     } else {
@@ -524,10 +655,13 @@ impl TestReport {
     }
 }
 
+/// One diagnostic line. `required` failures make `doctor` exit non-zero;
+/// optional checks report their real state without failing the run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DoctorCheck {
     pub name: String,
     pub ok: bool,
+    pub required: bool,
     pub detail: String,
 }
 
@@ -535,37 +669,129 @@ impl DoctorCheck {
     pub fn is_ok(&self) -> bool {
         self.ok
     }
+
+    /// A failed check only fails the run when the check is required.
+    pub fn blocks_release(&self) -> bool {
+        self.required && !self.ok
+    }
+
+    pub fn pass(name: &str, required: bool, detail: impl Into<String>) -> Self {
+        Self {
+            name: name.to_owned(),
+            ok: true,
+            required,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn warn(name: &str, required: bool, detail: impl Into<String>) -> Self {
+        Self {
+            name: name.to_owned(),
+            ok: false,
+            required,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// Probe the environment the toolchain actually runs in. Nothing here is
+/// assumed: the compiler reports its own version, the optional Node runtime is
+/// invoked for real, and the project check reads the working directory.
+pub fn run_doctor_in(dir: &Path) -> Vec<DoctorCheck> {
+    let mut checks = Vec::new();
+
+    checks.push(DoctorCheck::pass(
+        "nxlc compiler",
+        true,
+        format!("{} ({})", version_text(), std::env::consts::ARCH),
+    ));
+
+    // Node only runs the JavaScript backend; the VM is always available.
+    match std::process::Command::new("node").arg("--version").output() {
+        Ok(output) if output.status.success() => {
+            let reported = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            checks.push(DoctorCheck::pass(
+                "node runtime",
+                false,
+                format!("{reported} (JavaScript backend available)"),
+            ));
+        }
+        _ => checks.push(DoctorCheck::warn(
+            "node runtime",
+            false,
+            "not found; JavaScript backend unavailable, run programs with the VM (`nxl run`)",
+        )),
+    }
+
+    let manifest = dir.join("nxl.toml");
+    let entry = dir.join("src/main.nxl");
+    match (manifest.exists(), entry.exists()) {
+        (true, true) => {
+            let declared = std::fs::read_to_string(&manifest)
+                .ok()
+                .and_then(|text| {
+                    text.lines()
+                        .find_map(|line| line.trim().strip_prefix("entry"))
+                        .map(|entry| {
+                            entry
+                                .trim_start_matches([' ', '='])
+                                .trim()
+                                .trim_matches('"')
+                        })
+                        .map(|entry| entry.to_owned())
+                })
+                .unwrap_or_else(|| "src/main.nxl".to_owned());
+            let entry_ok = dir.join(&declared).exists();
+            checks.push(if entry_ok {
+                DoctorCheck::pass(
+                    "project layout",
+                    true,
+                    format!("nxl.toml present, entry {declared}"),
+                )
+            } else {
+                DoctorCheck::warn(
+                    "project layout",
+                    true,
+                    format!("nxl.toml declares entry {declared}, which does not exist"),
+                )
+            });
+        }
+        (false, _) => checks.push(DoctorCheck::pass(
+            "project layout",
+            false,
+            format!("not a project directory (no nxl.toml in {})", dir.display()),
+        )),
+        (true, false) => checks.push(DoctorCheck::warn(
+            "project layout",
+            true,
+            "nxl.toml present but src/main.nxl is missing",
+        )),
+    }
+
+    checks
 }
 
 pub fn run_doctor() -> Vec<DoctorCheck> {
-    vec![
-        DoctorCheck {
-            name: "nxlc compiler".to_owned(),
-            ok: true,
-            detail: "compiler available".to_owned(),
-        },
-        DoctorCheck {
-            name: "node runtime".to_owned(),
-            ok: true,
-            detail: "optional; VM fallback available".to_owned(),
-        },
-        DoctorCheck {
-            name: "project layout".to_owned(),
-            ok: true,
-            detail: "nxl.toml / src/main.nxl conventions".to_owned(),
-        },
-    ]
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    run_doctor_in(&cwd)
 }
 
 pub fn format_doctor_report(checks: &[DoctorCheck]) -> String {
     let mut s = String::from("nxl doctor\n");
     for c in checks {
-        s.push_str(&format!(
-            "  [{}] {} — {}\n",
-            if c.ok { "ok" } else { "fail" },
-            c.name,
-            c.detail
-        ));
+        let tag = if c.ok {
+            "ok"
+        } else if c.required {
+            "fail"
+        } else {
+            "warn"
+        };
+        s.push_str(&format!("  [{tag}] {} — {}\n", c.name, c.detail));
+    }
+    if checks.iter().any(DoctorCheck::blocks_release) {
+        s.push_str("  result: problems found that will stop normal use\n");
+    } else {
+        s.push_str("  result: ready\n");
     }
     s
 }
@@ -590,26 +816,146 @@ fn resolve_file(dir: &Path, file: Option<&str>, cfg: &ProjectConfig) -> PathBuf 
 
 // ── Project commands ──────────────────────────────────────────────────────────
 
-pub fn cmd_new(name: &str) -> CliResult<String> {
+/// The project templates that ship with the toolchain.
+pub const TEMPLATES: [&str; 1] = ["console"];
+
+/// The files the `console` template creates, used when the on-disk template
+/// directory is not available (an installed binary run from anywhere).
+///
+/// Kept identical to `templates/console/`; a test enforces that.
+pub const CONSOLE_TEMPLATE: [(&str, &str); 4] = [
+    (
+        "nxl.toml",
+        "[package]\nname = \"PROJECT_NAME\"\nversion = \"0.1.0\"\nedition = \"2024\"\nentry = \"src/main.nxl\"\n\n[dependencies]\n",
+    ),
+    (
+        "src/main.nxl",
+        "// PROJECT_NAME - console application.\n//\n// Run it:   nxlc run\n// Build it: nxlc build --release\nfn greet(name: String) -> String {\n    return \"Hello, \" + name + \"!\";\n}\n\nfn main() {\n    print(greet(\"NXL\"));\n}\n",
+    ),
+    (
+        "tests/basic.nxl",
+        "// PROJECT_NAME - self-check compiled by `nxl test`.\n//\n// `nxl test` verifies that every file in tests/ parses and type-checks, and\n// runs it. There is no test-block syntax yet, so checks are written as ordinary\n// code that throws on failure.\nfn add(a: Int, b: Int) -> Int {\n    return a + b;\n}\n\nfn main() {\n    if add(2, 3) != 5 {\n        throw \"add(2, 3) should be 5\";\n    }\n    if add(0, 0) != 0 {\n        throw \"add(0, 0) should be 0\";\n    }\n    print(\"tests/basic.nxl: checks passed\");\n}\n",
+    ),
+    (
+        ".gitignore",
+        "build/\n.nxl-cache/\ntarget/\n*.log",
+    ),
+];
+
+/// Files under `templates/<template>/`, when the repository checkout is
+/// available next to the binary.
+fn template_files(template: &str) -> Option<Vec<(String, String)>> {
+    let root = std::env::current_dir()
+        .ok()?
+        .parent()?
+        .join("templates")
+        .join(template);
+    if !root.is_dir() {
+        return None;
+    }
+    let mut files = Vec::new();
+    collect_template(&root, &root, &mut files);
+    if files.is_empty() {
+        return None;
+    }
+    Some(files)
+}
+
+/// Walk a template directory, recording `(relative path, contents)` pairs.
+fn collect_template(root: &Path, dir: &Path, files: &mut Vec<(String, String)>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            collect_template(root, &path, files);
+        } else if let Ok(relative) = path.strip_prefix(root) {
+            let text = fs::read_to_string(&path).unwrap_or_default();
+            files.push((relative.to_string_lossy().replace('\\', "/"), text));
+        }
+    }
+}
+
+pub fn cmd_new_from_template(name: &str, template: &str) -> CliResult<String> {
     let cwd = std::env::current_dir().map_err(|e| err("NXL12004", e.to_string()))?;
-    let proj = cwd.join(name);
-    if proj.exists() {
+    cmd_new_from_template_in(&cwd, name, template)
+}
+
+/// Create a project from a named template inside `base`.
+///
+/// Templates other than `console` are refused with an explanation rather than
+/// generating something that cannot run: there is no web toolchain yet, and a
+/// placeholder that pretends to be one would be worse than an error.
+pub fn cmd_new_from_template_in(base: &Path, name: &str, template: &str) -> CliResult<String> {
+    if template != "console" {
+        return Err(err(
+            "NXL12008",
+            format!(
+                "unknown template '{template}'. Available: {}. There is no web template yet: NXL has no web development server, so `{}` would not be runnable.",
+                TEMPLATES.join(", "),
+                template
+            ),
+        ));
+    }
+    let project = base.join(name);
+    if project.exists() {
         return Err(err(
             "NXL12005",
             format!("directory '{name}' already exists"),
         ));
     }
-    fs::create_dir_all(proj.join("src")).map_err(|e| err("NXL12004", e.to_string()))?;
-    let cfg = ProjectConfig {
-        name: name.to_owned(),
-        ..Default::default()
-    };
-    fs::write(proj.join("nxl.toml"), cfg.to_toml()).map_err(|e| err("NXL12004", e.to_string()))?;
-    fs::write(proj.join("src").join("main.nxl"), "print(\"Hello from NXL!\");\n")
+
+    let files = template_files(template)
+        .unwrap_or_else(|| {
+            CONSOLE_TEMPLATE
+                .iter()
+                .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+                .collect()
+        })
+        .into_iter()
+        .map(|(path, text)| (path, text.replace("PROJECT_NAME", name)))
+        .collect::<Vec<_>>();
+
+    for (relative, text) in &files {
+        let target = project.join(relative);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| err("NXL12004", e.to_string()))?;
+        }
+        fs::write(&target, text).map_err(|e| {
+            err(
+                "NXL12004",
+                format!("cannot write {}: {e}", target.display()),
+            )
+        })?;
+    }
+    // A template carries its own manifest name; make sure it matches.
+    let manifest = project.join("nxl.toml");
+    if manifest.exists() {
+        let cfg = ProjectConfig {
+            name: name.to_owned(),
+            ..Default::default()
+        };
+        let text = fs::read_to_string(&manifest).map_err(|e| err("NXL12004", e.to_string()))?;
+        fs::write(
+            &manifest,
+            text.replace(
+                &format!("name = \"{name}\""),
+                &format!("name = \"{}\"", cfg.name),
+            ),
+        )
         .map_err(|e| err("NXL12004", e.to_string()))?;
-    fs::write(proj.join(".gitignore"), "build/\n.nxl-cache/\n")
-        .map_err(|e| err("NXL12004", e.to_string()))?;
-    Ok(format!("created project '{name}'"))
+    }
+
+    Ok(format!(
+        "created {template} project '{name}' ({} files). Next: cd {name} && nxlc run",
+        files.len()
+    ))
+}
+
+pub fn cmd_new(name: &str) -> CliResult<String> {
+    cmd_new_from_template(name, "console")
 }
 
 pub fn cmd_init() -> CliResult<String> {
@@ -629,8 +975,11 @@ pub fn cmd_init() -> CliResult<String> {
     }
     if !cwd.join("src").join("main.nxl").exists() {
         fs::create_dir_all(cwd.join("src")).map_err(|e| err("NXL12004", e.to_string()))?;
-        fs::write(cwd.join("src").join("main.nxl"), "print(\"Hello from NXL!\");\n")
-            .map_err(|e| err("NXL12004", e.to_string()))?;
+        fs::write(
+            cwd.join("src").join("main.nxl"),
+            "print(\"Hello from NXL!\");\n",
+        )
+        .map_err(|e| err("NXL12004", e.to_string()))?;
     }
     Ok("initialised NXL project in current directory".to_owned())
 }
@@ -649,10 +998,7 @@ pub fn cmd_check(dir: &Path, file: Option<&str>) -> CliResult<Vec<String>> {
     let cfg = ProjectConfig::load(dir)?;
     let path = resolve_file(dir, file, &cfg);
     if fs::read_to_string(&path).is_err() {
-        return Err(err(
-            "NXL12006",
-            format!("cannot read '{}'", path.display()),
-        ));
+        return Err(err("NXL12006", format!("cannot read '{}'", path.display())));
     }
     // Project-aware: resolves imports next to the entry file when present.
     crate::project::compile_project(&path).map_err(CliError::from)?;
@@ -702,7 +1048,9 @@ pub fn cmd_build(dir: &Path, release: bool) -> CliResult<BuildResult> {
     } else {
         BuildProfile::Debug
     };
-    let out_dir = dir.join("build").join(if release { "release" } else { "debug" });
+    let out_dir = dir
+        .join("build")
+        .join(if release { "release" } else { "debug" });
     fs::create_dir_all(&out_dir).map_err(|e| err("NXL12004", e.to_string()))?;
     let out_path = out_dir.join(format!("{}.js", cfg.name));
     fs::write(&out_path, artifact.source).map_err(|e| err("NXL12004", e.to_string()))?;
@@ -717,17 +1065,19 @@ pub fn cmd_run(dir: &Path, file: Option<&str>) -> CliResult<crate::runtime::Exec
     let cfg = ProjectConfig::load(dir)?;
     let path = resolve_file(dir, file, &cfg);
     if fs::read_to_string(&path).is_err() {
-        return Err(err(
-            "NXL12006",
-            format!("cannot read '{}'", path.display()),
-        ));
+        return Err(err("NXL12006", format!("cannot read '{}'", path.display())));
     }
     let module = crate::project::compile_project(&path).map_err(CliError::from)?;
     // Prefer the in-process VM so `run` works without Node.js; fall back to
     // the JS runtime when the VM cannot execute the program.
     match crate::vm::execute(&module) {
         Ok(vm_result) => Ok(crate::runtime::ExecutionResult {
-            stdout: vm_result.output.join("\n") + if vm_result.output.is_empty() { "" } else { "\n" },
+            stdout: vm_result.output.join("\n")
+                + if vm_result.output.is_empty() {
+                    ""
+                } else {
+                    "\n"
+                },
             stderr: String::new(),
             exit_code: 0,
         }),
@@ -764,7 +1114,9 @@ pub fn cmd_test(dir: &Path, filter: Option<&str>) -> CliResult<TestReport> {
                     crate::source::SourceFile::new(path.to_string_lossy().into_owned(), text);
                 match crate::compile_to_nir(&source) {
                     Ok(_) => passed += 1,
-                    Err(d) => failures.push(format!("{}: {}[{}]", path.display(), d.message, d.code)),
+                    Err(d) => {
+                        failures.push(format!("{}: {}[{}]", path.display(), d.message, d.code))
+                    }
                 }
             }
             Err(e) => failures.push(format!("{}: cannot read: {e}", path.display())),
@@ -816,7 +1168,8 @@ pub fn cmd_bench() -> String {
 }
 
 pub fn cmd_platforms() -> String {
-    "platforms: Windows x64 READY; Linux x64 READY (CI); macOS BEST-EFFORT; WASM/embedded DEFERRED".to_owned()
+    "platforms: Windows x64 READY; Linux x64 READY (CI); macOS BEST-EFFORT; WASM/embedded DEFERRED"
+        .to_owned()
 }
 
 pub fn cmd_lsp() -> CliResult<()> {
@@ -847,61 +1200,259 @@ pub fn cmd_pkg_install(dir: &Path, offline: bool) -> CliResult<String> {
     if report.installed.is_empty() {
         Ok("installed 0 dependencies (no dependencies declared)".to_owned())
     } else {
-        Ok(format!("installed dependencies: {}", report.installed.join(", ")))
+        Ok(format!(
+            "installed dependencies: {}",
+            report.installed.join(", ")
+        ))
     }
 }
 
-pub fn cmd_pkg_add(dir: &Path, name: &str, req: Option<&str>) -> CliResult<String> {
-    let req = req.unwrap_or("*");
-    // Record the dependency in nxl.toml first so the manifest always reflects
-    // the request, even when the package is not in the local registry stub.
+/// What `pkg add` was asked to do.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AddRequest<'a> {
+    /// A registry dependency, optionally with an explicit requirement.
+    Registry { name: &'a str, req: Option<&'a str> },
+    /// A local path dependency, validated on disk before being recorded.
+    Path { name: &'a str, path: &'a str },
+}
+
+pub fn cmd_pkg_add(dir: &Path, request: AddRequest<'_>) -> CliResult<String> {
     let manifest_path = dir.join("nxl.toml");
-    let mut text = fs::read_to_string(&manifest_path).unwrap_or_else(|_| ProjectConfig::default().to_toml());
-    let dep_line = format!("{name} = \"{req}\"\n");
+    let mut text =
+        fs::read_to_string(&manifest_path).unwrap_or_else(|_| ProjectConfig::default().to_toml());
+
+    let (name, dep_line) = match request {
+        AddRequest::Path { name, path } => {
+            // Validate before writing anything: a dependency that points at
+            // nothing must never end up in the manifest.
+            let target = dir.join(path);
+            if !target.exists() {
+                return Err(err(
+                    "NXL13009",
+                    format!("path dependency '{name}' -> {path} does not exist"),
+                ));
+            }
+            let package_manifest = target.join("nxl.toml");
+            if !package_manifest.exists() {
+                return Err(err(
+                    "NXL13009",
+                    format!(
+                        "path dependency '{name}' -> {} has no nxl.toml, so it is not a package",
+                        target.display()
+                    ),
+                ));
+            }
+            let parsed = crate::pkg::Manifest::load(&target).map_err(CliError::from)?;
+            if !parsed.name.is_empty() && parsed.name != name {
+                return Err(err(
+                    "NXL13009",
+                    format!(
+                        "path dependency '{name}' points at package '{}'",
+                        parsed.name
+                    ),
+                ));
+            }
+            let line = format!("{name} = \"path:{}\"\n", path.replace('\\', "/"));
+            (name.to_owned(), line)
+        }
+        AddRequest::Registry { name, req } => {
+            let req = req.unwrap_or("*");
+            // Reject an unparsable requirement now instead of writing a
+            // manifest that fails to install later.
+            let parsed = crate::pkg::VersionReq::parse(req).map_err(CliError::from)?;
+            let line = format!("{name} = \"{}\"\n", parsed);
+            (name.to_owned(), line)
+        }
+    };
+
+    if text.contains(dep_line.trim_end()) {
+        return Ok(format!("dependency '{name}' is already declared"));
+    }
     if text.contains("[dependencies]") {
         text.push_str(&dep_line);
     } else {
         text.push_str(&format!("\n[dependencies]\n{dep_line}"));
     }
     fs::write(&manifest_path, &text).map_err(|e| err("NXL12004", e.to_string()))?;
-    // Best-effort install: unresolvable registry stubs must not fail `add`.
+
+    // Install, and report honestly: a dependency that cannot be resolved is
+    // an error, never a success message.
     let mut pm = pkg_manager(dir, false);
     match pm.install(dir) {
-        Ok(_) => {}
+        Ok(report) => {
+            let source = match &request {
+                AddRequest::Path { path, .. } => format!("path:{path}"),
+                AddRequest::Registry { req, .. } => req.unwrap_or("*").to_owned(),
+            };
+            Ok(format!(
+                "added '{name}' ({source}) and resolved {} dependenc{}",
+                report.installed.len(),
+                if report.installed.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                }
+            ))
+        }
         Err(e) => {
-            // Ensure a lock file exists so later commands keep working.
-            let lock_path = dir.join("nxl.lock");
-            if !lock_path.exists() {
-                let _ = crate::pkg::LockFile::new().save(dir);
-            }
-            let _ = e;
+            // Leave the manifest honest: the dependency is recorded, but say
+            // clearly that it is not installed.
+            Err(err(
+                e.code,
+                format!(
+                    "added '{name}' to nxl.toml, but it could not be resolved: {}",
+                    e.message
+                ),
+            ))
         }
     }
-    Ok(format!("added dependency '{name}' ({req})"))
+}
+
+/// Packages this project can see right now: its manifest plus every package
+/// cached locally. There is no live registry, and the output says so.
+/// Each entry is (name, resolved version or requirement, source).
+fn local_packages(dir: &Path) -> Vec<(String, String, String)> {
+    // The lock file holds the version that was actually resolved, which is
+    // more useful than repeating the requirement.
+    let locked: HashMap<String, String> = crate::pkg::LockFile::load(dir)
+        .map(|lock| {
+            lock.packages
+                .iter()
+                .map(|pkg| (pkg.name.clone(), pkg.version.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut out: Vec<(String, String, String)> = Vec::new();
+    if let Ok(manifest) = crate::pkg::Manifest::load(dir) {
+        for dep in manifest
+            .dependencies
+            .iter()
+            .chain(&manifest.dev_dependencies)
+        {
+            let source = match &dep.source {
+                crate::pkg::DepSource::Path(p) => p.display().to_string(),
+                crate::pkg::DepSource::Git { url, .. } => url.clone(),
+                crate::pkg::DepSource::Registry => "registry".to_owned(),
+            };
+            let version = locked
+                .get(&dep.name)
+                .cloned()
+                .unwrap_or_else(|| dep.req.to_string());
+            out.push((dep.name.clone(), version, source));
+        }
+    }
+    for (name, version) in locked {
+        if !out.iter().any(|(existing, _, _)| existing == &name) {
+            out.push((name, version, "cached".to_owned()));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+pub fn cmd_pkg_search(dir: &Path, term: Option<&str>) -> CliResult<String> {
+    let packages = local_packages(dir);
+    let matches: Vec<&(String, String, String)> = packages
+        .iter()
+        .filter(|(name, _, _)| term.is_none_or(|t| name.to_lowercase().contains(&t.to_lowercase())))
+        .collect();
+    let mut out = String::new();
+    if matches.is_empty() {
+        let message = match term {
+            Some(t) => format!("no packages matching '{t}'\n"),
+            None => String::from("no packages available\n"),
+        };
+        out.push_str(&message);
+    } else {
+        for (name, req, source) in matches {
+            out.push_str(&format!("{name} {req}  ({source})\n"));
+        }
+    }
+    out.push_str(
+        "\nnote: this build searches local dependencies and the package cache only;\n      there is no live registry yet.\n",
+    );
+    Ok(out)
+}
+
+pub fn cmd_pkg_info(dir: &Path, name: &str) -> CliResult<String> {
+    let manifest = crate::pkg::Manifest::load(dir).map_err(CliError::from)?;
+    match local_packages(dir)
+        .into_iter()
+        .find(|(package, _, _)| package == name)
+    {
+        Some((package, version, source)) => {
+            // Distinguish "this is what you asked for" from "this is what was
+            // resolved", which only differ for registry dependencies.
+            let requirement = manifest
+                .dependencies
+                .iter()
+                .chain(&manifest.dev_dependencies)
+                .find(|dep| dep.name == package)
+                .map(|dep| dep.req.to_string());
+            let mut out = format!("{package}\n");
+            match requirement {
+                Some(req) => out.push_str(&format!("  requirement : {req}\n")),
+                None => out.push_str("  requirement : (not a direct dependency)\n"),
+            }
+            out.push_str(&format!("  resolved   : {version}\n"));
+            out.push_str(&format!("  source     : {source}\n"));
+            out.push_str("  registry   : local cache only (no live registry)\n");
+            Ok(out)
+        }
+        None => Err(err(
+            "NXL13006",
+            format!("package '{name}' is not a dependency of this project"),
+        )),
+    }
 }
 
 pub fn cmd_pkg_remove(dir: &Path, name: &str) -> CliResult<String> {
-    // Edit the manifest directly, then best-effort reinstall.
     let manifest_path = dir.join("nxl.toml");
-    if manifest_path.exists() {
-        if let Ok(text) = fs::read_to_string(&manifest_path) {
-            let filtered: String = text
-                .lines()
-                .filter(|l| !l.trim_start().starts_with(&format!("{name} =")))
-                .map(|l| format!("{l}\n"))
-                .collect();
-            let _ = fs::write(&manifest_path, &filtered);
-        }
+    if !manifest_path.exists() {
+        return Err(err(
+            "NXL13006",
+            format!("no nxl.toml here, so '{name}' cannot be removed"),
+        ));
     }
+    let text = fs::read_to_string(&manifest_path).map_err(|e| err("NXL12004", e.to_string()))?;
+    let prefix = format!("{name} =");
+    if !text
+        .lines()
+        .any(|line| line.trim_start().starts_with(&prefix))
+    {
+        return Err(err(
+            "NXL13006",
+            format!("'{name}' is not a dependency of this project"),
+        ));
+    }
+    let filtered: String = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with(&prefix))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    fs::write(&manifest_path, filtered).map_err(|e| err("NXL12004", e.to_string()))?;
+
     let mut pm = pkg_manager(dir, false);
-    let _ = pm.install(dir);
-    Ok(format!("Removed '{name}'"))
+    let report = pm.install(dir)?;
+    Ok(format!(
+        "removed '{name}'; {} dependenc{} remain",
+        report.installed.len(),
+        if report.installed.len() == 1 {
+            "y"
+        } else {
+            "ies"
+        }
+    ))
 }
 
 pub fn cmd_pkg_update(dir: &Path) -> CliResult<String> {
     let mut pm = pkg_manager(dir, false);
     let report = pm.update(dir)?;
-    Ok(format!("updated dependencies: {}", report.updated.join(", ")))
+    Ok(format!(
+        "updated dependencies: {}",
+        report.updated.join(", ")
+    ))
 }
 
 pub fn cmd_pkg_audit(dir: &Path) -> CliResult<String> {
@@ -917,23 +1468,24 @@ pub fn cmd_pkg_audit(dir: &Path) -> CliResult<String> {
 pub fn cmd_pkg_tree(dir: &Path) -> CliResult<String> {
     let manifest = crate::pkg::Manifest::load(dir).map_err(CliError::from)?;
     let mut out = format!("{} v{}\n", manifest.name, manifest.version);
-    for dep in &manifest.dependencies {
-        out.push_str(&format!("  {} {}\n", dep.name, dep.req));
+    let packages = local_packages(dir);
+    if packages.is_empty() {
+        out.push_str("  (no dependencies)\n");
+        return Ok(out);
     }
-    // Include locked sub-dependencies when available.
-    if let Ok(lock) = crate::pkg::LockFile::load(dir) {
-        for pkg in &lock.packages {
-            out.push_str(&format!("  {} v{}\n", pkg.name, pkg.version));
-            for sub in &pkg.dependencies {
-                out.push_str(&format!("    {sub}\n"));
-            }
-        }
+    for (name, version, source) in packages {
+        out.push_str(&format!("  {name} v{version}  ({source})\n"));
     }
     Ok(out)
 }
 
-pub fn cmd_pkg_publish() -> String {
-    "NXL package publish — NOT IMPLEMENTED (live registry deferred to P17+)".to_owned()
+pub fn cmd_pkg_publish() -> CliResult<String> {
+    // Refusing is the honest answer: pretending to publish would report a
+    // success that never happened.
+    Err(err(
+        "NXL13010",
+        "publishing is not available: there is no registry service yet (planned for a later phase)",
+    ))
 }
 
 // ── NDB commands (P14) ────────────────────────────────────────────────────────
@@ -984,7 +1536,13 @@ pub fn cmd_db_audit(dir: &Path) -> CliResult<String> {
 
 // ── Generators ────────────────────────────────────────────────────────────────
 
-fn write_scaffold(dir: &Path, folder: &str, name: &str, ext: &str, body: &str) -> CliResult<String> {
+fn write_scaffold(
+    dir: &Path,
+    folder: &str,
+    name: &str,
+    ext: &str,
+    body: &str,
+) -> CliResult<String> {
     let target = dir.join(folder).join(format!("{name}.{ext}"));
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(|e| err("NXL12004", e.to_string()))?;
@@ -1004,23 +1562,11 @@ pub fn cmd_make_model(dir: &Path, name: &str) -> CliResult<String> {
 }
 
 pub fn cmd_make_migration(dir: &Path, name: &str) -> CliResult<String> {
-    write_scaffold(
-        dir,
-        "migrations",
-        name,
-        "sql",
-        "-- migration\n",
-    )
+    write_scaffold(dir, "migrations", name, "sql", "-- migration\n")
 }
 
 pub fn cmd_make_seeder(dir: &Path, name: &str) -> CliResult<String> {
-    write_scaffold(
-        dir,
-        "seeders",
-        name,
-        "nxl",
-        &format!("// seeder {name}\n"),
-    )
+    write_scaffold(dir, "seeders", name, "nxl", &format!("// seeder {name}\n"))
 }
 
 pub fn cmd_make_factory(dir: &Path, name: &str) -> CliResult<String> {

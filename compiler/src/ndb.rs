@@ -279,9 +279,8 @@ impl Database {
 
     /// Open a database handle from an explicit config.
     pub fn open_config(cfg: DatabaseConfig, dir: &Path) -> NdbResult<Database> {
-        let driver = Driver::from_name(&cfg.driver).ok_or_else(|| {
-            NdbError::UnsupportedDriver(cfg.driver.clone())
-        })?;
+        let driver = Driver::from_name(&cfg.driver)
+            .ok_or_else(|| NdbError::UnsupportedDriver(cfg.driver.clone()))?;
         let inner = Self::connect_backend(driver, &cfg, dir)?;
         Ok(Database {
             driver,
@@ -307,8 +306,10 @@ impl Database {
                     "host={} port={} user={} password={} dbname={}",
                     cfg.host, cfg.port, cfg.user, cfg.password, cfg.dbname
                 );
-                let client = postgres::Client::connect(&conn_str, postgres::NoTls)
-                    .map_err(|e| NdbError::Connect(format!("{e} (postgres at {}:{})", cfg.host, cfg.port)))?;
+                let client =
+                    postgres::Client::connect(&conn_str, postgres::NoTls).map_err(|e| {
+                        NdbError::Connect(format!("{e} (postgres at {}:{})", cfg.host, cfg.port))
+                    })?;
                 Ok(Backend::Postgres(client))
             }
             Driver::Mysql | Driver::MariaDb => {
@@ -451,21 +452,22 @@ impl Database {
                     "host={} port={} user={} password={} dbname=postgres",
                     self.cfg.host, self.cfg.port, self.cfg.user, self.cfg.password
                 );
-                let client = postgres::Client::connect(&conn_str, postgres::NoTls).map_err(
-                    |e| NdbError::Connect(format!("{e} (maintenance postgres)")),
-                )?;
+                let client = postgres::Client::connect(&conn_str, postgres::NoTls)
+                    .map_err(|e| NdbError::Connect(format!("{e} (maintenance postgres)")))?;
                 Ok(Backend::Postgres(client))
             }
             Driver::Mysql | Driver::MariaDb => {
-                let url = format!("mysql://{}:{}@{}:{}", self.cfg.user, self.cfg.password, self.cfg.host, self.cfg.port);
-                let conn = mysql::Conn::new(url.as_str())
-                    .map_err(|e| NdbError::Connect(e.to_string()))?;
+                let url = format!(
+                    "mysql://{}:{}@{}:{}",
+                    self.cfg.user, self.cfg.password, self.cfg.host, self.cfg.port
+                );
+                let conn =
+                    mysql::Conn::new(url.as_str()).map_err(|e| NdbError::Connect(e.to_string()))?;
                 Ok(Backend::Mysql(conn))
             }
             Driver::Sqlite => unreachable!("sqlite has no maintenance connection"),
         }
     }
-
 
     // ── DDL helpers ────────────────────────────────────────────────────
 
@@ -547,13 +549,15 @@ impl Database {
                 }
             }
             Backend::Postgres(client) => {
-                let rows = client.query("SELECT name, batch FROM nxl_migrations ORDER BY name", &[])?;
+                let rows =
+                    client.query("SELECT name, batch FROM nxl_migrations ORDER BY name", &[])?;
                 for r in rows {
                     map.insert(r.get::<_, String>(0), r.get::<_, i64>(1));
                 }
             }
             Backend::Mysql(c) | Backend::MariaDb(c) => {
-                let mut rows = c.query_iter("SELECT name, batch FROM nxl_migrations ORDER BY name")?;
+                let mut rows =
+                    c.query_iter("SELECT name, batch FROM nxl_migrations ORDER BY name")?;
                 for row in rows.by_ref() {
                     let r = row?;
                     map.insert(
@@ -654,9 +658,7 @@ impl Database {
                 client.simple_query(sql)?;
                 Ok(())
             }
-            Backend::Mysql(c) | Backend::MariaDb(c) => {
-                mysql_batch(c, sql)
-            }
+            Backend::Mysql(c) | Backend::MariaDb(c) => mysql_batch(c, sql),
         }
     }
 
@@ -682,16 +684,22 @@ impl Database {
     }
 
     /// Run a query and collect rows as text maps.
-    pub fn query_rows(&mut self, sql: &str, params: &[Value]) -> NdbResult<Vec<BTreeMap<String, String>>> {
+    pub fn query_rows(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+    ) -> NdbResult<Vec<BTreeMap<String, String>>> {
         match &mut self.inner {
             Backend::Sqlite(c) => {
                 let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|v| v.to_sql()).collect();
                 let mut stmt = c.prepare(sql)?;
-                let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+                let names: Vec<String> =
+                    stmt.column_names().iter().map(|s| s.to_string()).collect();
                 let rows = stmt.query_map(refs.as_slice(), |r| {
                     let mut map = BTreeMap::new();
                     for (i, name) in names.iter().enumerate() {
-                        let v: rusqlite::types::Value = r.get(i).unwrap_or(rusqlite::types::Value::Null);
+                        let v: rusqlite::types::Value =
+                            r.get(i).unwrap_or(rusqlite::types::Value::Null);
                         map.insert(name.clone(), sqlite_val_to_text(v));
                     }
                     Ok(map)
@@ -704,7 +712,8 @@ impl Database {
             }
             Backend::Postgres(client) => {
                 let v: Vec<CowRef> = params.iter().map(CowRef::from).collect();
-                let refs: Vec<&(dyn postgres::types::ToSql + Sync)> = v.iter().map(|c| c.as_ref()).collect();
+                let refs: Vec<&(dyn postgres::types::ToSql + Sync)> =
+                    v.iter().map(|c| c.as_ref()).collect();
                 let cols: Vec<String> = client
                     .prepare(sql)?
                     .columns()
@@ -716,7 +725,10 @@ impl Database {
                 for r in rows {
                     let mut map = BTreeMap::new();
                     for (i, name) in cols.iter().enumerate() {
-                        map.insert(name.clone(), pg_val_to_text(r.try_get::<_, Option<String>>(i)?));
+                        map.insert(
+                            name.clone(),
+                            pg_val_to_text(r.try_get::<_, Option<String>>(i)?),
+                        );
                     }
                     out.push(map);
                 }
@@ -905,11 +917,7 @@ impl Database {
     }
 
     /// Delete rows by an equality predicate.
-    pub fn model_delete<M: Model>(
-        &mut self,
-        where_col: &str,
-        where_val: Value,
-    ) -> NdbResult<u64> {
+    pub fn model_delete<M: Model>(&mut self, where_col: &str, where_val: Value) -> NdbResult<u64> {
         self.delete(M::TABLE, where_col, where_val)
     }
 }
@@ -1045,7 +1053,6 @@ impl Drop for PooledConnection<'_> {
     }
 }
 
-
 // ── Transaction executor ──────────────────────────────────────────────
 
 /// Transaction-scoped executor used by migrations and seeders. Wraps a
@@ -1103,7 +1110,9 @@ impl<'a> DatabaseTransactions<'a> {
     }
 
     fn insert_record(&mut self, name: &str, batch: i64, placeholder: &str) -> NdbResult<()> {
-        let sql = format!("INSERT INTO nxl_migrations (name, batch) VALUES ({placeholder}, {placeholder})");
+        let sql = format!(
+            "INSERT INTO nxl_migrations (name, batch) VALUES ({placeholder}, {placeholder})"
+        );
         match self {
             DatabaseTransactions::Sqlite(t) => {
                 t.execute(&sql, params![name, batch])?;
@@ -1352,7 +1361,11 @@ pub fn migrate(dir: &Path) -> NdbResult<Vec<String>> {
         }
         let name = m.name.clone();
         let up = m.up_sql.clone();
-        let ph = if db.driver == Driver::Postgres { "$1" } else { "?" };
+        let ph = if db.driver == Driver::Postgres {
+            "$1"
+        } else {
+            "?"
+        };
         let started = Instant::now();
         match db.with_transaction(|tx| {
             tx.exec_batch(&up)?;
@@ -1399,7 +1412,11 @@ pub fn rollback(dir: &Path) -> NdbResult<Vec<String>> {
             NdbError::Migration(format!("migration file for '{name}' not found on disk"))
         })?;
         let down = m.down_sql.clone();
-        let ph = if db.driver == Driver::Postgres { "$1" } else { "?" };
+        let ph = if db.driver == Driver::Postgres {
+            "$1"
+        } else {
+            "?"
+        };
         let started = Instant::now();
         match db.with_transaction(|tx| {
             tx.exec_batch(&down)?;

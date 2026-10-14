@@ -166,9 +166,13 @@ fn auth_store_registers_and_authenticates() {
     assert_eq!(user.email, "alice@example.com");
     assert_eq!(auth.user_count(), 1);
     assert!(auth.register("alice@example.com", "password123").is_err());
-    assert!(auth.authenticate("alice@example.com", "password123").is_some());
+    assert!(auth
+        .authenticate("alice@example.com", "password123")
+        .is_some());
     assert!(auth.authenticate("alice@example.com", "wrong").is_none());
-    assert!(auth.authenticate("nobody@example.com", "password123").is_none());
+    assert!(auth
+        .authenticate("nobody@example.com", "password123")
+        .is_none());
     assert!(auth.find("ALICE@example.com").is_some());
 }
 

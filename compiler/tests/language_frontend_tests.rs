@@ -385,10 +385,7 @@ fn reports_unsupported_lowering_separately_from_parse_errors() {
 
 #[test]
 fn lowers_interpolated_strings_and_runs_them() {
-    let source = SourceFile::new(
-        "interp.nxl",
-        r#"let name = "Ada"; print("hi ${name}!");"#,
-    );
+    let source = SourceFile::new("interp.nxl", r#"let name = "Ada"; print("hi ${name}!");"#);
     compile_to_nir(&source).expect("interpolation should lower");
     let result = nxl_compiler::vm::run(&source).expect("interpolation should execute");
     assert_eq!(result.output, vec!["hi Ada!"]);
@@ -415,8 +412,7 @@ fn interpolation_empty_template_yields_empty_string() {
 fn rejects_interpolating_void_values() {
     // A call known to return Void cannot be stringified.
     let source = SourceFile::new("interp_void.nxl", "let s = \"${print(1)}\";");
-    let diagnostic =
-        compile_to_nir(&source).expect_err("interpolating void must fail");
+    let diagnostic = compile_to_nir(&source).expect_err("interpolating void must fail");
     assert_eq!(diagnostic.code, "NXL2006");
 }
 
@@ -425,7 +421,10 @@ fn js_backend_emits_string_conversion_for_interpolation() {
     let source = SourceFile::new("interp_js.nxl", r#"let n = 1; print("v=${n}");"#);
     let artifact =
         nxl_compiler::backend::compile_js(&source).expect("interpolation should emit JS");
-    assert!(artifact.source.contains("String("), "JS must stringify parts");
+    assert!(
+        artifact.source.contains("String("),
+        "JS must stringify parts"
+    );
 }
 
 // ── Phase 1: try / catch / finally / throw ────────────────────────────────────
@@ -567,10 +566,7 @@ fn for_in_iterates_arrays() {
 
 #[test]
 fn for_in_rejects_non_iterables_loudly() {
-    let source = SourceFile::new(
-        "for_bad.nxl",
-        r#"for v in true { print(v); }"#,
-    );
+    let source = SourceFile::new("for_bad.nxl", r#"for v in true { print(v); }"#);
     let err = nxl_compiler::vm::run(&source).expect_err("non-iterable must fail");
     assert_eq!(err.code, "NXL9001");
     assert!(err.message.contains("not iterable"));
@@ -611,24 +607,21 @@ fn array_index_assignment_and_compound_assignment() {
 #[test]
 fn array_assignment_through_immutable_binding_rejected() {
     let source = SourceFile::new("array_immut.nxl", "let a = [1]; a[0] = 2;");
-    let diagnostic =
-        compile_to_nir(&source).expect_err("immutable index assign must fail");
+    let diagnostic = compile_to_nir(&source).expect_err("immutable index assign must fail");
     assert_eq!(diagnostic.code, "NXL2008");
 }
 
 #[test]
 fn mixed_array_literal_rejected() {
     let source = SourceFile::new("array_mixed.nxl", r#"let a = [1, "x"];"#);
-    let diagnostic =
-        compile_to_nir(&source).expect_err("mixed literal must fail");
+    let diagnostic = compile_to_nir(&source).expect_err("mixed literal must fail");
     assert_eq!(diagnostic.code, "NXL2001");
 }
 
 #[test]
 fn non_integer_index_rejected() {
     let source = SourceFile::new("array_badidx.nxl", r#"let a = [1]; print(a["x"]);"#);
-    let diagnostic =
-        compile_to_nir(&source).expect_err("string index must fail");
+    let diagnostic = compile_to_nir(&source).expect_err("string index must fail");
     assert_eq!(diagnostic.code, "NXL2001");
 }
 
@@ -652,7 +645,9 @@ fn struct_literal_validates_fields() {
         "struct User { name: String; age: Int; } let u = User { name: \"Ada\"; };",
     );
     assert_eq!(
-        compile_to_nir(&missing).expect_err("missing field must fail").code,
+        compile_to_nir(&missing)
+            .expect_err("missing field must fail")
+            .code,
         "NXL2001"
     );
 
@@ -661,7 +656,9 @@ fn struct_literal_validates_fields() {
         "struct User { name: String; } let u = User { name: \"Ada\"; nick: \"Al\"; };",
     );
     assert_eq!(
-        compile_to_nir(&unknown).expect_err("unknown field must fail").code,
+        compile_to_nir(&unknown)
+            .expect_err("unknown field must fail")
+            .code,
         "NXL2002"
     );
 
@@ -670,7 +667,9 @@ fn struct_literal_validates_fields() {
         "struct User { age: Int; } let u = User { age: \"old\"; };",
     );
     assert_eq!(
-        compile_to_nir(&mistyped).expect_err("mistyped field must fail").code,
+        compile_to_nir(&mistyped)
+            .expect_err("mistyped field must fail")
+            .code,
         "NXL2001"
     );
 }
@@ -714,7 +713,9 @@ fn enum_arity_mismatch_rejected() {
         "enum Choice { Some(Int), None } let c = Choice.Some(1, 2);",
     );
     assert_eq!(
-        compile_to_nir(&source).expect_err("arity mismatch must fail").code,
+        compile_to_nir(&source)
+            .expect_err("arity mismatch must fail")
+            .code,
         "NXL2001"
     );
 
@@ -723,7 +724,9 @@ fn enum_arity_mismatch_rejected() {
         "enum Choice { Some(Int), None } let c = Choice.Some(\"s\");",
     );
     assert_eq!(
-        compile_to_nir(&mistyped).expect_err("mistyped payload must fail").code,
+        compile_to_nir(&mistyped)
+            .expect_err("mistyped payload must fail")
+            .code,
         "NXL2001"
     );
 }
@@ -805,10 +808,7 @@ fn match_dynamic_fallthrough_on_type_mismatch() {
 
 #[test]
 fn untyped_values_support_operators_dynamically() {
-    let source = SourceFile::new(
-        "gradual.nxl",
-        "fn f(x) { return x + 1; } print(f(41));",
-    );
+    let source = SourceFile::new("gradual.nxl", "fn f(x) { return x + 1; } print(f(41));");
     let result = nxl_compiler::vm::run(&source).expect("dynamic arithmetic should execute");
     assert_eq!(result.output, vec!["42"]);
 }
@@ -862,7 +862,9 @@ fn constructor_arity_mismatch_rejected() {
         "class P(n: String) { let name: String; fn init(n: String) { self.name = n; } } let p = P();",
     );
     assert_eq!(
-        compile_to_nir(&source).expect_err("arity mismatch must fail").code,
+        compile_to_nir(&source)
+            .expect_err("arity mismatch must fail")
+            .code,
         "NXL2009"
     );
 }
@@ -901,7 +903,9 @@ fn interface_satisfaction_checked() {
         "interface Greeter { fn greet() -> String; } struct S { x: Int; } impl Greeter for S { fn other() -> String { return \"x\"; } }",
     );
     assert_eq!(
-        compile_to_nir(&bad).expect_err("missing method must fail").code,
+        compile_to_nir(&bad)
+            .expect_err("missing method must fail")
+            .code,
         "NXL2001"
     );
 }
@@ -928,12 +932,11 @@ fn struct_patterns_match_class_instances() {
 
 #[test]
 fn duplicate_method_rejected() {
-    let source = SourceFile::new(
-        "method_dup.nxl",
-        "class A { fn m() { } fn m() { } }",
-    );
+    let source = SourceFile::new("method_dup.nxl", "class A { fn m() { } fn m() { } }");
     assert_eq!(
-        compile_to_nir(&source).expect_err("duplicate method must fail").code,
+        compile_to_nir(&source)
+            .expect_err("duplicate method must fail")
+            .code,
         "NXL2005"
     );
 }
@@ -944,10 +947,15 @@ fn js_backend_emits_methods_with_writeback() {
         "method_js.nxl",
         "class Counter { let count: Int = 0; fn inc() { self.count = self.count + 1; } fn get() -> Int { return self.count; } } let mut c = Counter(); c.inc(); print(c.get());",
     );
-    let artifact =
-        nxl_compiler::backend::compile_js(&source).expect("methods should emit JS");
-    assert!(artifact.source.contains("__nxl_call_method"), "dispatch helper needed");
-    assert!(artifact.source.contains("__nxl_methods["), "registry needed");
+    let artifact = nxl_compiler::backend::compile_js(&source).expect("methods should emit JS");
+    assert!(
+        artifact.source.contains("__nxl_call_method"),
+        "dispatch helper needed"
+    );
+    assert!(
+        artifact.source.contains("__nxl_methods["),
+        "registry needed"
+    );
 }
 
 #[test]
@@ -960,8 +968,7 @@ fn methods_run_identically_on_both_runtimes() {
         "class Counter { let count: Int = 0; fn inc() { self.count = self.count + 1; } fn get() -> Int { return self.count; } } let mut c = Counter(); c.inc(); c.inc(); print(c.get());",
     );
     let vm_result = nxl_compiler::vm::run(&source).expect("VM should run");
-    let node_result =
-        nxl_compiler::runtime::run(&source).expect("Node should run");
+    let node_result = nxl_compiler::runtime::run(&source).expect("Node should run");
     let node_lines: Vec<&str> = node_result.stdout.lines().collect();
     assert_eq!(vm_result.output, node_lines);
     assert_eq!(vm_result.output, vec!["2"]);
@@ -980,8 +987,7 @@ mod project_tests {
             .as_nanos()
     }
 
-    static PROJECT_COUNTER: std::sync::atomic::AtomicU64 =
-        std::sync::atomic::AtomicU64::new(0);
+    static PROJECT_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     fn write_project(files: &[(&str, &str)]) -> PathBuf {
         // Counter makes names unique even when the clock is coarse and
@@ -1001,21 +1007,23 @@ mod project_tests {
         dir
     }
 
-    fn run_entry(dir: &Path, rel: &str) -> Result<Vec<String>, nxl_compiler::diagnostic::Diagnostic> {
+    fn run_entry(
+        dir: &Path,
+        rel: &str,
+    ) -> Result<Vec<String>, nxl_compiler::diagnostic::Diagnostic> {
         let entry = dir.join(rel);
         let module = nxl_compiler::project::compile_project(&entry)?;
-        nxl_compiler::vm::execute(&module)
-            .map(|result| result.output)
+        nxl_compiler::vm::execute(&module).map(|result| result.output)
     }
 
     #[test]
     fn cross_module_function_call_styles() {
         let dir = write_project(&[
-            ("src/app/math.nxl", "fn add(a: Int, b: Int) -> Int { return a + b; }"),
             (
-                "src/main.nxl",
-                "import app.math;\nprint(math.add(20, 22));",
+                "src/app/math.nxl",
+                "fn add(a: Int, b: Int) -> Int { return a + b; }",
             ),
+            ("src/main.nxl", "import app.math;\nprint(math.add(20, 22));"),
         ]);
         assert_eq!(run_entry(&dir, "src/main.nxl").unwrap(), vec!["42"]);
 
@@ -1062,10 +1070,7 @@ mod project_tests {
                 "from app.models import User;\nimport app.words;\nlet u = User { name: \"Al\"; };\nprint(u.name);\nlet w = words.Word.Hi;\nmatch w { case Hi() => print(\"hi\"); case _ => print(\"other\"); }",
             ),
         ]);
-        assert_eq!(
-            run_entry(&dir, "src/main.nxl").unwrap(),
-            vec!["Al", "hi"]
-        );
+        assert_eq!(run_entry(&dir, "src/main.nxl").unwrap(), vec!["Al", "hi"]);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1108,14 +1113,8 @@ mod project_tests {
 
     #[test]
     fn missing_modules_are_tolerated_until_use() {
-        let dir = write_project(&[(
-            "src/main.nxl",
-            "import app.missing;\nprint(\"tolerant\");",
-        )]);
-        assert_eq!(
-            run_entry(&dir, "src/main.nxl").unwrap(),
-            vec!["tolerant"]
-        );
+        let dir = write_project(&[("src/main.nxl", "import app.missing;\nprint(\"tolerant\");")]);
+        assert_eq!(run_entry(&dir, "src/main.nxl").unwrap(), vec!["tolerant"]);
 
         let dir = write_project(&[(
             "src/main.nxl",
@@ -1129,7 +1128,10 @@ mod project_tests {
     #[test]
     fn unknown_function_in_module_rejected() {
         let dir = write_project(&[
-            ("src/app/math.nxl", "fn add(a: Int, b: Int) -> Int { return a + b; }"),
+            (
+                "src/app/math.nxl",
+                "fn add(a: Int, b: Int) -> Int { return a + b; }",
+            ),
             ("src/main.nxl", "import app.math;\nprint(math.nope());"),
         ]);
         let err = run_entry(&dir, "src/main.nxl").expect_err("unknown must fail");
@@ -1150,8 +1152,7 @@ mod project_tests {
         let entry = dir.join("src/main.nxl");
         let base = dir.join("src");
         let text = std::fs::read_to_string(&entry).unwrap();
-        let modules =
-            nxl_compiler::project::load_project(&base, "", &text, "main.nxl").unwrap();
+        let modules = nxl_compiler::project::load_project(&base, "", &text, "main.nxl").unwrap();
         let paths: Vec<&str> = modules.iter().map(|m| m.path.as_str()).collect();
         assert_eq!(paths, vec!["app.b", "app.a", ""]);
         assert_eq!(run_entry(&dir, "src/main.nxl").unwrap(), vec!["2"]);
@@ -1161,11 +1162,11 @@ mod project_tests {
     #[test]
     fn js_backend_compiles_multi_file_projects() {
         let dir = write_project(&[
-            ("src/app/math.nxl", "fn add(a: Int, b: Int) -> Int { return a + b; }"),
             (
-                "src/main.nxl",
-                "import app.math;\nprint(math.add(1, 2));",
+                "src/app/math.nxl",
+                "fn add(a: Int, b: Int) -> Int { return a + b; }",
             ),
+            ("src/main.nxl", "import app.math;\nprint(math.add(1, 2));"),
         ]);
         let entry = dir.join("src/main.nxl");
         let module = nxl_compiler::project::compile_project(&entry).unwrap();
@@ -1183,17 +1184,16 @@ mod project_tests {
             return;
         }
         let dir = write_project(&[
-            ("src/app/math.nxl", "fn add(a: Int, b: Int) -> Int { return a + b; }"),
             (
-                "src/main.nxl",
-                "import app.math;\nprint(math.add(40, 2));",
+                "src/app/math.nxl",
+                "fn add(a: Int, b: Int) -> Int { return a + b; }",
             ),
+            ("src/main.nxl", "import app.math;\nprint(math.add(40, 2));"),
         ]);
         let entry = dir.join("src/main.nxl");
         let module = nxl_compiler::project::compile_project(&entry).unwrap();
         let vm_result = nxl_compiler::vm::execute(&module).expect("VM should run");
-        let node_result =
-            nxl_compiler::runtime::run_module(&module).expect("Node should run");
+        let node_result = nxl_compiler::runtime::run_module(&module).expect("Node should run");
         let node_lines: Vec<&str> = node_result.stdout.lines().collect();
         assert_eq!(vm_result.output, node_lines);
         assert_eq!(vm_result.output, vec!["42"]);
@@ -1209,10 +1209,7 @@ mod project_tests {
                 "from app.words import Hi;\nlet x = Hi;\nprint(x);",
             ),
         ]);
-        assert_eq!(
-            run_entry(&dir, "src/main.nxl").unwrap(),
-            vec!["Word.Hi"]
-        );
+        assert_eq!(run_entry(&dir, "src/main.nxl").unwrap(), vec!["Word.Hi"]);
         std::fs::remove_dir_all(&dir).ok();
     }
 }
@@ -1247,7 +1244,9 @@ fn await_non_task_passes_through() {
 fn spawn_unknown_function_rejected() {
     let source = SourceFile::new("spawn_unknown.nxl", "let t = spawn nope(1);");
     assert_eq!(
-        compile_to_nir(&source).expect_err("unknown spawn must fail").code,
+        compile_to_nir(&source)
+            .expect_err("unknown spawn must fail")
+            .code,
         "NXL2002"
     );
 }
@@ -1279,7 +1278,13 @@ fn channel_close_errors_are_catchable() {
         "let c = channel(); c.close(); try { c.send(1); } catch e { print(e); } try { print(c.recv()); } catch e { print(e); }",
     );
     let result = nxl_compiler::vm::run(&source).expect("close errors should be catchable");
-    assert_eq!(result.output, vec!["send on a closed channel", "receive on a closed, empty channel"]);
+    assert_eq!(
+        result.output,
+        vec![
+            "send on a closed channel",
+            "receive on a closed, empty channel"
+        ]
+    );
 }
 
 #[test]
@@ -1332,8 +1337,8 @@ fn js_backend_rejects_async_loudly() {
         ),
     ] {
         let source = SourceFile::new(name, program);
-        let err = nxl_compiler::backend::compile_js(&source)
-            .expect_err("async must fail loudly in JS");
+        let err =
+            nxl_compiler::backend::compile_js(&source).expect_err("async must fail loudly in JS");
         assert_eq!(err.code, "NXL2007", "unexpected code for {name}");
     }
 
@@ -1362,9 +1367,15 @@ fn assert_js_parity(program: &str, expected: &[&str], name: &str) {
 
 #[test]
 fn js_backend_emits_native_while_loop() {
-    let source = SourceFile::new("while_emit.nxl", "let mut i = 0; while i < 3 { i = i + 1; }");
+    let source = SourceFile::new(
+        "while_emit.nxl",
+        "let mut i = 0; while i < 3 { i = i + 1; }",
+    );
     let artifact = nxl_compiler::backend::compile_js(&source).expect("while should emit");
-    assert!(artifact.source.contains("while (true)"), "native loop expected");
+    assert!(
+        artifact.source.contains("while (true)"),
+        "native loop expected"
+    );
     assert!(
         artifact.source.contains("continue __nxl_loop"),
         "back-edge becomes a labelled continue"
@@ -1376,7 +1387,9 @@ fn js_backend_emits_native_for_of_loop() {
     let source = SourceFile::new("forof_emit.nxl", "for v in [1, 2, 3] { print(v); }");
     let artifact = nxl_compiler::backend::compile_js(&source).expect("for should emit");
     assert!(
-        artifact.source.contains("for (const __nxl_item of __nxl_iter"),
+        artifact
+            .source
+            .contains("for (const __nxl_item of __nxl_iter"),
         "for-in should become a JS for-of"
     );
     assert!(
@@ -1477,7 +1490,11 @@ fn loop_inside_method_matches_vm() {
 
 #[test]
 fn for_in_over_int_matches_vm() {
-    assert_js_parity("for i in 4 { print(i); }", &["0", "1", "2", "3"], "forint.nxl");
+    assert_js_parity(
+        "for i in 4 { print(i); }",
+        &["0", "1", "2", "3"],
+        "forint.nxl",
+    );
 }
 
 #[test]
@@ -1527,7 +1544,11 @@ fn loop_with_false_condition_is_skipped() {
 
 #[test]
 fn for_in_over_zero_yields_nothing() {
-    assert_js_parity("for i in 0 { print(i); } print(\"none\");", &["none"], "forzero.nxl");
+    assert_js_parity(
+        "for i in 0 { print(i); } print(\"none\");",
+        &["none"],
+        "forzero.nxl",
+    );
 }
 
 #[test]
@@ -1556,7 +1577,10 @@ fn js_reads_parameters_and_mutable_locals_correctly() {
 fn js_iteration_rejects_non_iterables() {
     let source = SourceFile::new("iter_bad.nxl", "for c in \"ab\" { print(c); }");
     let artifact = nxl_compiler::backend::compile_js(&source).expect("stub emits");
-    assert!(artifact.source.contains("is not iterable"), "guard expected");
+    assert!(
+        artifact.source.contains("is not iterable"),
+        "guard expected"
+    );
 }
 
 // ── Phase 2 backend repairs ───────────────────────────────────────────────────
@@ -1567,9 +1591,11 @@ fn js_else_if_chains_emit() {
         "elseif_js.nxl",
         "let v = 2; if v == 1 { print(\"one\"); } else { if v == 2 { print(\"two\"); } else { print(\"other\"); } }",
     );
-    let artifact =
-        nxl_compiler::backend::compile_js(&source).expect("else-if should emit");
-    assert!(artifact.source.matches("if (").count() >= 2, "both branches must emit");
+    let artifact = nxl_compiler::backend::compile_js(&source).expect("else-if should emit");
+    assert!(
+        artifact.source.matches("if (").count() >= 2,
+        "both branches must emit"
+    );
 }
 
 #[test]
@@ -1578,10 +1604,15 @@ fn js_backend_emits_data_constructs() {
         "data_js.nxl",
         "struct User { name: String; } let u = User { name: \"Ada\"; }; let a = [u.name]; print(a[0]);",
     );
-    let artifact =
-        nxl_compiler::backend::compile_js(&source).expect("data should emit JS");
-    assert!(artifact.source.contains("__nxl_type"), "structs need type tags");
-    assert!(artifact.source.contains("__nxl_show"), "print needs value display");
+    let artifact = nxl_compiler::backend::compile_js(&source).expect("data should emit JS");
+    assert!(
+        artifact.source.contains("__nxl_type"),
+        "structs need type tags"
+    );
+    assert!(
+        artifact.source.contains("__nxl_show"),
+        "print needs value display"
+    );
 }
 
 #[test]
@@ -1594,8 +1625,7 @@ fn data_program_runs_identically_on_both_runtimes() {
         "struct User { name: String; } let u = User { name: \"Ada\"; }; let a = [1, 2]; print(u.name); print(a[1]);",
     );
     let vm_result = nxl_compiler::vm::run(&source).expect("VM should run");
-    let node_result =
-        nxl_compiler::runtime::run(&source).expect("Node should run");
+    let node_result = nxl_compiler::runtime::run(&source).expect("Node should run");
     let node_lines: Vec<&str> = node_result.stdout.lines().collect();
     assert_eq!(vm_result.output, node_lines);
     assert_eq!(vm_result.output, vec!["Ada", "2"]);
@@ -1617,8 +1647,7 @@ fn rejects_return_across_try_boundary() {
         "try_return.nxl",
         "fn f() -> Int { try { return 1; } catch e { return 2; } }",
     );
-    let diagnostic =
-        compile_to_nir(&source).expect_err("return across try must be rejected");
+    let diagnostic = compile_to_nir(&source).expect_err("return across try must be rejected");
     assert_eq!(diagnostic.code, "NXL2007");
 }
 
@@ -1628,8 +1657,7 @@ fn rejects_unreachable_catch_after_bare_catch() {
         "try_unreachable.nxl",
         r#"try { print(1); } catch e { print(2); } catch f: Int { print(3); }"#,
     );
-    let diagnostic =
-        compile_to_nir(&source).expect_err("catch after bare catch must be rejected");
+    let diagnostic = compile_to_nir(&source).expect_err("catch after bare catch must be rejected");
     assert_eq!(diagnostic.code, "NXL2013");
 }
 
@@ -1639,9 +1667,11 @@ fn js_backend_emits_native_try_catch_finally() {
         "try_js.nxl",
         r#"try { throw "x"; } catch e { print(e); } finally { print("done"); }"#,
     );
-    let artifact =
-        nxl_compiler::backend::compile_js(&source).expect("try should emit JS");
+    let artifact = nxl_compiler::backend::compile_js(&source).expect("try should emit JS");
     assert!(artifact.source.contains("try {"), "JS must use native try");
-    assert!(artifact.source.contains("catch (__exc)"), "JS must bind the error");
+    assert!(
+        artifact.source.contains("catch (__exc)"),
+        "JS must bind the error"
+    );
     assert!(artifact.source.contains("finally"), "JS must keep finally");
 }

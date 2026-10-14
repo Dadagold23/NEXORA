@@ -67,15 +67,14 @@ pub fn analyze_module(
         let mut parameters = Vec::with_capacity(function.parameters.len());
         for parameter in &function.parameters {
             let ty = match &parameter.annotation {
-                Some(annotation) => {
-                    resolve_type(annotation, &type_names, &context.aliases).ok_or_else(|| {
+                Some(annotation) => resolve_type(annotation, &type_names, &context.aliases)
+                    .ok_or_else(|| {
                         Diagnostic::error(
                             "NXL2004",
                             format!("unknown type '{annotation}'"),
                             parameter.span,
                         )
-                    })?
-                }
+                    })?,
                 None => Type::Unknown,
             };
             parameters.push((parameter.name.clone(), ty));
@@ -91,15 +90,14 @@ pub fn analyze_module(
             }
         }
         let return_type = match &function.return_type {
-            Some(annotation) => {
-                resolve_type(annotation, &type_names, &context.aliases).ok_or_else(|| {
+            Some(annotation) => resolve_type(annotation, &type_names, &context.aliases)
+                .ok_or_else(|| {
                     Diagnostic::error(
                         "NXL2004",
                         format!("unknown type '{annotation}'"),
                         function.span,
                     )
-                })?
-            }
+                })?,
             None => Type::Unknown,
         };
         functions.push(FunctionSignature {

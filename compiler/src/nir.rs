@@ -928,9 +928,9 @@ fn module_declarations(program: &Program) -> (Vec<TypeDefinition>, Vec<String>, 
                         .map(|field| {
                             (
                                 field.name.clone(),
-                                type_from_name(&field.annotation, &HashMap::new()).unwrap_or_else(|| {
-                                    Type::Generic(stable_type_id(&field.annotation))
-                                }),
+                                type_from_name(&field.annotation, &HashMap::new()).unwrap_or_else(
+                                    || Type::Generic(stable_type_id(&field.annotation)),
+                                ),
                             )
                         })
                         .collect(),
@@ -1731,10 +1731,8 @@ fn verify_instruction_types(
                     let left_ty = types.get(left).copied().unwrap_or(Type::Unknown);
                     let right_ty = types.get(right).copied().unwrap_or(Type::Unknown);
                     // Arrays compare structurally regardless of element precision.
-                    let both_arrays = matches!(
-                        (&left_ty, &right_ty),
-                        (Type::Array(_), Type::Array(_))
-                    );
+                    let both_arrays =
+                        matches!((&left_ty, &right_ty), (Type::Array(_), Type::Array(_)));
                     if !both_arrays
                         && left_ty != right_ty
                         && left_ty != Type::Unknown
@@ -2091,7 +2089,9 @@ fn instruction_results(instruction: &Instruction) -> Vec<ValueId> {
         | Instruction::TypeName { result, .. }
         | Instruction::Catch { result, .. } => vec![*result],
         Instruction::MethodCall {
-            result, receiver_out, ..
+            result,
+            receiver_out,
+            ..
         } => vec![*result, *receiver_out],
         Instruction::SpawnCall { result, .. }
         | Instruction::SpawnMethod { result, .. }
@@ -2153,7 +2153,9 @@ fn instruction_value_types(instruction: &Instruction) -> Vec<(ValueId, Type)> {
         | Instruction::AwaitTask { result, .. }
         | Instruction::ChannelNew { result, .. } => vec![(*result, Type::Unknown)],
         Instruction::MethodCall {
-            result, receiver_out, ..
+            result,
+            receiver_out,
+            ..
         } => vec![(*result, Type::Unknown), (*receiver_out, Type::Unknown)],
         Instruction::ToString { result, .. } | Instruction::TypeName { result, .. } => {
             vec![(*result, Type::String)]
@@ -2176,11 +2178,12 @@ fn instruction_operands(instruction: &Instruction) -> Vec<ValueId> {
         Instruction::ArrayNew { elements, .. } => elements.clone(),
         Instruction::IndexGet { object, index, .. } => vec![*object, *index],
         Instruction::IndexSet {
-            object, index, value, ..
+            object,
+            index,
+            value,
+            ..
         } => vec![*object, *index, *value],
-        Instruction::StructNew { fields, .. } => {
-            fields.iter().map(|(_, value)| *value).collect()
-        }
+        Instruction::StructNew { fields, .. } => fields.iter().map(|(_, value)| *value).collect(),
         Instruction::FieldGet { object, .. } => vec![*object],
         Instruction::FieldSet { object, value, .. } => vec![*object, *value],
         Instruction::EnumNew { arguments, .. } => arguments.clone(),
@@ -2188,7 +2191,9 @@ fn instruction_operands(instruction: &Instruction) -> Vec<ValueId> {
         Instruction::PatternIndex { object, index, .. } => vec![*object, *index],
         Instruction::PatternField { object, .. } => vec![*object],
         Instruction::MethodCall {
-            receiver, arguments, ..
+            receiver,
+            arguments,
+            ..
         } => {
             let mut operands = vec![*receiver];
             operands.extend(arguments.iter().copied());
@@ -2196,7 +2201,9 @@ fn instruction_operands(instruction: &Instruction) -> Vec<ValueId> {
         }
         Instruction::SpawnCall { arguments, .. } => arguments.clone(),
         Instruction::SpawnMethod {
-            receiver, arguments, ..
+            receiver,
+            arguments,
+            ..
         } => {
             let mut operands = vec![*receiver];
             operands.extend(arguments.iter().copied());
@@ -2352,25 +2359,15 @@ type DeclaredTypeInfo = (bool, String, Vec<(String, Vec<String>)>);
 /// A resolved enum variant: (type name, payload type names).
 fn find_enum_variant(program: &Program, variant: &str) -> Vec<(String, Vec<String>)> {
     let mut out = Vec::new();
-    fn walk(
-        statements: &[Statement],
-        variant: &str,
-        out: &mut Vec<(String, Vec<String>)>,
-    ) {
+    fn walk(statements: &[Statement], variant: &str, out: &mut Vec<(String, Vec<String>)>) {
         for statement in statements {
             match statement {
                 Statement::TypeDeclaration(declaration)
-                    if matches!(
-                        declaration.kind,
-                        crate::ast::DeclarationKind::Enum
-                    ) =>
+                    if matches!(declaration.kind, crate::ast::DeclarationKind::Enum) =>
                 {
                     for candidate in &declaration.variants {
                         if candidate.name == variant {
-                            out.push((
-                                declaration.name.clone(),
-                                candidate.payload.clone(),
-                            ));
+                            out.push((declaration.name.clone(), candidate.payload.clone()));
                         }
                     }
                 }
@@ -2440,9 +2437,9 @@ impl Lowerer {
                 }
                 Ok(())
             }
-            Statement::TypeDeclaration(_)
-            | Statement::TypeAlias(_)
-            | Statement::Import { .. } => Ok(()),
+            Statement::TypeDeclaration(_) | Statement::TypeAlias(_) | Statement::Import { .. } => {
+                Ok(())
+            }
             Statement::ImplBlock(implementation) => {
                 if find_type_declaration(&self.program, &implementation.target).is_none() {
                     return Err(Diagnostic::error(
@@ -2452,8 +2449,7 @@ impl Lowerer {
                     ));
                 }
                 if let Some(trait_name) = &implementation.trait_name {
-                    let contract =
-                        find_type_declaration(&self.program, trait_name).cloned();
+                    let contract = find_type_declaration(&self.program, trait_name).cloned();
                     let Some(contract) = contract else {
                         return Err(Diagnostic::error(
                             "NXL2004",
@@ -2463,8 +2459,7 @@ impl Lowerer {
                     };
                     if !matches!(
                         contract.kind,
-                        crate::ast::DeclarationKind::Interface
-                            | crate::ast::DeclarationKind::Trait
+                        crate::ast::DeclarationKind::Interface | crate::ast::DeclarationKind::Trait
                     ) {
                         return Err(Diagnostic::error(
                             "NXL2001",
@@ -2476,9 +2471,11 @@ impl Lowerer {
                         let Some(required_name) = required.name.as_ref() else {
                             continue;
                         };
-                        let Some(provided) = implementation.methods.iter().find(|method| {
-                            method.name.as_deref() == Some(required_name.as_str())
-                        }) else {
+                        let Some(provided) = implementation
+                            .methods
+                            .iter()
+                            .find(|method| method.name.as_deref() == Some(required_name.as_str()))
+                        else {
                             return Err(Diagnostic::error(
                                 "NXL2001",
                                 format!(
@@ -2782,7 +2779,7 @@ impl Lowerer {
                 let current_scope = self.scope_stack.last_mut().unwrap();
                 current_scope.insert(function_name.clone(), u32::MAX);
 
-        // Save current state for the function body
+                // Save current state for the function body
                 let saved_instructions = std::mem::take(&mut self.instructions);
                 let saved_scope_stack = std::mem::take(&mut self.scope_stack);
                 let saved_mutability_stack = std::mem::take(&mut self.mutability_stack);
@@ -3358,13 +3355,11 @@ impl Lowerer {
                             if dotted == *path {
                                 best = Some((path.clone(), Vec::new()));
                             } else if let Some(rest) = dotted.strip_prefix(&format!("{path}.")) {
-                                let chain = rest
-                                    .split('.')
-                                    .map(str::to_owned)
-                                    .collect::<Vec<_>>();
-                                if best.as_ref().is_none_or(|(best_path, _)| {
-                                    path.len() > best_path.len()
-                                }) {
+                                let chain = rest.split('.').map(str::to_owned).collect::<Vec<_>>();
+                                if best
+                                    .as_ref()
+                                    .is_none_or(|(best_path, _)| path.len() > best_path.len())
+                                {
                                     best = Some((path.clone(), chain));
                                 }
                             }
@@ -3613,12 +3608,7 @@ impl Lowerer {
                             pattern.span,
                         ));
                     }
-                    return Ok(self.lower_variant_test(
-                        value_id,
-                        type_name,
-                        name,
-                        pattern.span,
-                    ));
+                    return Ok(self.lower_variant_test(value_id, type_name, name, pattern.span));
                 }
                 if self.lookup_declaration(name).is_some() {
                     return Err(Diagnostic::error(
@@ -3677,16 +3667,11 @@ impl Lowerer {
                         pattern.span,
                     ));
                 }
-                let mut test_id =
-                    self.lower_variant_test(value_id, type_name, name, pattern.span);
+                let mut test_id = self.lower_variant_test(value_id, type_name, name, pattern.span);
                 for (index, field) in fields.iter().enumerate() {
-                    let index_id = self.constant(
-                        Constant::Integer(index as i64),
-                        Type::Int,
-                        field.span,
-                    );
-                    let element_id =
-                        self.lower_pattern_index(value_id, index_id, field.span);
+                    let index_id =
+                        self.constant(Constant::Integer(index as i64), Type::Int, field.span);
+                    let element_id = self.lower_pattern_index(value_id, index_id, field.span);
                     // Payloads declared with a concrete type keep it, so
                     // arithmetic and calls on bindings stay statically typed.
                     if let PatternKind::Binding(_) = &field.kind {
@@ -3721,7 +3706,10 @@ impl Lowerer {
                 ) {
                     return Err(Diagnostic::error(
                         "NXL2001",
-                        format!("cannot match on {:?} '{name}' as a struct", declaration.kind),
+                        format!(
+                            "cannot match on {:?} '{name}' as a struct",
+                            declaration.kind
+                        ),
                         pattern.span,
                     ));
                 }
@@ -3747,10 +3735,8 @@ impl Lowerer {
                             pattern.span,
                         ));
                     }
-                    let field_id =
-                        self.lower_pattern_field(value_id, field_name, pattern.span);
-                    let field_test =
-                        self.lower_pattern_test(field_pattern, field_id)?;
+                    let field_id = self.lower_pattern_field(value_id, field_name, pattern.span);
+                    let field_test = self.lower_pattern_test(field_pattern, field_id)?;
                     test_id = self.lower_and_test(test_id, field_test, pattern.span);
                 }
                 Ok(test_id)
@@ -3770,8 +3756,7 @@ impl Lowerer {
                 }
                 let mut test_id = self.bool_const(false, pattern.span);
                 for alternative in alternatives {
-                    let alternative_test =
-                        self.lower_pattern_test(alternative, value_id)?;
+                    let alternative_test = self.lower_pattern_test(alternative, value_id)?;
                     let result = self.allocate();
                     let instruction = Instruction::Binary {
                         result,
@@ -3817,9 +3802,9 @@ impl Lowerer {
             PatternKind::Variant { fields, .. }
             | PatternKind::Tuple(fields)
             | PatternKind::Array(fields) => fields.iter().any(Self::pattern_contains_binding),
-            PatternKind::Struct { fields, .. } => {
-                fields.iter().any(|(_, field)| Self::pattern_contains_binding(field))
-            }
+            PatternKind::Struct { fields, .. } => fields
+                .iter()
+                .any(|(_, field)| Self::pattern_contains_binding(field)),
             PatternKind::Or(alternatives) => {
                 alternatives.iter().any(Self::pattern_contains_binding)
             }
@@ -3963,12 +3948,8 @@ impl Lowerer {
         };
         // Write the updated container back to the root binding.
         let updated = match place {
-            Place::Field { object, field } => {
-                self.lower_field_set(object, field, assigned, span)
-            }
-            Place::Index { object, index } => {
-                self.lower_index_set(object, index, assigned, span)
-            }
+            Place::Field { object, field } => self.lower_field_set(object, field, assigned, span),
+            Place::Index { object, index } => self.lower_index_set(object, index, assigned, span),
         };
         if let Some(root) = root {
             self.instructions.push(Instruction::Store {
@@ -4005,10 +3986,7 @@ impl Lowerer {
                     method.span,
                 ));
             }
-            let mut parameters = vec![(
-                "self".to_owned(),
-                Type::Generic(stable_type_id(owner)),
-            )];
+            let mut parameters = vec![("self".to_owned(), Type::Generic(stable_type_id(owner)))];
             for parameter in &method.parameters {
                 if parameter.name == "self" {
                     return Err(Diagnostic::error(
@@ -4084,8 +4062,7 @@ impl Lowerer {
             }
         }
         search.iter().find_map(|function| {
-            (function.name.as_deref() == Some(method))
-                .then_some(function.parameters.len())
+            (function.name.as_deref() == Some(method)).then_some(function.parameters.len())
         })
     }
 
@@ -4104,9 +4081,9 @@ impl Lowerer {
         let needs_mailbox = matches!(
             declaration.as_ref().map(|decl| decl.kind),
             Some(crate::ast::DeclarationKind::Actor)
-        ) && declaration.as_ref().is_none_or(|decl| {
-            !decl.fields.iter().any(|field| field.name == "mailbox")
-        });
+        ) && declaration
+            .as_ref()
+            .is_none_or(|decl| !decl.fields.iter().any(|field| field.name == "mailbox"));
         // `init` protocol when the type (or one of its impl blocks) defines it.
         if let Some(init_arity) = self.find_method_arity(type_name, "init") {
             if arguments.len() != init_arity {
@@ -4222,24 +4199,12 @@ impl Lowerer {
         for field in &declaration.fields {
             if let Some(argument_id) = bound.get(&field.name).copied() {
                 let actual = self.value_type(argument_id);
-                self.check_field_value(
-                    display,
-                    &field.name,
-                    &field.annotation,
-                    actual,
-                    span,
-                )?;
+                self.check_field_value(display, &field.name, &field.annotation, actual, span)?;
                 fields.push((field.name.clone(), argument_id));
             } else if let Some(default) = field.value.clone() {
                 let default_id = self.expression(&default)?;
                 let actual = self.value_type(default_id);
-                self.check_field_value(
-                    display,
-                    &field.name,
-                    &field.annotation,
-                    actual,
-                    span,
-                )?;
+                self.check_field_value(display, &field.name, &field.annotation, actual, span)?;
                 fields.push((field.name.clone(), default_id));
             } else {
                 return Err(Diagnostic::error(
@@ -4358,11 +4323,7 @@ impl Lowerer {
     /// Lower `spawn expr`: plain and module-qualified function calls run on a
     /// worker thread; method calls too (receiver evaluated eagerly); anything
     /// else evaluates now and wraps in a completed task.
-    fn lower_spawn(
-        &mut self,
-        inner: &Expression,
-        span: Span,
-    ) -> Result<ValueId, Diagnostic> {
+    fn lower_spawn(&mut self, inner: &Expression, span: Span) -> Result<ValueId, Diagnostic> {
         if let ExpressionKind::Call { callee, arguments } = &inner.kind {
             // Plain function calls spawn concurrently (unknown names and
             // builtins like `print` fall through to eager evaluation, which
@@ -4477,11 +4438,7 @@ impl Lowerer {
         let mut capture_ids = Vec::with_capacity(captured.len());
         for name in &captured {
             let value = self.lookup_value(name).ok_or_else(|| {
-                Diagnostic::error(
-                    "NXL2002",
-                    format!("use of undeclared name '{name}'"),
-                    span,
-                )
+                Diagnostic::error("NXL2002", format!("use of undeclared name '{name}'"), span)
             })?;
             let result = self.allocate();
             let ty = self.value_type(value);
@@ -4618,16 +4575,13 @@ impl Lowerer {
                 {
                     if matches!(
                         kind,
-                        crate::ast::DeclarationKind::Class
-                            | crate::ast::DeclarationKind::Actor
+                        crate::ast::DeclarationKind::Class | crate::ast::DeclarationKind::Actor
                     ) {
                         return self.lower_construction(&qualified, arguments, span);
                     }
                     return Err(Diagnostic::error(
                         "NXL2001",
-                        format!(
-                            "'{name}' is a type in module '{module}', not a function"
-                        ),
+                        format!("'{name}' is a type in module '{module}', not a function"),
                         span,
                     ));
                 }
@@ -4641,18 +4595,13 @@ impl Lowerer {
                 let qualified_type = crate::project::qualify(module, type_name);
                 let variants = find_type_declaration(&self.program, &qualified_type)
                     .filter(|declaration| {
-                        matches!(
-                            declaration.kind,
-                            crate::ast::DeclarationKind::Enum
-                        )
+                        matches!(declaration.kind, crate::ast::DeclarationKind::Enum)
                     })
                     .map(|declaration| {
                         declaration
                             .variants
                             .iter()
-                            .map(|candidate| {
-                                (candidate.name.clone(), candidate.payload.clone())
-                            })
+                            .map(|candidate| (candidate.name.clone(), candidate.payload.clone()))
                             .collect::<Vec<_>>()
                     });
                 match variants {
@@ -4841,16 +4790,11 @@ impl Lowerer {
                 let operand_type = self.value_type(operand);
                 let ty = match operator {
                     UnaryOperator::Negate
-                        if matches!(
-                            operand_type,
-                            Type::Int | Type::Float | Type::Unknown
-                        ) =>
+                        if matches!(operand_type, Type::Int | Type::Float | Type::Unknown) =>
                     {
                         operand_type
                     }
-                    UnaryOperator::Not
-                        if matches!(operand_type, Type::Bool | Type::Unknown) =>
-                    {
+                    UnaryOperator::Not if matches!(operand_type, Type::Bool | Type::Unknown) => {
                         Type::Bool
                     }
                     _ => {
@@ -5050,24 +4994,17 @@ impl Lowerer {
                 if let Some((module, chain)) = self.split_module_access(expression) {
                     match chain.as_slice() {
                         [type_name, variant] => {
-                            let qualified_type =
-                                crate::project::qualify(&module, type_name);
+                            let qualified_type = crate::project::qualify(&module, type_name);
                             let variants = find_type_declaration(&self.program, &qualified_type)
                                 .filter(|declaration| {
-                                    matches!(
-                                        declaration.kind,
-                                        crate::ast::DeclarationKind::Enum
-                                    )
+                                    matches!(declaration.kind, crate::ast::DeclarationKind::Enum)
                                 })
                                 .map(|declaration| {
                                     declaration
                                         .variants
                                         .iter()
                                         .map(|candidate| {
-                                            (
-                                                candidate.name.clone(),
-                                                candidate.payload.clone(),
-                                            )
+                                            (candidate.name.clone(), candidate.payload.clone())
                                         })
                                         .collect::<Vec<_>>()
                                 });
@@ -5085,9 +5022,7 @@ impl Lowerer {
                                 None => {
                                     return Err(Diagnostic::error(
                                         "NXL2002",
-                                        format!(
-                                            "unknown type '{type_name}' in module '{module}'"
-                                        ),
+                                        format!("unknown type '{type_name}' in module '{module}'"),
                                         expression.span,
                                     ));
                                 }
@@ -5113,8 +5048,7 @@ impl Lowerer {
                 }
                 // Type namespace (locals shadow types): `Color.Red`.
                 if let ExpressionKind::Name(type_name) = &target.kind {
-                    if let Some((is_enum, qualified, variants)) =
-                        self.declared_type_info(type_name)
+                    if let Some((is_enum, qualified, variants)) = self.declared_type_info(type_name)
                     {
                         if !is_enum {
                             return Err(Diagnostic::error(
@@ -5173,10 +5107,7 @@ impl Lowerer {
                             expression.span,
                         )
                     })?;
-                if !matches!(
-                    declaration.kind,
-                    crate::ast::DeclarationKind::Struct
-                ) {
+                if !matches!(declaration.kind, crate::ast::DeclarationKind::Struct) {
                     return Err(Diagnostic::error(
                         "NXL2001",
                         format!(
@@ -5198,8 +5129,7 @@ impl Lowerer {
                 }
                 let mut lowered = Vec::with_capacity(fields.len());
                 for (field, value) in fields {
-                    let Some(declared) =
-                        declaration.fields.iter().find(|f| &f.name == field)
+                    let Some(declared) = declaration.fields.iter().find(|f| &f.name == field)
                     else {
                         return Err(Diagnostic::error(
                             "NXL2002",
@@ -5292,12 +5222,7 @@ impl Lowerer {
                 // Module-qualified call: `math.add(..)`, `math.Color.Red(..)`.
                 if let ExpressionKind::Member { .. } = &callee.kind {
                     if let Some((module, chain)) = self.split_module_access(callee) {
-                        return self.lower_module_call(
-                            &module,
-                            &chain,
-                            arguments,
-                            expression.span,
-                        );
+                        return self.lower_module_call(&module, &chain, arguments, expression.span);
                     }
                 }
                 // Method call: `user.greet("hi")` (dynamic dispatch on the
@@ -5399,8 +5324,7 @@ impl Lowerer {
                     if matches!(
                         kind,
                         Some(
-                            crate::ast::DeclarationKind::Class
-                                | crate::ast::DeclarationKind::Actor
+                            crate::ast::DeclarationKind::Class | crate::ast::DeclarationKind::Actor
                         )
                     ) {
                         return self.lower_construction(name, arguments, expression.span);
@@ -5415,14 +5339,9 @@ impl Lowerer {
                     {
                         if matches!(
                             kind,
-                            crate::ast::DeclarationKind::Class
-                                | crate::ast::DeclarationKind::Actor
+                            crate::ast::DeclarationKind::Class | crate::ast::DeclarationKind::Actor
                         ) {
-                            return self.lower_construction(
-                                &qualified,
-                                arguments,
-                                expression.span,
-                            );
+                            return self.lower_construction(&qualified, arguments, expression.span);
                         }
                     }
                 }
@@ -5477,12 +5396,7 @@ impl Lowerer {
                 // Field and element targets (`u.name = v`, `a[i] = v`).
                 match &target.kind {
                     ExpressionKind::Member { .. } | ExpressionKind::Index { .. } => {
-                        return self.assign_to_place(
-                            target,
-                            *operator,
-                            value,
-                            expression.span,
-                        );
+                        return self.assign_to_place(target, *operator, value, expression.span);
                     }
                     _ => {}
                 }
@@ -5643,13 +5557,13 @@ impl Lowerer {
     }
 }
 
-pub(crate) fn type_from_name(
-    name: &str,
-    aliases: &HashMap<String, String>,
-) -> Option<Type> {
+pub(crate) fn type_from_name(name: &str, aliases: &HashMap<String, String>) -> Option<Type> {
     /// Resolve a bare argument name through aliases for hashing purposes.
     fn keyed(argument: &str, aliases: &HashMap<String, String>) -> String {
-        aliases.get(argument).cloned().unwrap_or_else(|| argument.to_owned())
+        aliases
+            .get(argument)
+            .cloned()
+            .unwrap_or_else(|| argument.to_owned())
     }
     match name {
         "Int" => Some(Type::Int),
@@ -5696,12 +5610,10 @@ pub(crate) fn type_from_name(
                 .map(|argument| type_from_name(argument, aliases))
                 .collect::<Option<Vec<_>>>()?;
             match (constructor, arguments.as_slice()) {
-                ("Array", [_]) | ("List", [_]) => {
-                    Some(Type::Array(stable_type_id(&keyed(
-                        argument_names[0],
-                        aliases,
-                    ))))
-                }
+                ("Array", [_]) | ("List", [_]) => Some(Type::Array(stable_type_id(&keyed(
+                    argument_names[0],
+                    aliases,
+                )))),
                 ("Option", [_]) => Some(Type::Optional(stable_type_id(&keyed(
                     argument_names[0],
                     aliases,

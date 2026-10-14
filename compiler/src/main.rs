@@ -6,10 +6,11 @@ use nxl_compiler::cli::{
     cmd_bench, cmd_bridge, cmd_build, cmd_check, cmd_clean, cmd_db_audit, cmd_db_create,
     cmd_db_drop, cmd_db_fresh, cmd_db_migrate, cmd_db_refresh, cmd_db_rollback, cmd_db_seed,
     cmd_db_status, cmd_debug, cmd_docs, cmd_fmt, cmd_ide, cmd_init, cmd_lint, cmd_lsp,
-    cmd_make_factory, cmd_make_migration, cmd_make_model, cmd_make_seeder, cmd_new, cmd_pkg_add,
-    cmd_pkg_audit, cmd_pkg_install, cmd_pkg_publish, cmd_pkg_remove, cmd_pkg_tree, cmd_pkg_update,
-    cmd_platforms, cmd_repl, cmd_run, cmd_serve, cmd_test, format_doctor_report, help_text,
-    parse_args, run_doctor, version_text, Command,
+    cmd_make_factory, cmd_make_migration, cmd_make_model, cmd_make_seeder, cmd_new,
+    cmd_new_from_template, cmd_pkg_add, cmd_pkg_audit, cmd_pkg_info, cmd_pkg_install,
+    cmd_pkg_publish, cmd_pkg_remove, cmd_pkg_search, cmd_pkg_tree, cmd_pkg_update, cmd_platforms,
+    cmd_repl, cmd_run, cmd_serve, cmd_test, format_doctor_report, help_text, parse_args,
+    run_doctor, version_text, AddRequest, Command,
 };
 
 fn main() -> ExitCode {
@@ -36,10 +37,44 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
 
-        Command::New { name } => match cmd_new(&name) {
-            Ok(msg) => {
-                println!("{msg}");
-                ExitCode::SUCCESS
+        Command::New { name, template } => {
+            let outcome = match template {
+                Some(template) => cmd_new_from_template(&name, &template),
+                None => cmd_new(&name),
+            };
+            match outcome {
+                Ok(msg) => {
+                    println!("{msg}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+
+        Command::Dev => {
+            // The proposed web workflow has no implementation behind it, so it
+            // says so instead of starting a server that does nothing.
+            eprintln!(
+                "error[NXL12007]: `nexora dev` needs a web development server, which NXL does not have yet.\n\
+                 Run console applications with `nexora run`."
+            );
+            ExitCode::FAILURE
+        }
+
+        Command::ProjectTest => match cmd_test(&cwd, None) {
+            Ok(report) => {
+                println!("test: {}/{} passed", report.passed, report.total);
+                for failure in &report.failures {
+                    println!("  failed: {failure}");
+                }
+                if report.failures.is_empty() {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                }
             }
             Err(e) => {
                 eprintln!("{e}");
@@ -168,16 +203,34 @@ fn main() -> ExitCode {
             }
         },
 
-        Command::PkgAdd { name, req } => match cmd_pkg_add(&cwd, &name, req.as_deref()) {
-            Ok(msg) => {
-                println!("{msg}");
-                ExitCode::SUCCESS
+        Command::PkgAdd { name, req, path } => {
+            let outcome = match path {
+                Some(path) => cmd_pkg_add(
+                    &cwd,
+                    AddRequest::Path {
+                        name: &name,
+                        path: &path,
+                    },
+                ),
+                None => cmd_pkg_add(
+                    &cwd,
+                    AddRequest::Registry {
+                        name: &name,
+                        req: req.as_deref(),
+                    },
+                ),
+            };
+            match outcome {
+                Ok(msg) => {
+                    println!("{msg}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
             }
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::FAILURE
-            }
-        },
+        }
 
         Command::PkgRemove { name } => match cmd_pkg_remove(&cwd, &name) {
             Ok(msg) => {
@@ -223,10 +276,38 @@ fn main() -> ExitCode {
             }
         },
 
-        Command::PkgPublish => {
-            println!("{}", cmd_pkg_publish());
-            ExitCode::SUCCESS
-        }
+        Command::PkgPublish => match cmd_pkg_publish() {
+            Ok(msg) => {
+                println!("{msg}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        },
+
+        Command::PkgSearch { term } => match cmd_pkg_search(&cwd, term.as_deref()) {
+            Ok(msg) => {
+                print!("{msg}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        },
+
+        Command::PkgInfo { name } => match cmd_pkg_info(&cwd, &name) {
+            Ok(msg) => {
+                print!("{msg}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        },
 
         Command::DbCreate => match cmd_db_create(&cwd) {
             Ok(msg) => {
@@ -411,8 +492,9 @@ fn main() -> ExitCode {
         Command::Doctor => {
             let checks = run_doctor();
             print!("{}", format_doctor_report(&checks));
-            let ok = checks.iter().all(|c| c.is_ok());
-            if ok {
+            // Optional gaps (Node, not being inside a project) are reported
+            // but do not fail the run; required failures do.
+            if checks.iter().all(|c| !c.blocks_release()) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(1)
