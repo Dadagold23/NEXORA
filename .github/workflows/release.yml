@@ -15,6 +15,9 @@ jobs:
   build:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    # An experimental target must not be able to block a release: if its runner
+    # image is unavailable the job is skipped rather than failing the workflow.
+    continue-on-error: ${{ matrix.experimental || false }}
     strategy:
       fail-fast: false
       matrix:
