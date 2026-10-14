@@ -1,0 +1,7 @@
+APPROVED — NXL language implementation roadmap Phase 1 (errors + strings).
+
+Scope: string interpolation, String `+`, throw, try/catch (+annotations)/finally,
+catchable runtime errors; honest limits (NXL2007/NXL2013, VM for-in, Rust-backend try).
+Evidence: 396/396 tests pass (18 new), clippy -D warnings clean, VM + Node.js
+output parity verified, docs updated (04-language-reference.md, IMPLEMENTATION_STATUS.md).
+User acceptance: APPROVED. Next: Phase 2 (iteration + data) only on explicit approval.

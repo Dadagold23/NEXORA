@@ -123,6 +123,28 @@ The implementation still does not meet `prompt.txt` section 10. Missing or incom
 
 P06 was accepted and approved by the user (see `APPROVAL_P06.txt`, `P06_COMPLETION_REPORT.md`); the residual gaps above are deferred to later phases rather than blocking the P06 gate. P07 (backend) then started on top of P06 and is itself approved.
 
+## Language implementation roadmap — Phase 1 done (errors + strings)
+
+Audit found the language was parse-complete but only the core imperative
+subset executed: `struct`/`class`/`enum`/`actor`/`import` were silently
+ignored, and `try`/`throw`/interpolation/`async` failed with NXL2007.
+
+| Phase | Scope | Status |
+| --- | --- | --- |
+| 1 — errors + strings | interpolation, `String` `+`, `throw`, `try`/`catch`(+annotations)/`finally`, catchable runtime errors; honest limits (`return`/`break` across `try`, catch-after-bare NXL2013, VM `for-in`, Rust-backend `try`) | IMPLEMENTED — `nir.rs`/`vm.rs`/`backend.rs` (JS), 18 new tests in `language_frontend_tests.rs`, full suite 396/396, clippy clean |
+| 2 — iteration + data | `for-in` over ranges/arrays, arrays + indexing, struct/enum construction + member access, real `match` dispatch, gradual operators | IMPLEMENTED — `nir.rs`/`vm.rs`/`backend.rs` (JS expressions), 25 new tests, full suite 421/421, clippy clean |
+| 3 — objects + methods | classes, `init`/auto-constructors, dynamic method dispatch with receiver write-back, `impl` blocks, `interface`/`trait` validation | IMPLEMENTED — `nir.rs`/`vm.rs`/`backend.rs` (JS), 12 new tests, full suite 433/433, clippy clean |
+| 4 — modules | multi-file programs, `import`/`from` resolution, cross-module calls/types/methods | IMPLEMENTED — `project.rs`/`nir.rs`/`hir.rs`/CLI, 12 new tests, full suite 445/445, clippy clean |
+| 5 — async | threads for `spawn`/`await`, channels, `async {}` capture, actor mailboxes, end-of-run join | IMPLEMENTED — `nir.rs`/`vm.rs`, honest JS/Rust NXL2007, 12 new tests, full suite 457/457, clippy clean |
+| 5 — async | `async`/`await`/`spawn`/`channel` execution, `actor` mailboxes | PLANNED |
+| 6 — backend control flow | JS-backend `while`/`for ... in` emission, Rust-backend `try` | IMPLEMENTED — `backend.rs` + `nir.rs` loop metadata; JS loops match the VM on every case; Rust `throw`/`try`/`catch`/`finally` verified by compiling and running generated Rust; 28 new tests; full suite 485/485; clippy clean |
+
+Known pre-existing gaps confirmed during Phase 1 (unchanged behavior):
+JS-backend `while` emits a single if/else (VM `nxl run` is correct).
+Fixed in Phase 2 (were silent-wrong, now correct or loud): `for-in` never
+executed (now runs over ranges/arrays); `match` ran all arms (now dispatches
+first-match-wins); `%` on integers was rejected (now works).
+
 ## P13 — Package Manager (NXP, workflow.txt Module 14)
 
 | Component | Status | Evidence |

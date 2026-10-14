@@ -98,7 +98,22 @@ impl Runtime {
     /// available; returns a `RuntimeError` diagnostic if Node.js is not found.
     pub fn run(&self, source: &SourceFile) -> Result<ExecutionResult, Diagnostic> {
         let artifact = crate::backend::compile_js(source)?;
-        self.execute_js(&artifact.source, source)
+        self.run_artifact(&artifact.source, source)
+    }
+
+    /// Execute an already-lowered module (possibly multi-file) via Node.js.
+    pub fn run_module(&self, module: &crate::nir::Module) -> Result<ExecutionResult, Diagnostic> {
+        let artifact = crate::backend::compile_js_module(module)?;
+        let pseudo = SourceFile::new(module.name.clone(), "");
+        self.run_artifact(&artifact.source, &pseudo)
+    }
+
+    fn run_artifact(
+        &self,
+        js_source: &str,
+        source: &SourceFile,
+    ) -> Result<ExecutionResult, Diagnostic> {
+        self.execute_js(js_source, source)
     }
 
     /// Execute a pre-compiled JS string via Node.js.
@@ -233,4 +248,9 @@ fn wait_with_timeout(
 /// This is the implementation of `nxlc run <file>`.
 pub fn run(source: &SourceFile) -> Result<ExecutionResult, Diagnostic> {
     Runtime::new().run(source)
+}
+
+/// Compile and run an already-lowered module (possibly multi-file).
+pub fn run_module(module: &crate::nir::Module) -> Result<ExecutionResult, Diagnostic> {
+    Runtime::new().run_module(module)
 }

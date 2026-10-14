@@ -17,6 +17,7 @@ pub mod parser;
 pub mod perf;
 pub mod pkg;
 pub mod platforms;
+pub mod project;
 pub mod runtime;
 pub mod security;
 pub mod source;

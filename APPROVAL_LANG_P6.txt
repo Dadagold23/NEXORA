@@ -1,0 +1,43 @@
+APPROVED — NXL language implementation roadmap Phase 6 (backend control flow).
+
+Scope (JavaScript target): native `while` emission (labelled `while (true)`
+with the condition as `if (!cond) break`), `continue`/`break` as labelled
+jumps, `for ... in` as a native `for (const x of __nxl_iter(seq))` with a new
+`__nxl_iter` builtin matching the VM (Int counts 0..n-1, arrays yield
+elements, anything else throws "X is not iterable"), plus nesting, loops in
+functions/class methods/`try`, `return` from a loop, and `if` inside a loop.
+Loops are rebuilt from loop metadata recorded during lowering
+(`Function::loops`: header/body/exit) rather than guessed from the CFG.
+
+Bugs found and fixed during verification:
+- stale variable reads — `Store` bound an NXL name to a temporary while
+  `Assign` wrote the name's own JS variable, so a load emitted before a
+  rebinding (every loop condition) read a frozen value; names now own their
+  JS variable and parameters bind to it too;
+- `if/else` merge jumps were silently dropped (now fall through correctly, or
+  fail loudly when the shape is not supported);
+- a `break` branch was mistaken for a loop back-edge by CFG guessing, which
+  hid the loop body; lowering now records the loop shape explicitly;
+- nested-loop control flow after the inner loop exit is now emitted at the
+  join point instead of inside one arm.
+
+Scope (Rust target): `throw` becomes a panic carrying the rendered message and
+`try`/`catch`/`finally` emits `catch_unwind` with `finally` running on both
+paths and `resume_unwind` for uncaught errors; a panic hook keeps caught
+exceptions from printing a banner; `print` maps to a real Rust helper.
+Generated Rust is compiled with rustc and executed by the test suite.
+Silently code-dropping paths (branching, jumps, loops, `for ... in`,
+composites, methods, match patterns, concurrency, `catch e: Type`) are now
+honest NXL2007 errors pointing at a working target instead of emitting broken
+code.
+
+Evidence: 485/485 tests pass (28 new: 22 JS loop parity/emission tests, 6 Rust
+tests that compile and run generated code), clippy -D warnings clean, release
+binary rebuilt and copied to dist/nxl.exe, Phase 6 UAT program (collatz via
+while + if/else, for-in sum, nested loops, throw inside a loop with finally)
+verified against the release binary, docs updated (04-language-reference.md
+Phase 5 and 6 sections repaired and completed, IMPLEMENTATION_STATUS.md
+roadmap table).
+User acceptance: APPROVED. Next: no further language phases are planned; the
+roadmap is complete, so remaining work is packaging/release and committing the
+approved phases.

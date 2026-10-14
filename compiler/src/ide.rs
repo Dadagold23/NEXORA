@@ -110,8 +110,8 @@ impl IdeModel {
 
     /// NIDE delegates every heavyweight action to the compiler crate / CLI.
     pub fn build_and_test(&self, dir: &Path) -> Result<String, String> {
-        let check = crate::cli::cmd_check(dir).map_err(|e| e.to_string())?;
-        let report = crate::cli::cmd_test(dir).map_err(|e| e.to_string())?;
+        let check = crate::cli::cmd_check(dir, None).map_err(|e| e.to_string())?;
+        let report = crate::cli::cmd_test(dir, None).map_err(|e| e.to_string())?;
         Ok(format!(
             "check: {}\ntests: {}/{} passed\n",
             check.join(", "),

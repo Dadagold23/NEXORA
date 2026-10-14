@@ -1,0 +1,22 @@
+APPROVED — NXL language implementation roadmap Phase 5 (async).
+
+Scope: `spawn` of function/module/method calls on VM worker threads
+(completed-task wrapping for non-call expressions), blocking `await` with
+catchable task failures, `channel()` with send/recv/close and `for v in ch`
+streaming, `async {}` blocks capturing visible bindings by value, automatic
+actor `mailbox` channel fields, task identity comparison, structured
+end-of-run task joining (loop-drain for grandchildren).
+Honest limits: no select/timeout/sleep/cancellation, no shared mutable state
+(threads have isolated state; channels are the only sharing), await cycles
+and never-completing tasks hang by design, JS/Rust backends reject async with
+NXL2007 (channel construction emits a stub so sync actor use still compiles
+to JS).
+Bug found during verification: method-call receiver write-back now applies
+only to plain-variable receivers, so `a.b.m()` no longer corrupts `a` with an
+intermediate object (nir.rs MethodCall lowering).
+Evidence: 457/457 tests pass (12 new concurrency tests), clippy -D warnings
+clean, dist/nxl.exe rebuilt from release profile, Phase 5 UAT sample
+(producer/consumer + actor mailbox) executed against the release binary,
+docs updated (04-language-reference.md, IMPLEMENTATION_STATUS.md roadmap
+table).
+User acceptance: APPROVED. Next: Phase 6 only on explicit approval.

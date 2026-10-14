@@ -1,7 +1,7 @@
 use crate::ast::{Program, Statement};
 use crate::diagnostic::Diagnostic;
 use crate::nir::{stable_type_id, type_from_name, FunctionSignature, Type};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HirModule {
@@ -11,7 +11,23 @@ pub struct HirModule {
     pub type_names: Vec<String>,
 }
 
+/// Name-resolution context for one file: its dotted path plus bare-name to
+/// qualified-name aliases for imported and own-module types.
+#[derive(Clone, Debug, Default)]
+pub struct ModuleContext {
+    pub module: String,
+    pub aliases: HashMap<String, String>,
+}
+
 pub fn analyze(program: &Program, source_name: impl Into<String>) -> Result<HirModule, Diagnostic> {
+    analyze_module(program, source_name, &ModuleContext::default())
+}
+
+pub fn analyze_module(
+    program: &Program,
+    source_name: impl Into<String>,
+    context: &ModuleContext,
+) -> Result<HirModule, Diagnostic> {
     let type_names = program
         .statements
         .iter()
@@ -51,13 +67,15 @@ pub fn analyze(program: &Program, source_name: impl Into<String>) -> Result<HirM
         let mut parameters = Vec::with_capacity(function.parameters.len());
         for parameter in &function.parameters {
             let ty = match &parameter.annotation {
-                Some(annotation) => resolve_type(annotation, &type_names).ok_or_else(|| {
-                    Diagnostic::error(
-                        "NXL2004",
-                        format!("unknown type '{annotation}'"),
-                        parameter.span,
-                    )
-                })?,
+                Some(annotation) => {
+                    resolve_type(annotation, &type_names, &context.aliases).ok_or_else(|| {
+                        Diagnostic::error(
+                            "NXL2004",
+                            format!("unknown type '{annotation}'"),
+                            parameter.span,
+                        )
+                    })?
+                }
                 None => Type::Unknown,
             };
             parameters.push((parameter.name.clone(), ty));
@@ -73,13 +91,15 @@ pub fn analyze(program: &Program, source_name: impl Into<String>) -> Result<HirM
             }
         }
         let return_type = match &function.return_type {
-            Some(annotation) => resolve_type(annotation, &type_names).ok_or_else(|| {
-                Diagnostic::error(
-                    "NXL2004",
-                    format!("unknown type '{annotation}'"),
-                    function.span,
-                )
-            })?,
+            Some(annotation) => {
+                resolve_type(annotation, &type_names, &context.aliases).ok_or_else(|| {
+                    Diagnostic::error(
+                        "NXL2004",
+                        format!("unknown type '{annotation}'"),
+                        function.span,
+                    )
+                })?
+            }
             None => Type::Unknown,
         };
         functions.push(FunctionSignature {
@@ -123,11 +143,21 @@ fn statement_span(statement: &Statement) -> crate::source::Span {
     }
 }
 
-fn resolve_type(name: &str, known_types: &[String]) -> Option<Type> {
-    type_from_name(name).or_else(|| {
-        known_types
-            .iter()
-            .any(|known| known == name)
-            .then(|| Type::Generic(stable_type_id(name)))
-    })
+fn resolve_type(
+    name: &str,
+    known_types: &[String],
+    aliases: &HashMap<String, String>,
+) -> Option<Type> {
+    type_from_name(name, aliases)
+        .or_else(|| {
+            aliases
+                .get(name)
+                .map(|qualified| Type::Generic(stable_type_id(qualified)))
+        })
+        .or_else(|| {
+            known_types
+                .iter()
+                .any(|known| known == name)
+                .then(|| Type::Generic(stable_type_id(name)))
+        })
 }

@@ -1,0 +1,14 @@
+APPROVED — NXL language implementation roadmap Phase 2 (iteration + data).
+
+Scope: for-in over ranges/arrays, arrays + indexing (read/write, value
+semantics), struct construction + member access, enum construction +
+structural equality, first-match-wins match dispatch (literals, guards,
+or-patterns, enum/struct patterns), gradual Unknown operators, Remainder.
+Honest limits: Rust-backend composites/try (NXL2007), emitted-JS for-in
+(needs nxl run until backend control-flow phase), tuple/array patterns,
+bindings in or-patterns, new, ?., expression-level match.
+Evidence: 421/421 tests pass (25 new), clippy -D warnings clean, VM +
+Node.js output parity verified on data programs, docs updated
+(04-language-reference.md, IMPLEMENTATION_STATUS.md roadmap table).
+User acceptance: APPROVED. Next: Phase 3 (objects + methods) only on
+explicit approval.

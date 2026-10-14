@@ -1,0 +1,13 @@
+APPROVED — NXL language implementation roadmap Phase 3 (objects + methods).
+
+Scope: classes with init/auto-constructors, dynamic method dispatch with
+receiver write-back (value semantics), impl blocks, interface/trait
+satisfaction validation, self mutability rules, struct patterns on
+class/actor instances. Backend repairs: JS else-if recursion, sequential
+binding redeclaration, method write-back staleness.
+Honest limits: new, statics, ?., first-class methods, inheritance,
+generics, Rust-backend methods/composites, emitted-JS loops.
+Evidence: 434/434 tests pass (13 new), clippy -D warnings clean, VM +
+Node.js output parity verified, docs updated (04-language-reference.md,
+IMPLEMENTATION_STATUS.md roadmap table).
+User acceptance: APPROVED. Next: Phase 4 (modules) only on explicit approval.

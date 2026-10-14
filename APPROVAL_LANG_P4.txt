@@ -1,0 +1,15 @@
+APPROVED — NXL language implementation roadmap Phase 4 (modules).
+
+Scope: dotted-path file layout, import/from/as resolution (alias + full
+path), cross-module functions/types/enums/methods, generic annotation
+resolution, p::Name linking with dependency order, cycle detection,
+missing-file tolerance, project-aware run/build/check, display demangling.
+Backend repairs: JS else-if recursion, total Eq/Ne, sequential binding
+redeclaration, method error demangling.
+Honest limits: no relative imports, informational module decls, no
+privacy/stdlib/re-exports, bare-name globals, tuple/set/map literals,
+Rust-backend gaps, emitted-JS loops (P6).
+Evidence: 445/445 tests pass (12 new), clippy -D warnings clean, VM +
+Node.js output parity verified, docs updated (04-language-reference.md,
+IMPLEMENTATION_STATUS.md roadmap table).
+User acceptance: APPROVED. Next: Phase 5 (async) only on explicit approval.
