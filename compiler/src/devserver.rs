@@ -83,6 +83,13 @@ async fn asset(State(state): State<DevState>, uri: axum::http::Uri) -> Response 
     if !file.starts_with(&root) || !file.is_file() {
         return not_found();
     }
+    // Compiler source is not a web asset. `public/index.nxl` is a program the
+    // server renders for `/`; handing its text to the browser would show the
+    // page's source instead of the page, which looks like a broken site rather
+    // than a wrong URL.
+    if file.extension().and_then(|extension| extension.to_str()) == Some("nxl") {
+        return not_found();
+    }
     let Ok(bytes) = std::fs::read(&file) else {
         return not_found();
     };
@@ -123,6 +130,8 @@ fn content_type_for(path: &Path) -> &'static str {
         Some("woff2") => "font/woff2",
         Some("woff") => "font/woff",
         Some("txt" | "md") => "text/plain; charset=utf-8",
+        Some("webmanifest") => "application/manifest+json",
+        Some("map") => "application/json; charset=utf-8",
         _ => "application/octet-stream",
     }
 }
@@ -352,7 +361,6 @@ pub async fn serve_in(
 
     let bundle = compile_initial(&project)?;
     let address = config.address.clone();
-    let app = router(project, bundle, config);
     let socket: SocketAddr = address.parse().map_err(|_| {
         crate::diagnostic::Diagnostic::error(
             "NXL12002",
@@ -368,8 +376,10 @@ pub async fn serve_in(
         )
     })?;
     println!("NXL dev server listening on http://{address}");
+    println!("  serving {}", project.display());
     println!("  edit a source file and the browser reloads automatically");
     println!("  press Ctrl+C to stop");
+    let app = router(project, bundle, config);
 
     // No graceful-shutdown signal: stopping the process is enough for a
     // development server, and it keeps the dependency set unchanged.

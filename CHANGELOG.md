@@ -69,6 +69,18 @@ because it landed after that tag was pushed.
   bare newline, which does not parse. Escaping now covers `\n`, `\r`, `\t` and
   the remaining control characters.
 
+### Fixes
+
+- **Compiler source was served as a web asset.** `public/index.nxl` is a
+  program the dev server renders for `/`, but requesting it by path returned
+  its text, so a browser showed the page's source instead of the page and it
+  looked like a broken site rather than a wrong URL. `.nxl` files under
+  `public/` are now refused; the page is served by rendering it.
+- **`nxlc dev` outside a project** said `cannot read .../src/main.nxl`, which
+  reads like a broken toolchain. It now says the directory is not an NXL
+  project and names the command that creates one, and the server prints the
+  project it is serving on startup, so it is obvious which one answered.
+
 ### Toolchain
 
 - **`nexora new web <name>`**: a second project target that scaffolds a

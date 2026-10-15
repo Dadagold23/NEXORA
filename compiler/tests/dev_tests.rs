@@ -441,6 +441,34 @@ fn a_broken_nxl_page_says_why_instead_of_falling_back() {
 }
 
 #[test]
+fn compiler_source_is_not_served_as_a_web_asset() {
+    // public/index.nxl is a program the server renders for `/`. Handing its
+    // text to the browser shows the page's source instead of the page, which
+    // looks like a broken site rather than a wrong URL.
+    let dir = project("nxl_source", "fn main() { print(\"app\"); }");
+    fs::create_dir_all(dir.path().join("public")).unwrap();
+    fs::write(
+        dir.path().join("public/index.nxl"),
+        "fn main() { print(`<p>hi</p>`); }\n",
+    )
+    .expect("page");
+    fs::write(dir.path().join("public/notes.nxl"), "fn secret() {}\n").expect("other");
+
+    let (port, handle) = serve(dir.path().to_path_buf(), DevConfig::default());
+    for path in ["/index.nxl", "/notes.nxl"] {
+        let (status, body) = get(port, path);
+        assert_eq!(status, 404, "{path} must not be served: {body}");
+        assert!(!body.contains("print"), "{path} leaked source: {body}");
+    }
+    // The page itself still renders.
+    let (status, body) = get(port, "/");
+    assert_eq!(status, 200);
+    assert!(body.contains("<p>hi</p>"), "{body}");
+
+    drop(handle);
+}
+
+#[test]
 fn a_project_without_public_keeps_the_generated_host_page() {
     let dir = project("no_public", "fn main() { print(\"served\"); }");
     let (port, handle) = serve(dir.path().to_path_buf(), DevConfig::default());

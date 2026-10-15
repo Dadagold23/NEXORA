@@ -50,7 +50,21 @@ pub struct DevBundle {
 }
 
 /// Compile a project into a bundle the dev server can serve.
+///
+/// The error for a directory that is not a project says so, and says what to
+/// run: "cannot read .../src/main.nxl" reads like the toolchain is broken.
 pub fn build(dir: &Path) -> Result<DevBundle, Diagnostic> {
+    if !dir.join("nxl.toml").exists() {
+        return Err(Diagnostic::error(
+            "NXL12006",
+            format!(
+                "{} is not an NXL project: there is no nxl.toml here. \
+                 Run this inside a project, or create one with `nxlc new web <name>`.",
+                dir.display()
+            ),
+            Default::default(),
+        ));
+    }
     let config = crate::cli::ProjectConfig::load(dir).map_err(|e| {
         Diagnostic::error(
             "NXL12006",
