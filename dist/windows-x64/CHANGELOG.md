@@ -4,6 +4,115 @@ All notable changes to NEXORA/NXL are recorded here. The project follows
 semantic versioning; versions below are the language/toolchain releases that
 have actually been built and tested.
 
+## [Unreleased]
+
+Everything in this section is on `main` but is **not** in the `v0.1.0` tag,
+because it landed after that tag was pushed.
+
+### Fixes
+
+- **`install.sh --prefix` never worked.** The argument loop was written as
+  `for arg in "$@"`, which expands the argument list once, so the `shift` could
+  not consume the value after `--prefix`: the path was then read as another
+  option and the installer aborted with `unknown option`. Since
+  `scripts/verify-install.sh` passes `--prefix` in four places, the Unix
+  onboarding check could not have passed on Linux or macOS. It now shifts a
+  positional list instead.
+- **Bash scripts were being run under `sh`.** On Ubuntu `/bin/sh` is dash,
+  which has no `set -o pipefail`, so `package-release.sh`, `verify-install.sh`
+  and the staged `install.sh` died on their own first line. The release
+  workflow and the internal call sites now use `bash`.
+- **The Unix installer test could only pass on Windows.**
+  `unix_installer_refuses_a_wrong_platform` asserted that a dry run *succeeds*
+  on Linux and macOS, but it runs the copy in `install/unix/`, which ships no
+  `nxlc` and no `checksums.sha256`, so the installer always refuses it. On
+  Windows the assertion is the opposite one, which is why CI was red on Ubuntu
+  and green on Windows. The test now checks what its name says, and two new
+  hermetic tests stage a real package to prove the dry run verifies the
+  checksum and writes nothing, and that a tampered payload is refused.
+- **Release runner labels followed retired images.** `macos-13` was retired in
+  December 2025, `ubuntu-22.04` is inside its deprecation window, and
+  `macos-14` retires on 2 November 2026; those jobs could no longer start.
+  They now use `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15` and
+  `macos-15-intel`.
+
+### Toolchain
+
+- **`nexora new web <name>`**: a second project target that scaffolds a
+  complete, runnable web application rather than a hello-world. The worktree
+  holds a manifest, four NXL modules (`src/main.nxl` plus `src/app/config`,
+  `routes` and `state`), a landing page with a splash screen
+  (`public/index.html`, `styles.css`, `bootstrap.js`, `favicon.svg`), a
+  self-check and a README. `new` also resolves and locks the new manifest's
+  dependencies before it returns, so the project is ready to run. `--target`
+  and `--template` are now the same flag; both spellings work.
+- **The dev server serves the project's own page.** `nxlc dev` serves
+  `public/index.html` at `/` and every file under `public/` at its own path,
+  falling back to its generated host page for projects that have none. Paths
+  are canonicalised before they are read, so `..` cannot climb out of `public/`
+  and an escaping symlink is refused. A project page that forgets to load
+  `/app.js` has it injected rather than silently rendering empty.
+- **The scaffolded page is wired to the program, not just decorated.** NXL has
+  no DOM types, so `print()` compiles to `console.log` and `public/bootstrap.js`
+  takes it over before the program runs: the boot log becomes the hero, the
+  feature list, the route table and the status pill. The splash screen clears
+  when the program prints `READY` — not on a timer — so a program that throws
+  leaves it up with the reason rather than looking healthy.
+  `scripts/verify-web-page.js <project>` checks this without a browser, and
+  the test suite runs it against the scaffolded template.
+
+### Compiler fixes found while building the web target
+
+- **Array type annotations could not compile at all.** A return type of `[T]`
+  or `Array<T>` was rejected with `NXL3001 ... returns Array(0), expected
+  Array(<id>)`, as was any call passing an array literal to a `[T]` parameter,
+  and any uncalled function with such a return type. An array literal is
+  inferred as `Array(0)` because its element type is not pinned down, while the
+  declaration is `Array(<id>)`; the contracts compared the two with `!=`
+  instead of the compatibility rule the rest of the compiler already uses.
+- **`+` refused dynamically typed operands.** `"prefix" + value` was the only
+  operator that rejected a value of unknown type — comparisons, calls and
+  interpolation all accept them. It now does too, and the result stays
+  `Unknown`. `Int + String` and `Array + Int` are still rejected.
+- **`!` on an unknown value, and the unary contract that checked it, both
+  required a known `Bool`.** Both now accept `Unknown`, like the comparison
+  operators do.
+- **`nxl test` could not see a project's modules.** It compiled each file in
+  `tests/` on its own, so a test importing `app.config` failed with "use of
+  undeclared name". It now loads the project, like `nxl check` does, and
+  resolves imports against the entry's directory.
+
+### Toolchain
+
+- **`nexora repl`**: a persistent session — definitions, imports, the module
+  scope and local bindings survive between lines, and `--replay <file>` feeds a
+  transcript through the same session path.
+- **`nexora dev`**: a real development server (Axum/Tokio). It serves the
+  project over HTTP, watches the source tree, and pushes a reload over SSE when
+  a file changes (matched by content hash, so a touch alone does not trigger
+  one). It compiles to JavaScript only, and it does not yet execute NXL on the
+  server side.
+- **`pkg publish`**: no longer a stub. Packages are written to a registry
+  directory with an `index.json`, per-package `package.json` and SHA-256
+  checksums, and `pkg install`/`add`/`search`/`info` read them back through
+  `--registry`. Still no hosted registry and no signing.
+
+### Editor and brand
+
+- **VS Code extension** (`editors/vscode-nxl`): `.nxl` language registration,
+  a syntax grammar generated from the compiler's own lexer, the `.nxl` file
+  icon, and Run/Check/Build commands that invoke the real compiler. No language
+  server yet, so completion, hover and inline diagnostics are absent.
+- **Brand assets**: `scripts/make-brand-assets.ps1` regenerates every image
+  from `favicon.ico` — the extension icons (`nxl-32/64/128.png`, `nxl.svg`), the
+  marketplace banner (1280x600), the GitHub social preview (1280x640) and the
+  512x512 logo used by the READMEs. VS Code rejects `.ico` language icons, and
+  the checked-in ICO has a malformed header and an opaque white background, so
+  the generator flood fills the border-connected background into alpha before
+  scaling; otherwise every icon keeps white corners. Verified by
+  `node editors/vscode-nxl/scripts/verify-extension.js`, which now also checks
+  the generated image dimensions.
+
 ## [0.1.0] - 2026-10-14
 
 ### Language (phases 1-6, all approved)

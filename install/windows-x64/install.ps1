@@ -82,7 +82,29 @@ foreach ($line in Get-Content -LiteralPath $checksumFile) {
 }
 if (-not $expected) { Fail "checksums.sha256 has no entry for $($script:ExeName)." }
 
-$actual = (Get-FileHash -LiteralPath $sourceExe -Algorithm SHA256).Hash.ToLowerInvariant()
+# Hashed with .NET rather than Get-FileHash: that cmdlet lives in
+# Microsoft.PowerShell.Utility and is resolved through module auto-loading, so
+# it disappears whenever PSModulePath or module autoloading is not what this
+# script assumes (observed on the GitHub Windows runner). SHA256.Create() is
+# part of the runtime itself and is always there.
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $bytes = $sha.ComputeHash($stream)
+        } finally {
+            $sha.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+    return ([System.BitConverter]::ToString($bytes)).Replace('-', '').ToLowerInvariant()
+}
+
+$actual = Get-Sha256Hex -Path $sourceExe
 if ($actual -ne $expected) {
     Fail "SHA-256 mismatch for $($script:ExeName).`n  expected $expected`n  actual   $actual`nThe download is corrupt or tampered with; nothing was installed."
 }
