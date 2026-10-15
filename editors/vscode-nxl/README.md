@@ -1,7 +1,7 @@
 # NXL for Visual Studio Code
 
-Syntax highlighting, a file icon for `.nxl`, and commands that run the real
-compiler.
+Syntax highlighting, a file icon for `.nxl`, a language server, and commands
+that run the real compiler.
 
 ## What you get
 
@@ -11,6 +11,9 @@ compiler.
 - **Highlighting** for keywords, types, declarations, string interpolation,
   comments and operators. The keyword list is taken from the compiler's own
   lexer (`compiler/src/lexer.rs`), so it cannot drift silently.
+- **Language server** (`nxlc lsp`): completion, hover, go-to-definition,
+  find-references, the symbol outline and diagnostics. Diagnostics come from the
+  real compiler, so they are the same errors `nxlc check` reports.
 - **Commands**: `NXL: Run File`, `NXL: Check File`, `NXL: Build Project`. The
   run command also appears as a play button in the editor title bar for `.nxl`
   files. Output goes to an "NXL" output channel, including the compiler's exit
@@ -24,11 +27,23 @@ The `nxlc` compiler on your PATH. Point the extension elsewhere with:
 "nxl.compilerPath": "/full/path/to/nxlc"
 ```
 
+If it cannot be started, the commands and highlighting still work and the
+language-server features are simply absent — they are never faked.
+
 ## Not included yet
 
-No language server, so no completion, hover or inline diagnostics. `nxlc check`
-output is shown in the output channel instead. (The compiler already contains
-an NLS module; wiring it up is future work.)
+No cross-file rename or refactoring, and no completions that use types rather
+than names: the completion list is the language's keywords plus the symbols in
+the open document. The NLS module documents exactly what it answers and what it
+does not (`compiler/src/nls.rs`).
+
+## How the language client works
+
+`language-client.js` is a dependency-free JSON-RPC client: it spawns
+`nxlc lsp` and speaks Content-Length framed messages over stdio, so the
+extension needs no `npm install` and loads from source. It is deliberately
+small — it implements only what the NXL server answers, and requests time out
+rather than hanging the editor if the server stops.
 
 ## Installing from source
 
@@ -73,5 +88,18 @@ node scripts/verify-extension.js
 
 Checks that the manifest is complete, that `.nxl` is claimed, that the icon and
 banner files exist at the sizes the marketplace expects, that the generated PNG
-and SVG assets are present, and that the extension entry point parses — all
-without needing the VS Code toolchain.
+and SVG assets are present, that `extension.js` loads and uses the language
+client, and that both entry points parse — all without needing the VS Code
+toolchain.
+
+From the repository root, two more checks exercise the language server against
+the real binary:
+
+```bash
+node scripts/lsp-smoke.js compiler/target/release/nxlc.exe
+node scripts/lsp-client-check.js compiler/target/release/nxlc.exe
+```
+
+The second one drives this extension's own `language-client.js`, so a client
+that cannot hold a conversation with the server fails rather than quietly
+offering no completion. Both run as part of `cargo test`.

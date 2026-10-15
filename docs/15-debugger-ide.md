@@ -15,4 +15,18 @@ The VM emits `Opcode::DebugSpan(span)` per executed NIR instruction; `debugger::
 
 ## Editors
 
-A VS Code extension lives in [`editors/vscode-nxl`](../editors/vscode-nxl/README.md). IMPLEMENTED: syntax highlighting, the `.nxl` file icon, and Run/Check/Build commands that invoke the real compiler. NOT IMPLEMENTED: completion, hover and inline diagnostics — the extension has no language server, so `nxlc check` output goes to the extension's output channel instead. The NLS module that would back those features already exists in the compiler crate and is not yet wired to the editor.
+A VS Code extension lives in [`editors/vscode-nxl`](../editors/vscode-nxl/README.md).
+
+IMPLEMENTED: `.nxl` highlighting, the NXL file icon, Run/Check/Build commands,
+and a language server (`nxlc lsp`) providing completion, hover, go-to-definition,
+find-references, the symbol outline and diagnostics. Diagnostics come from the
+real compiler, so they are the same errors `nxlc check` reports.
+
+NOT IMPLEMENTED: cross-file rename and refactoring, and completions that use
+types rather than names — the completion list is the language's keywords plus
+the symbols in the open document, and cross-file lookups are lexical rather than
+scope-resolved.
+
+The server is `compiler/src/nls.rs`. `scripts/lsp-smoke.js` and
+`scripts/lsp-client-check.js` drive it over real stdio, the second one through
+the extension's own client, and both run in the test suite.

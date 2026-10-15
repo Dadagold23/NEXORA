@@ -161,6 +161,38 @@ if (fs.existsSync(path.join(root, 'extension.js'))) {
   new Function('require', 'module', 'exports', source);
 }
 
+// The extension's language client is the same story: it must exist and parse,
+// and extension.js must actually use it. A client left unwired would look fine
+// on disk while the editor quietly offered no completion at all.
+const clientPath = path.join(root, 'language-client.js');
+check(fs.existsSync(clientPath), 'language-client.js is missing');
+if (fs.existsSync(clientPath)) {
+  const client = fs.readFileSync(clientPath, 'utf8');
+  // eslint-disable-next-line no-new-func
+  new Function('require', 'module', 'exports', client);
+  for (const piece of ['Content-Length', 'textDocument/publishDiagnostics', 'request']) {
+    check(
+      client.includes(piece),
+      `language-client.js does not look like an LSP client: no ${piece}`
+    );
+  }
+  if (fs.existsSync(path.join(root, 'extension.js'))) {
+    const source = fs.readFileSync(path.join(root, 'extension.js'), 'utf8');
+    check(
+      source.includes("require('./language-client')"),
+      'extension.js does not load the language client'
+    );
+    for (const feature of [
+      'registerCompletionItemProvider',
+      'registerHoverProvider',
+      'registerDefinitionProvider',
+      'createDiagnosticCollection',
+    ]) {
+      check(source.includes(feature), `extension.js does not register ${feature}`);
+    }
+  }
+}
+
 function report() {
   if (problems.length > 0) {
     console.error('extension verification failed:');

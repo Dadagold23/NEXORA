@@ -1,6 +1,6 @@
-//! P20 — NLS Language Server
+//! P20 â€” NLS Language Server
 //!
-//! The language service reuses the compiler's real lexer/parser/HIR/NIR —
+//! The language service reuses the compiler's real lexer/parser/HIR/NIR â€”
 //! there is deliberately no second, incompatible parser.
 //!
 //! # Status
@@ -431,111 +431,404 @@ fn identifier_at(source: &str, offset: usize) -> Option<String> {
     Some(source[from..to].to_owned())
 }
 
-// ── Minimal JSON-RPC LSP bridge ───────────────────────────────────────
+// ── LSP server ──────────────────────────────────────────────────────────
+//
+// The Language Server Protocol is a request/response protocol over a stream:
+// the client opens a document with `textDocument/didOpen` and keeps it
+// up to date with `textDocument/didChange`, then asks questions about it.
+// Requests carry a URI, never the text.
+//
+// An earlier version of this file took the source inline in every request,
+// which no LSP client ever sends, and advertised hover and definition that it
+// did not answer. Both are corrected here.
 
-/// Handle one JSON-RPC request object and produce a response (or empty string
-/// for notifications). Pure function; `serve` wires real stdio.
-pub fn handle_message(json: &str) -> String {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
-        return r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error"}}"#
-            .to_string();
-    };
-    let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
-    let id = v.get("id").cloned().unwrap_or(serde_json::Value::Null);
-    match method {
-        "initialize" => format!(
-            r#"{{"jsonrpc":"2.0","id":{},"result":{{"capabilities":{{"completionProvider":{{}},"hoverProvider":true,"definitionProvider":true,"documentSymbolProvider":true,"referencesProvider":true,"workspaceSymbolProvider":true}}}}}}"#,
-            id
-        ),
-        "textDocument/completion" => {
-            let text = v
-                .pointer("/params/textDocument/text")
-                .and_then(|t| t.as_str())
-                .unwrap_or("");
-            let items: Vec<String> = completions(text)
-                .iter()
-                .map(|c| format!(r#"{{"label":"{c}"}}"#))
-                .collect();
-            format!(
-                r#"{{"jsonrpc":"2.0","id":{},"result":{{"isIncomplete":false,"items":[{}]}}}}"#,
+/// A document the client currently has open.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Document {
+    pub text: String,
+    pub version: i64,
+}
+
+/// A stateful language server for one client connection.
+#[derive(Debug, Default)]
+pub struct Server {
+    documents: BTreeMap<String, Document>,
+    shutdown_requested: bool,
+    exit_requested: bool,
+}
+
+impl Server {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The text the client last sent for `uri`.
+    pub fn document(&self, uri: &str) -> Option<&Document> {
+        self.documents.get(uri)
+    }
+
+    pub fn open_document_count(&self) -> usize {
+        self.documents.len()
+    }
+
+    pub fn is_shutdown(&self) -> bool {
+        self.shutdown_requested
+    }
+
+    /// Set once the client has asked the server to stop.
+    pub fn should_exit(&self) -> bool {
+        self.exit_requested
+    }
+
+    /// Handle one incoming message.
+    ///
+    /// Returns every message to send back: usually a single response, nothing
+    /// for a notification, and a response plus diagnostics after a change.
+    pub fn handle(&mut self, json: &str) -> Vec<String> {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+            return vec![error_response(
+                serde_json::Value::Null,
+                -32700,
+                "parse error",
+            )];
+        };
+        let method = value
+            .get("method")
+            .and_then(|m| m.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let id = value.get("id").cloned();
+        let params = value
+            .get("params")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+
+        match method.as_str() {
+            "initialize" => vec![response(
                 id,
-                items.join(",")
-            )
-        }
-        "textDocument/documentSymbol" => {
-            let text = v
-                .pointer("/params/textDocument/text")
-                .and_then(|t| t.as_str())
-                .unwrap_or("");
-            let items: Vec<String> = collect_symbols(text)
-                .iter()
-                .map(|s| format!(r#"{{"name":"{}","kind":"{}"}}"#, s.name, s.kind))
-                .collect();
-            format!(
-                r#"{{"jsonrpc":"2.0","id":{},"result":[{}]}}"#,
-                id,
-                items.join(",")
-            )
-        }
-        "textDocument/references" => {
-            let text = v
-                .pointer("/params/textDocument/text")
-                .and_then(|t| t.as_str())
-                .unwrap_or("");
-            let line = v
-                .pointer("/params/position/line")
-                .and_then(|n| n.as_u64())
-                .unwrap_or(1) as usize;
-            let col = v
-                .pointer("/params/position/character")
-                .and_then(|n| n.as_u64())
-                .unwrap_or(1) as usize;
-            let name = offset_of(text, line, col).and_then(|o| identifier_at(text, o));
-            let items: Vec<String> = name
-                .map(|n| references(text, &n))
-                .unwrap_or_default()
-                .iter()
-                .map(|(l, c)| format!(r#"{{"path":"buffer","line":{l},"col":{c}}}"#))
-                .collect();
-            format!(
-                r#"{{"jsonrpc":"2.0","id":{},"result":[{}]}}"#,
-                id,
-                items.join(",")
-            )
-        }
-        "workspace/symbol" => {
-            let mut workspace = Workspace::new();
-            if let Some(map) = v.pointer("/params/files").and_then(|f| f.as_object()) {
-                for (path, src) in map {
-                    if let Some(text) = src.as_str() {
-                        workspace.add_file(path, text);
-                    }
+                serde_json::json!({
+                    "capabilities": {
+                        // 1 = the client sends the whole document on change.
+                        "textDocumentSync": 1,
+                        "completionProvider": { "triggerCharacters": [".", " "] },
+                        "hoverProvider": true,
+                        "definitionProvider": true,
+                        "documentSymbolProvider": true,
+                        "referencesProvider": true,
+                    },
+                    "serverInfo": { "name": "nxlc", "version": env!("CARGO_PKG_VERSION") },
+                }),
+            )],
+            "initialized" => Vec::new(),
+            "shutdown" => {
+                self.shutdown_requested = true;
+                vec![response(id, serde_json::Value::Null)]
+            }
+            "exit" => {
+                self.exit_requested = true;
+                Vec::new()
+            }
+            "textDocument/didOpen" => {
+                let uri = document_uri(&params);
+                if let Some(uri) = uri {
+                    let text = params
+                        .pointer("/textDocument/text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    let version = params
+                        .pointer("/textDocument/version")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    self.documents
+                        .insert(uri.clone(), Document { text, version });
+                    return self.diagnostics_for(&uri);
+                }
+                Vec::new()
+            }
+            "textDocument/didChange" => {
+                let uri = document_uri(&params);
+                if let Some(uri) = uri {
+                    // Full synchronisation: the last change carries everything.
+                    let text = params
+                        .pointer("/contentChanges")
+                        .and_then(|changes| changes.as_array())
+                        .and_then(|changes| changes.last())
+                        .and_then(|change| change.get("text"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    let version = params
+                        .pointer("/textDocument/version")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or_else(|| {
+                            self.documents
+                                .get(&uri)
+                                .map(|document| document.version + 1)
+                                .unwrap_or(1)
+                        });
+                    self.documents
+                        .insert(uri.clone(), Document { text, version });
+                    return self.diagnostics_for(&uri);
+                }
+                Vec::new()
+            }
+            "textDocument/didSave" => match document_uri(&params) {
+                Some(uri) => self.diagnostics_for(&uri),
+                None => Vec::new(),
+            },
+            "textDocument/didClose" => match document_uri(&params) {
+                Some(uri) => {
+                    self.documents.remove(&uri);
+                    // Clear the squiggles the client is still showing.
+                    vec![notification(
+                        "textDocument/publishDiagnostics",
+                        serde_json::json!({ "uri": uri, "diagnostics": [] }),
+                    )]
+                }
+                None => Vec::new(),
+            },
+            "textDocument/completion" => {
+                let Some(text) = self.text_for(&params) else {
+                    return vec![response(
+                        id,
+                        serde_json::json!({ "isIncomplete": false, "items": [] }),
+                    )];
+                };
+                let items = completions(&text)
+                    .into_iter()
+                    .map(|label| serde_json::json!({ "label": label, "kind": 1 }))
+                    .collect::<Vec<_>>();
+                vec![response(
+                    id,
+                    serde_json::json!({ "isIncomplete": false, "items": items }),
+                )]
+            }
+            "textDocument/hover" => {
+                let Some(text) = self.text_for(&params) else {
+                    return vec![response(id, serde_json::Value::Null)];
+                };
+                let (line, column) = lsp_position(&params);
+                // `hover` works in 1-based line/column.
+                match hover(&text, line + 1, column + 1) {
+                    Some(description) => vec![response(
+                        id,
+                        serde_json::json!({
+                            "contents": { "kind": "markdown", "value": format!("```nxl\n{description}\n```") }
+                        }),
+                    )],
+                    None => vec![response(id, serde_json::Value::Null)],
                 }
             }
-            let items: Vec<String> = workspace
-                .symbol_index()
-                .iter()
-                .flat_map(|(name, locs)| {
-                    locs.iter().map(move |loc| {
-                        format!(
-                            r#"{{"name":"{name}","path":"{}","line":{}}}"#,
-                            loc.path, loc.line
-                        )
+            "textDocument/definition" => {
+                let Some(text) = self.text_for(&params) else {
+                    return vec![response(id, serde_json::Value::Null)];
+                };
+                let uri = document_uri(&params).unwrap_or_default();
+                let (line, column) = lsp_position(&params);
+                let offset = offset_of(&text, line + 1, column + 1);
+                match offset
+                    .and_then(|offset| identifier_at(&text, offset))
+                    .and_then(|name| definition(&text, &name))
+                {
+                    Some((target_line, target_column)) => vec![response(
+                        id,
+                        serde_json::json!([{
+                            "uri": uri,
+                            "range": {
+                                "start": { "line": target_line - 1, "character": target_column - 1 },
+                                "end": { "line": target_line - 1, "character": target_column - 1 }
+                            }
+                        }]),
+                    )],
+                    None => vec![response(id, serde_json::Value::Null)],
+                }
+            }
+            "textDocument/documentSymbol" => {
+                let Some(text) = self.text_for(&params) else {
+                    return vec![response(id, serde_json::json!([]))];
+                };
+                let items = document_symbols(&text);
+                vec![response(id, serde_json::json!(items))]
+            }
+            "textDocument/references" => {
+                let Some(text) = self.text_for(&params) else {
+                    return vec![response(id, serde_json::json!([]))];
+                };
+                let uri = document_uri(&params).unwrap_or_default();
+                let (line, column) = lsp_position(&params);
+                let locations = offset_of(&text, line + 1, column + 1)
+                    .and_then(|offset| identifier_at(&text, offset))
+                    .map(|name| {
+                        references(&text, &name)
+                            .into_iter()
+                            .map(|(found_line, found_column)| {
+                                serde_json::json!({
+                                    "uri": uri,
+                                    "range": {
+                                        "start": { "line": found_line - 1, "character": found_column - 1 },
+                                        "end": { "line": found_line - 1, "character": found_column - 1 }
+                                    }
+                                })
+                            })
+                            .collect::<Vec<_>>()
                     })
-                })
-                .collect();
-            format!(
-                r#"{{"jsonrpc":"2.0","id":{},"result":[{}]}}"#,
-                id,
-                items.join(",")
-            )
+                    .unwrap_or_default();
+                vec![response(id, serde_json::json!(locations))]
+            }
+            "$/cancelRequest" | "$/setTrace" => Vec::new(),
+            other => match id {
+                // A notification we do not implement must not be answered.
+                None => Vec::new(),
+                Some(id) => vec![error_response(
+                    id,
+                    -32601,
+                    &format!("method not found: {other}"),
+                )],
+            },
         }
-        m if m.ends_with("/notification") || m == "initialized" => String::new(),
-        _ => format!(
-            r#"{{"jsonrpc":"2.0","id":{},"error":{{"code":-32601,"message":"method not found: {method}"}}}}"#,
-            id
-        ),
     }
+
+    /// The document text a request refers to, if the client has it open.
+    fn text_for(&self, params: &serde_json::Value) -> Option<String> {
+        let uri = document_uri(params)?;
+        self.documents
+            .get(&uri)
+            .map(|document| document.text.clone())
+    }
+
+    /// Compile the document and publish what the compiler says.
+    fn diagnostics_for(&mut self, uri: &str) -> Vec<String> {
+        let Some(document) = self.documents.get(uri) else {
+            return Vec::new();
+        };
+        let items = published_diagnostics(&document.text);
+        vec![notification(
+            "textDocument/publishDiagnostics",
+            serde_json::json!({ "uri": uri, "diagnostics": items }),
+        )]
+    }
+}
+
+fn document_uri(params: &serde_json::Value) -> Option<String> {
+    params
+        .pointer("/textDocument/uri")
+        .and_then(|uri| uri.as_str())
+        .map(str::to_owned)
+}
+
+/// The 0-based line/character a request points at.
+///
+/// LSP counts characters in UTF-16 units while the compiler counts characters,
+/// which agrees for every code point in the Basic Multilingual Plane and
+/// differs only for astral characters such as emoji.
+fn lsp_position(params: &serde_json::Value) -> (usize, usize) {
+    let line = params
+        .pointer("/position/line")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0) as usize;
+    let character = params
+        .pointer("/position/character")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0) as usize;
+    (line, character)
+}
+
+/// Diagnostics in the shape an editor expects, with the real error position.
+pub fn published_diagnostics(source_text: &str) -> Vec<serde_json::Value> {
+    let file = SourceFile::new("buffer", source_text);
+    match crate::compile_to_nir(&file) {
+        Ok(_) => Vec::new(),
+        Err(diagnostic) => {
+            let (line, column) = file.line_column(diagnostic.span.start);
+            vec![serde_json::json!({
+                "range": {
+                    "start": { "line": line - 1, "character": column - 1 },
+                    "end": { "line": line - 1, "character": column - 1 }
+                },
+                "severity": 1,
+                "source": "nxlc",
+                "message": diagnostic.message,
+            })]
+        }
+    }
+}
+
+/// Document symbols with the ranges an outline view needs.
+pub fn document_symbols(source_text: &str) -> Vec<serde_json::Value> {
+    collect_symbols(source_text)
+        .into_iter()
+        .map(|symbol| {
+            let start = position_of(source_text, symbol.span.start);
+            let end = position_of(source_text, symbol.span.end.max(symbol.span.start));
+            serde_json::json!({
+                "name": symbol.name,
+                // SymbolKind: Function 12, Variable 13, Struct 23, Class 5,
+                // Interface 11, Enum 10, Method 6, Module 2.
+                "kind": symbol_kind_number(symbol.kind),
+                "range": { "start": start, "end": end },
+                "selectionRange": { "start": start, "end": end },
+            })
+        })
+        .collect()
+}
+
+fn symbol_kind_number(kind: &str) -> u32 {
+    match kind {
+        "function" => 12,
+        "variable" => 13,
+        "struct" => 23,
+        "class" => 5,
+        "actor" => 5,
+        "interface" => 11,
+        "trait" => 11,
+        "enum" => 10,
+        "alias" => 13,
+        "module" => 2,
+        _ => 13,
+    }
+}
+
+/// A byte offset as a 0-based LSP position.
+fn position_of(source_text: &str, offset: usize) -> serde_json::Value {
+    let mut offset = offset.min(source_text.len());
+    while offset > 0 && !source_text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    let prefix = &source_text[..offset];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
+    let character = prefix
+        .rsplit('\n')
+        .next()
+        .map_or(0, |last| last.chars().count());
+    serde_json::json!({ "line": line, "character": character })
+}
+
+fn response(id: Option<serde_json::Value>, result: serde_json::Value) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id.unwrap_or(serde_json::Value::Null),
+        "result": result,
+    })
+    .to_string()
+}
+
+fn error_response(id: serde_json::Value, code: i64, message: &str) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": code, "message": message },
+    })
+    .to_string()
+}
+
+fn notification(method: &str, params: serde_json::Value) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+    })
+    .to_string()
 }
 
 /// Run a stdio JSON-RPC loop reading Content-Length framed messages.
@@ -543,6 +836,8 @@ pub fn serve_stdio() -> std::io::Result<()> {
     use std::io::{BufRead, BufReader, Read, Write};
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
+    let mut stdout = std::io::stdout();
+    let mut server = Server::new();
     loop {
         let mut content_length = 0usize;
         loop {
@@ -550,26 +845,33 @@ pub fn serve_stdio() -> std::io::Result<()> {
             if reader.read_line(&mut header)? == 0 {
                 return Ok(());
             }
-            let h = header.trim();
-            if h.is_empty() {
+            let trimmed = header.trim();
+            if trimmed.is_empty() {
                 break;
             }
-            if let Some(v) = h.strip_prefix("Content-Length: ") {
-                content_length = v.trim().parse().unwrap_or(0);
+            if let Some(value) = trimmed.strip_prefix("Content-Length: ") {
+                content_length = value.trim().parse().unwrap_or(0);
             }
+        }
+        if content_length == 0 {
+            continue;
         }
         let mut body = vec![0u8; content_length];
         reader.read_exact(&mut body)?;
         let Ok(text) = String::from_utf8(body) else {
             continue;
         };
-        let response = handle_message(&text);
-        if response.is_empty() {
-            continue;
+        for message in server.handle(&text) {
+            write!(
+                stdout,
+                "Content-Length: {}\r\n\r\n{}",
+                message.len(),
+                message
+            )?;
         }
-        let out = format!("Content-Length: {}\r\n\r\n{}", response.len(), response);
-        let mut stdout = std::io::stdout();
-        stdout.write_all(out.as_bytes())?;
         stdout.flush()?;
+        if server.should_exit() {
+            return Ok(());
+        }
     }
 }

@@ -227,7 +227,7 @@ fn web_template_creates_a_full_project_worktree() {
         "src/app/config.nxl",
         "src/app/routes.nxl",
         "src/app/state.nxl",
-        "public/index.html",
+        "public/index.nxl",
         "public/styles.css",
         "public/bootstrap.js",
         "public/favicon.svg",
@@ -239,21 +239,33 @@ fn web_template_creates_a_full_project_worktree() {
         );
     }
 
-    // The landing page carries a splash screen and loads the program.
-    let index = fs::read_to_string(project.join("public/index.html")).unwrap();
+    // The page is a program, not markup somebody has to keep in step by hand:
+    // it renders on the server from the same modules as the app.
     assert!(
-        index.contains("id=\"splash\""),
-        "the page needs a splash screen"
+        !project.join("public/index.html").exists(),
+        "the page must be written in NXL, not in another language"
     );
-    assert!(index.contains("/app.js"), "the page must load the program");
+    let page_source = fs::read_to_string(project.join("public/index.nxl")).unwrap();
     assert!(
-        index.contains("/bootstrap.js"),
-        "the bridge must load first"
+        page_source.contains("from app.config import app_name"),
+        "the page must take its copy from the project's own modules: {page_source}"
     );
+
+    // Rendering it produces the page, splash and program tags included.
+    let rendered = nxl_compiler::dev::render_page(&project)
+        .expect("the project has a page")
+        .expect("the page renders");
+    assert!(rendered.contains("<!doctype html>"), "{rendered}");
     assert!(
-        index.contains("/styles.css"),
-        "the page must load its stylesheet"
+        rendered.contains("id=\"splash\""),
+        "the page needs a splash screen: {rendered}"
     );
+    assert!(rendered.contains("<title>site"), "{rendered}");
+    assert!(rendered.contains("NXL application"), "{rendered}");
+    let injected = nxl_compiler::dev::inject_scripts(&rendered);
+    assert!(injected.contains("/app.js"), "{injected}");
+    assert!(injected.contains("/bootstrap.js"), "{injected}");
+    assert!(injected.contains("/styles.css"), "{injected}");
 
     // The manifest names the project and targets JavaScript.
     let manifest = fs::read_to_string(project.join("nxl.toml")).unwrap();

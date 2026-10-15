@@ -94,7 +94,7 @@ not happen.
   src/app/config.nxl    name, tagline and features
   src/app/routes.nxl    the routes the dev server exposes
   src/app/state.nxl     AppState, the boot state machine
-  public/index.html     landing page, including the splash screen
+  public/index.nxl      the page, written in NXL and rendered on the server
   public/styles.css     page and splash styling
   public/bootstrap.js   turns the program's print() output into the page
   public/favicon.svg    the mark used by the page and the tab

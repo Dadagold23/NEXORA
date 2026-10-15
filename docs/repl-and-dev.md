@@ -50,11 +50,12 @@ nxl dev --no-watch      # do not recompile on change
 The server:
 
 - compiles the project to JavaScript and serves it at `/app.js`,
-- serves `public/index.html` at `/` when the project has a `public/`
-  directory, and every file under it at its own path; otherwise it serves a
-  generated host page,
-- injects `/app.js` and `/reload.js` into a project page that does not load
-  them, so a hand-written page does not silently end up empty,
+- serves the project's own page at `/`: `public/index.nxl` first, then
+  `public/index.html`, and finally its own generated page when a project ships
+  no front end,
+- serves every other file under `public/` at its own path,
+- injects `/app.js` and `/reload.js` into a page that does not load them, so a
+  hand-written page does not silently end up empty,
 - serves a reload client at `/reload.js`,
 - watches every `.nxl` file, recompiles when one changes, and pushes a
   reload over Server-Sent Events at `/reload`,
@@ -70,11 +71,30 @@ It binds loopback by default and prints the URL it is listening on.
 
 ### Web projects
 
-`nxl new web <name>` scaffolds a project whose `public/` holds a landing page,
-and that page is wired to the program rather than decorated around it. NXL has
-no DOM types yet, so `print()` compiles to `console.log` and the template's
-`public/bootstrap.js` takes that over before the program runs, turning the boot
-log into the page:
+`nxl new web <name>` scaffolds a project whose page is itself a NXL program.
+`public/index.nxl` is compiled and run on the server and whatever it prints is
+served as HTML, so the page imports the same modules as the app:
+
+```nxl
+from app.config import app_name;
+
+fn main() {
+    print(`<h1>`);
+    print(app_name());
+    print(`</h1>`);
+}
+```
+
+Change `app_name()` and both the app and the page show the new name. Run
+`nxl run public/index.nxl` to see the page without starting a server.
+
+`public/index.html` still works if a project really does want a hand-written
+page; the NXL page takes precedence, and a page that fails to compile reports
+why rather than silently falling back to the generated one.
+
+In the browser the page stays live: NXL has no DOM types, so `print()`
+compiles to `console.log` and the template's `public/bootstrap.js` takes it over
+before the program runs, turning the boot log into the page:
 
 | The program prints   | The page does                             |
 | -------------------- | ----------------------------------------- |
@@ -98,8 +118,11 @@ suite runs it against the scaffolded template.
   the JavaScript backend, because NXL has no HTTP types in the language yet and
   so no handler can be written in NXL. Server-side demonstrations live behind
   `nxl serve` (NUF).
-- It is **not** a page builder. It serves whatever is in `public/`; it does not
-  compile templates, process assets or rewrite HTML.
+- It is **not** a page builder. It serves whatever is under `public/`, renders
+  `public/index.nxl` when there is one, and does not compile templates,
+  process assets or rewrite HTML.
+- The page is rendered by running a program on the VM, so a page cannot use
+  concurrency either, and rendering is per request rather than cached.
 - Concurrency (`spawn`, `await`, channels) is **not available in the browser**;
   the compiler refuses it for JavaScript targets. Run such programs with
   `nxl run` on the VM.

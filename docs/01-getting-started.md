@@ -43,10 +43,11 @@ cd site && nexora dev      # http://127.0.0.1:3000
 works too. `new` resolves and locks the new project's dependencies before it
 returns, so the project is ready to run.
 
-A web project is served by `nexora dev`, which compiles it to JavaScript, serves
-the landing page in `public/`, and reloads the browser when you edit a source
-file. The program runs in the browser; NXL has no server-side HTTP types yet.
-See [repl-and-dev.md](repl-and-dev.md) for exactly what the dev server does.
+A web project is served by `nexora dev`, which compiles it to JavaScript, runs
+`public/index.nxl` to produce the page, serves the rest of `public/`, and
+reloads the browser when you edit a source file. The program runs in the
+browser; NXL has no server-side HTTP types yet. See
+[repl-and-dev.md](repl-and-dev.md) for exactly what the dev server does.
 
 ## Project layout created by `nexora new console`:
 
@@ -71,7 +72,7 @@ site/
   src/app/config.nxl    # name, tagline and features
   src/app/routes.nxl    # the routes the dev server exposes
   src/app/state.nxl     # AppState, the boot state machine
-  public/index.html     # landing page, including the splash screen
+  public/index.nxl      # the page, written in NXL and rendered on the server
   public/styles.css     # page and splash styling
   public/bootstrap.js   # turns the program's print() output into the page
   public/favicon.svg    # the mark used by the page and the tab

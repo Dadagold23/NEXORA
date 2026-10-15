@@ -992,8 +992,8 @@ pub const WEB_TEMPLATE: [(&str, &str); 12] = [
         include_str!("../../templates/web/src/app/state.nxl"),
     ),
     (
-        "public/index.html",
-        include_str!("../../templates/web/public/index.html"),
+        "public/index.nxl",
+        include_str!("../../templates/web/public/index.nxl"),
     ),
     (
         "public/styles.css",
@@ -1197,7 +1197,7 @@ pub fn cmd_check(dir: &Path, file: Option<&str>) -> CliResult<Vec<String>> {
         return Err(err("NXL12006", format!("cannot read '{}'", path.display())));
     }
     // Project-aware: resolves imports next to the entry file when present.
-    crate::project::compile_project(&path).map_err(CliError::from)?;
+    compile_in_project(dir, &path).map_err(CliError::from)?;
     Ok(vec![format!("ok: {}", path.display())])
 }
 
@@ -1257,13 +1257,33 @@ pub fn cmd_build(dir: &Path, release: bool) -> CliResult<BuildResult> {
     })
 }
 
+/// Compile a file that belongs to this project, resolving `app.*` imports
+/// against the project's source directory rather than the file's own.
+///
+/// The entry point lives in `src/`, so `src/main.nxl` importing `app.config`
+/// finds `src/app/config.nxl`. A file elsewhere in the project - a test in
+/// `tests/`, or a page in `public/` - means the same thing by the same import,
+/// so every file in a project is compiled with the same module root instead of
+/// each one looking in its own directory and finding nothing.
+fn compile_in_project(
+    dir: &Path,
+    file: &Path,
+) -> Result<crate::nir::Module, crate::diagnostic::Diagnostic> {
+    let module_root = ProjectConfig::load(dir)
+        .map(|config| dir.join(&config.entry))
+        .ok()
+        .and_then(|entry| entry.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| dir.join("src"));
+    crate::project::compile_project_with_modules(file, &module_root)
+}
+
 pub fn cmd_run(dir: &Path, file: Option<&str>) -> CliResult<crate::runtime::ExecutionResult> {
     let cfg = ProjectConfig::load(dir)?;
     let path = resolve_file(dir, file, &cfg);
     if fs::read_to_string(&path).is_err() {
         return Err(err("NXL12006", format!("cannot read '{}'", path.display())));
     }
-    let module = crate::project::compile_project(&path).map_err(CliError::from)?;
+    let module = compile_in_project(dir, &path).map_err(CliError::from)?;
     // Prefer the in-process VM so `run` works without Node.js; fall back to
     // the JS runtime when the VM cannot execute the program.
     match crate::vm::execute(&module) {
@@ -1282,7 +1302,6 @@ pub fn cmd_run(dir: &Path, file: Option<&str>) -> CliResult<crate::runtime::Exec
 }
 
 pub fn cmd_test(dir: &Path, filter: Option<&str>) -> CliResult<TestReport> {
-    let cfg = ProjectConfig::load(dir).unwrap_or_default();
     let tests_dir = dir.join("tests");
     let mut files: Vec<PathBuf> = Vec::new();
     if tests_dir.is_dir() {
@@ -1308,17 +1327,12 @@ pub fn cmd_test(dir: &Path, filter: Option<&str>) -> CliResult<TestReport> {
         match fs::read_to_string(path) {
             Ok(text) => {
                 let _ = text;
-                // Project-aware, like `check`: a test file may import the
+                // Project-aware, like `check` and `run`: a test may import the
                 // modules it is testing, which is the point of testing a
                 // multi-file project. The module root is the entry's own
                 // directory, so `tests/basic.nxl` importing `app.config`
                 // finds `src/app/config.nxl`.
-                let module_root = dir
-                    .join(&cfg.entry)
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| dir.to_path_buf());
-                match crate::project::compile_project_with_modules(path, &module_root) {
+                match compile_in_project(dir, path) {
                     Ok(_) => passed += 1,
                     Err(d) => {
                         failures.push(format!("{}: {}[{}]", path.display(), d.message, d.code))
@@ -1382,9 +1396,10 @@ pub fn cmd_platforms() -> String {
 }
 
 pub fn cmd_lsp() -> CliResult<()> {
-    // Real stdio loop lives behind the NLS module; the CLI entry point only
-    // validates that the server can initialise.
-    Ok(())
+    // A real stdio loop: the editor launches `nxlc lsp` and speaks JSON-RPC
+    // over its stdin/stdout. It previously returned without reading anything,
+    // so a client that connected got no answer and no diagnostics.
+    crate::nls::serve_stdio().map_err(|e| err("NXL12004", e.to_string()))
 }
 
 pub fn cmd_serve(_dir: &Path) -> CliResult<String> {
