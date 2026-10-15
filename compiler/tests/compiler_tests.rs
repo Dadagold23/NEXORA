@@ -1,5 +1,22 @@
 use nxl_compiler::{compile_to_nir, diagnostic::Severity, source::SourceFile};
 
+/// Serialises the tests that spawn a `node` process.
+///
+/// Each of these starts a real interpreter. The suite runs tests in parallel and
+/// the release runner is also compiling and packing, so a dozen interpreters
+/// starting at once pushed trivial programs past the runtime's own 30 second
+/// limit and the release failed with NXL8003 on Windows while CI passed. That
+/// is a harness problem, not a compiler one: the work is queued here rather than
+/// by lengthening the product's execution timeout.
+static NODE_RUNTIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn on_node<T>(body: impl FnOnce() -> T) -> T {
+    let _guard = NODE_RUNTIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    body()
+}
+
 #[test]
 fn lowers_variables_arithmetic_and_calls() {
     let source = SourceFile::new("hello.nxl", "let x: Int = 10; let y = 20; print(x + y);");
@@ -777,14 +794,15 @@ fn execution_result_success_reflects_exit_code() {
 #[test]
 fn runtime_rejects_compilation_error_before_execution() {
     let source = SourceFile::new("bad_runtime.nxl", "let x: Imaginary = 1;");
-    let err = run(&source).expect_err("compilation error must propagate through runtime");
+    let err =
+        on_node(|| run(&source)).expect_err("compilation error must propagate through runtime");
     assert_eq!(err.code, "NXL2004");
 }
 
 #[test]
 fn runtime_rejects_undefined_name_before_execution() {
     let source = SourceFile::new("undef_runtime.nxl", "print(missing);");
-    let err = run(&source).expect_err("undefined name must fail before execution");
+    let err = on_node(|| run(&source)).expect_err("undefined name must fail before execution");
     assert_eq!(err.code, "NXL2002");
 }
 
@@ -822,7 +840,7 @@ fn runtime_captures_stdout_from_multiple_prints() {
         return; // skip when Node.js is not installed
     }
     let source = SourceFile::new("multi_print.nxl", r#"print("line1"); print("line2");"#);
-    let result = run(&source).expect("multi-print should execute");
+    let result = on_node(|| run(&source)).expect("multi-print should execute");
     assert!(result.stdout.contains("line1"));
     assert!(result.stdout.contains("line2"));
     assert!(result.success());
@@ -834,7 +852,7 @@ fn runtime_captures_integer_output() {
         return;
     }
     let source = SourceFile::new("int_out.nxl", "print(42);");
-    let result = run(&source).expect("integer print should execute");
+    let result = on_node(|| run(&source)).expect("integer print should execute");
     assert!(result.stdout.contains("42"));
 }
 
@@ -844,7 +862,7 @@ fn runtime_executes_arithmetic_and_prints_result() {
         return;
     }
     let source = SourceFile::new("arith_run.nxl", "let x = 3 + 4; print(x);");
-    let result = run(&source).expect("arithmetic should execute");
+    let result = on_node(|| run(&source)).expect("arithmetic should execute");
     assert!(result.stdout.contains("7"));
 }
 
@@ -857,7 +875,7 @@ fn runtime_executes_function_call_and_prints_return() {
         "fn_run.nxl",
         "fn double(n: Int) -> Int { return n + n; } print(double(5));",
     );
-    let result = run(&source).expect("function call should execute");
+    let result = on_node(|| run(&source)).expect("function call should execute");
     assert!(result.stdout.contains("10"));
 }
 
@@ -870,7 +888,7 @@ fn runtime_executes_if_else_branch() {
         "if_run.nxl",
         r#"let flag = true; if flag { print("yes"); } else { print("no"); }"#,
     );
-    let result = run(&source).expect("if/else should execute");
+    let result = on_node(|| run(&source)).expect("if/else should execute");
     assert!(result.stdout.contains("yes"));
     assert!(!result.stdout.contains("no"));
 }
@@ -3486,7 +3504,7 @@ fn array_annotations_survive_execution() {
         "array_run.nxl",
         "fn features() -> [String] { return [\"one\", \"two\"]; } print(features());",
     );
-    let result = run(&source).expect("the array round trip should execute");
+    let result = on_node(|| run(&source)).expect("the array round trip should execute");
     assert!(
         result.stdout.contains("one") && result.stdout.contains("two"),
         "{result:?}"
@@ -3549,7 +3567,7 @@ fn a_multi_line_string_round_trips_through_node() {
         "multiline_run.nxl",
         "fn main() { print(`<ul>\n  <li>one</li>\n  <li>two</li>\n</ul>`); }",
     );
-    let result = run(&source).expect("a multi-line string should execute");
+    let result = on_node(|| run(&source)).expect("a multi-line string should execute");
     assert!(result.stdout.contains("<li>one</li>"), "{result:?}");
     assert!(result.stdout.contains("<li>two</li>"), "{result:?}");
     // The newlines survived rather than being mangled.

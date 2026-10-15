@@ -72,10 +72,16 @@ case "$machine" in
     arm64 | aarch64) expected_arch="arm64" ;;
     *) die "unsupported CPU architecture '$machine'. Supported: x86_64 and arm64." ;;
 esac
-# The package directory is named <os>-<arch>; refuse to run the wrong one.
+# The package directory is normally named <os>-<arch>, but refusing on the
+# folder name alone rejected perfectly good installs: extracting a release into
+# ~/Downloads, or into a directory an archive tool named for you, is ordinary.
+# What actually proves the package belongs on this machine is the checksum
+# below and the `--version` run at the end - a binary built for another
+# platform cannot execute here, and that failure is the honest one.
 package_id="$(basename "$SCRIPT_DIR")"
 if [ "$package_id" != "${expected_os}-${expected_arch}" ] && [ "$package_id" != "unix" ]; then
-    die "this package is '$package_id' but you are on ${expected_os}-${expected_arch}. Download the matching release archive."
+    warn "this directory is named '$package_id', not ${expected_os}-${expected_arch}"
+    warn "continuing: the checksum and the compiler itself decide whether this package runs here"
 fi
 ok "${kernel} ${machine} (${expected_os}-${expected_arch})"
 
