@@ -9,6 +9,33 @@ have actually been built and tested.
 Everything in this section is on `main` but is **not** in the `v0.1.0` tag,
 because it landed after that tag was pushed.
 
+### Fixes
+
+- **`install.sh --prefix` never worked.** The argument loop was written as
+  `for arg in "$@"`, which expands the argument list once, so the `shift` could
+  not consume the value after `--prefix`: the path was then read as another
+  option and the installer aborted with `unknown option`. Since
+  `scripts/verify-install.sh` passes `--prefix` in four places, the Unix
+  onboarding check could not have passed on Linux or macOS. It now shifts a
+  positional list instead.
+- **Bash scripts were being run under `sh`.** On Ubuntu `/bin/sh` is dash,
+  which has no `set -o pipefail`, so `package-release.sh`, `verify-install.sh`
+  and the staged `install.sh` died on their own first line. The release
+  workflow and the internal call sites now use `bash`.
+- **The Unix installer test could only pass on Windows.**
+  `unix_installer_refuses_a_wrong_platform` asserted that a dry run *succeeds*
+  on Linux and macOS, but it runs the copy in `install/unix/`, which ships no
+  `nxlc` and no `checksums.sha256`, so the installer always refuses it. On
+  Windows the assertion is the opposite one, which is why CI was red on Ubuntu
+  and green on Windows. The test now checks what its name says, and two new
+  hermetic tests stage a real package to prove the dry run verifies the
+  checksum and writes nothing, and that a tampered payload is refused.
+- **Release runner labels followed retired images.** `macos-13` was retired in
+  December 2025, `ubuntu-22.04` is inside its deprecation window, and
+  `macos-14` retires on 2 November 2026; those jobs could no longer start.
+  They now use `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15` and
+  `macos-15-intel`.
+
 ### Toolchain
 
 - **`nexora repl`**: a persistent session — definitions, imports, the module
