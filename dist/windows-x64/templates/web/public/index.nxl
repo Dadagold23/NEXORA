@@ -1,0 +1,130 @@
+// PROJECT_NAME - the landing page, written in NXL.
+//
+// This is a program, not a markup file. `nexora dev` compiles and runs it on
+// the server and serves what it prints, so the page is built from the same
+// modules as the app it describes:
+//
+//     nexora dev
+//
+// Everything here is a string. That is honest about where NXL is today: it has
+// no string builder or template type yet, so the page is assembled with
+// concatenation. When the language grows one, this file gets simpler without
+// anything else having to change.
+//
+// The page is the shell. The splash screen clears when the app in the browser
+// prints READY, which public/bootstrap.js watches for; the hero, the feature
+// list and the route table are filled in from the same boot log.
+
+from app.config import app_name;
+from app.config import tagline;
+from app.config import features;
+from app.routes import routes;
+
+fn head(name: String, description: String) -> String {
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>` + name + `</title>
+<meta name="description" content="` + description + `">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+`;
+}
+
+fn splash(name: String) -> String {
+    return `
+<div id="splash" class="splash">
+  <div class="splash-card">
+    <img class="splash-mark" src="/favicon.svg" width="96" height="96" alt="">
+    <p class="splash-name">NEXORA</p>
+    <p class="splash-sub">` + name + `</p>
+    <div class="splash-bar"><span></span></div>
+    <p class="splash-stage" id="splash-stage">starting</p>
+  </div>
+</div>
+`;
+}
+
+fn feature_items() -> String {
+    // Rendered here rather than in markup, so the page describes the app from
+    // the same module the app uses. When the program runs in the browser it
+    // reports the same list, and bootstrap.js replaces these items live.
+    let mut items = "";
+    for feature in features() {
+        items = items + "<li>" + feature + "</li>";
+    }
+    return items;
+}
+
+fn route_items() -> String {
+    let mut items = "";
+    for route in routes() {
+        items = items + "<li>" + route + "</li>";
+    }
+    return items;
+}
+
+fn hero(name: String, features_html: String, routes_html: String) -> String {
+    return `
+<main class="page" id="page">
+  <header class="hero">
+    <img class="hero-mark" src="/favicon.svg" width="72" height="72" alt="">
+    <p class="eyebrow">NXL application</p>
+    <h1 id="app-name">` + name + `</h1>
+    <p class="lede" id="app-tagline">Loading the application…</p>
+    <div class="status" id="status">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">waiting for the app to report ready</span>
+    </div>
+  </header>
+
+  <section class="panel">
+    <h2>What this app does</h2>
+    <ul class="features" id="features">` + features_html + `</ul>
+  </section>
+
+  <section class="split">
+    <div class="panel">
+      <h2>Served routes</h2>
+      <ul class="routes" id="routes">` + routes_html + `</ul>
+    </div>
+    <div class="panel">
+      <h2>Boot log</h2>
+      <pre class="log" id="log"></pre>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <p>
+      Served by <code>nexora dev</code>. Edit any <code>.nxl</code> file and
+      the page reloads itself.
+    </p>
+  </footer>
+</main>
+`;
+}
+
+fn scripts() -> String {
+    // bootstrap.js installs the console bridge, so it has to load before the
+    // program. The dev server adds these tags if they are missing.
+    return `
+<script src="/bootstrap.js"></script>
+<script src="/app.js"></script>
+<script src="/reload.js"></script>
+</body>
+</html>
+`;
+}
+
+fn main() {
+    let name = app_name();
+
+    print(head(name, tagline()));
+    print(splash(name));
+    print(hero(name, feature_items(), route_items()));
+    print(scripts());
+}

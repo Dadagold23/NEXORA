@@ -60,6 +60,7 @@ Step "Staging dist/windows-x64 (version $version)"
 if (Test-Path -LiteralPath $stageDir) { Remove-Item -LiteralPath $stageDir -Recurse -Force }
 New-Item -ItemType Directory -Path (Join-Path $stageDir 'examples') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $stageDir 'templates\console') -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $stageDir 'templates\web') -Force | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $compilerDir 'target\release\nxlc.exe') -Destination (Join-Path $stageDir 'nxlc.exe')
 Copy-Item -LiteralPath (Join-Path $installerSrc 'install.ps1') -Destination $stageDir
@@ -71,6 +72,10 @@ foreach ($doc in @('LICENSE', 'CHANGELOG.md', 'SECURITY.md')) {
 }
 Copy-Item -LiteralPath (Join-Path $repoRoot 'examples\hello\src\main.nxl') -Destination (Join-Path $stageDir 'examples\main.nxl')
 Copy-Item -Path (Join-Path $repoRoot 'templates\console\*') -Destination (Join-Path $stageDir 'templates\console') -Recurse -Force
+# Both targets ship. The compiler has them embedded too, so an installed
+# binary can scaffold either without this directory, but a package that claims
+# to be the project templates should carry both.
+Copy-Item -Path (Join-Path $repoRoot 'templates\web\*') -Destination (Join-Path $stageDir 'templates\web') -Recurse -Force
 
 Step 'Generating SHA-256 checksums'
 $checksums = Join-Path $stageDir 'checksums.sha256'

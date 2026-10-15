@@ -68,6 +68,16 @@ for doc in LICENSE CHANGELOG.md SECURITY.md; do
 done
 cp "$repo_root/examples/hello/src/main.nxl" "$stage_dir/examples/main.nxl"
 
+# Both project targets ship. The compiler has them embedded too, so an
+# installed binary can scaffold either without this directory, but a package
+# that claims to be the project templates should carry both.
+for target in console web; do
+    if [ -d "$repo_root/templates/$target" ]; then
+        mkdir -p "$stage_dir/templates/$target"
+        cp -R "$repo_root/templates/$target/." "$stage_dir/templates/$target/"
+    fi
+done
+
 say "Generating SHA-256 checksums"
 (
     cd "$stage_dir"

@@ -1892,8 +1892,7 @@ fn rust_constant(constant: &Constant) -> String {
             }
         }
         Constant::String(s) => {
-            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-            format!("\"{escaped}\".to_string()")
+            format!("\"{}\".to_string()", escape_string_literal(s))
         }
         Constant::Boolean(b) => b.to_string(),
     }
@@ -1905,6 +1904,31 @@ fn rust_unary(op: UnaryOperator) -> &'static str {
         UnaryOperator::Not => "!",
         UnaryOperator::Reference | UnaryOperator::Borrow => "&",
     }
+}
+
+/// Escape a string for a double-quoted literal in generated code.
+///
+/// Backslashes and quotes are not enough: neither JavaScript nor Rust allows a
+/// raw newline inside a double-quoted literal, so any multi-line string used to
+/// produce code that would not parse. Control characters are escaped as well,
+/// because there is no way to write them literally.
+fn escape_string_literal(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len() + 8);
+    for character in text.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            '\u{08}' => escaped.push_str("\\b"),
+            '\u{0c}' => escaped.push_str("\\f"),
+            '\0' => escaped.push_str("\\0"),
+            other if (other as u32) < 0x20 => escaped.push_str(&format!("\\u{:04x}", other as u32)),
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }
 
 fn rust_binary(op: BinaryOperator) -> &'static str {
@@ -1947,9 +1971,7 @@ fn js_constant(constant: &Constant) -> String {
             }
         }
         Constant::String(s) => {
-            // Escape backslashes and double-quotes.
-            let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-            format!("\"{escaped}\"")
+            format!("\"{}\"", escape_string_literal(s))
         }
         Constant::Boolean(b) => b.to_string(),
     }

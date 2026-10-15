@@ -3517,3 +3517,73 @@ fn a_wrong_argument_type_is_still_rejected() {
     let error = compile_to_nir(&source).expect_err("an array is not an Int");
     assert!(error.message.contains("expected Int"), "{error:?}");
 }
+
+// ── string literals in generated code ─────────────────────────────────────────
+//
+// A raw newline inside a double-quoted literal is not valid in JavaScript or
+// Rust. The backends escaped backslashes and quotes but not newlines, so any
+// multi-line string - a raw string literal, or anything built from one - was
+// compiled into code that would not parse.
+
+#[test]
+fn a_multi_line_string_compiles_to_parseable_javascript() {
+    let source = SourceFile::new(
+        "multiline.nxl",
+        "fn main() { print(`<div>\n  <p>hello</p>\n</div>`); }",
+    );
+    let artifact = nxl_compiler::backend::compile_js(&source).expect("emit");
+    // The emitted program must parse: if it does not, the defect is real.
+    assert!(
+        !artifact.source.contains("\"<div>\n"),
+        "a raw newline was emitted inside a string literal"
+    );
+    assert!(artifact.source.contains("\\n"), "{}", artifact.source);
+}
+
+#[test]
+fn a_multi_line_string_round_trips_through_node() {
+    if !Runtime::node_available() {
+        return;
+    }
+    let source = SourceFile::new(
+        "multiline_run.nxl",
+        "fn main() { print(`<ul>\n  <li>one</li>\n  <li>two</li>\n</ul>`); }",
+    );
+    let result = run(&source).expect("a multi-line string should execute");
+    assert!(result.stdout.contains("<li>one</li>"), "{result:?}");
+    assert!(result.stdout.contains("<li>two</li>"), "{result:?}");
+    // The newlines survived rather than being mangled.
+    assert!(
+        result.stdout.matches('\n').count() >= 4,
+        "the newlines did not survive: {result:?}"
+    );
+}
+
+#[test]
+fn control_characters_are_escaped_in_generated_code() {
+    let source = SourceFile::new("control.nxl", "fn main() { print(\"a\\tb\\r\"); }");
+    let artifact = nxl_compiler::backend::compile_js(&source).expect("emit");
+    assert!(artifact.source.contains("\\t"), "{}", artifact.source);
+    assert!(artifact.source.contains("\\r"), "{}", artifact.source);
+}
+
+#[test]
+fn quotes_and_backslashes_still_round_trip() {
+    let source = SourceFile::new(
+        "escapes.nxl",
+        "fn main() { print(\"a \\\"quoted\\\" word\"); print(`c:\\\\dir`); }",
+    );
+    let artifact = nxl_compiler::backend::compile_js(&source).expect("emit");
+    // A quote inside the string is written as \" in the generated program.
+    assert!(
+        artifact.source.contains("\\\""),
+        "a quote was not escaped: {}",
+        artifact.source
+    );
+    // And a backslash as \\.
+    assert!(
+        artifact.source.contains("\\\\"),
+        "a backslash was not escaped: {}",
+        artifact.source
+    );
+}

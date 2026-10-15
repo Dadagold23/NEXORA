@@ -30,20 +30,37 @@
   var originalLog = console.log.bind(console);
   var ready = false;
 
-  function clearPlaceholder(list) {
+  // The server already rendered a list for each of these, from the same
+  // modules. The program's own report replaces those items rather than being
+  // appended to them, so the page does not show everything twice.
+  function clearGenerated(list) {
     var placeholder = list.querySelector(".placeholder");
     if (placeholder) {
       list.removeChild(placeholder);
     }
+    var remaining = [];
+    for (var i = 0; i < list.children.length; i++) {
+      if (list.children[i].className === "generated") {
+        remaining.push(list.children[i]);
+      } else {
+        list.removeChild(list.children[i]);
+      }
+    }
+    return remaining;
   }
 
-  function addItem(list, text, className) {
-    clearPlaceholder(list);
+  function resetList(list) {
+    clearGenerated(list);
+    for (var i = 0; i < list.children.length; i++) {
+      list.removeChild(list.children[i]);
+    }
+  }
+
+  function addItem(list, text) {
+    clearGenerated(list);
     var item = document.createElement("li");
     item.textContent = text;
-    if (className) {
-      item.className = className;
-    }
+    item.className = "generated";
     list.appendChild(item);
   }
 
@@ -89,6 +106,10 @@
         appName.textContent = name;
       }
       document.title = name;
+      // Start from a clean page: the server-rendered lists describe what the
+      // app is about to report, and are replaced as it reports.
+      resetList(features);
+      resetList(routes);
     } else if (text.indexOf("tagline ") === 0) {
       if (appTagline) {
         appTagline.textContent = text.slice("tagline ".length);

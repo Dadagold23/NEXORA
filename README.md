@@ -36,7 +36,7 @@ and covered by 572 automated tests.
 | REPL          | Persistent session with replay from a transcript file         |
 | Dev server    | `nexora dev` serves a project and live-reloads on change      |
 | Projects      | `new console` and `new web` scaffold a full working tree      |
-| Editor        | VS Code extension for `.nxl` highlighting, icon and commands  |
+| Editor        | VS Code extension with NXL highlighting, icon and language server |
 | Releases      | Windows x64 locally; Linux/macOS built and self-tested in CI  |
 
 Not yet available: a hosted package registry, package signing, code-signed

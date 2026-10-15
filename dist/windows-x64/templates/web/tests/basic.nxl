@@ -1,0 +1,56 @@
+// PROJECT_NAME - self-check compiled by `nxl test`.
+//
+// `nxl test` verifies that every file in tests/ parses and type-checks, and
+// runs it. There is no test-block syntax yet, so checks are written as ordinary
+// code that throws on failure.
+
+from app.config import app_name;
+from app.config import tagline;
+from app.config import features;
+from app.state import AppState;
+from app.routes import routes;
+
+fn main() {
+    // The app is created, not ready, and only ready once it has advanced.
+    let state = AppState();
+    if state.ready() {
+        throw "a freshly created AppState must not be ready";
+    }
+    state.advance("test");
+    if !state.ready() {
+        throw "AppState must be ready after advancing";
+    }
+    if state.describe() != "stage=test steps=1" {
+        throw "AppState.describe should report the stage and step count";
+    }
+
+    // The boot log the landing page depends on must not be empty.
+    if app_name() == "" {
+        throw "the app needs a name";
+    }
+    if tagline_is_blank() {
+        throw "the app needs a tagline";
+    }
+
+    let mut seen = 0;
+    for feature in features() {
+        seen = seen + 1;
+    }
+    if seen == 0 {
+        throw "the landing page needs at least one feature";
+    }
+
+    let mut routes_seen = 0;
+    for route in routes() {
+        routes_seen = routes_seen + 1;
+    }
+    if routes_seen == 0 {
+        throw "the app must advertise at least one route";
+    }
+
+    print("tests/basic.nxl: checks passed");
+}
+
+fn tagline_is_blank() -> Bool {
+    return tagline() == "";
+}

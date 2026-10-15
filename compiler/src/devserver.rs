@@ -165,10 +165,22 @@ fn refresh_if_changed(state: &DevState) {
 }
 
 /// `GET /` — the project's own page when it has one, or a generated host page.
+///
+/// In order of preference: a page written in NXL (`public/index.nxl`, rendered
+/// here on the server), a hand-written `public/index.html`, and finally the
+/// server's own page for projects that ship no front end at all.
 async fn index(State(state): State<DevState>) -> Response {
     refresh_if_changed(&state);
     if let Some(error) = state.error.lock().ok().and_then(|e| e.clone()) {
         return error_page(&error).into_response();
+    }
+    if let Some(rendered) = dev::render_page(&state.project) {
+        return match rendered {
+            Ok(page) => html(&dev::inject_scripts(&page)).into_response(),
+            // A page that does not compile must not be papered over with the
+            // fallback page: the author needs to see why it failed.
+            Err(message) => error_page(&message).into_response(),
+        };
     }
     if let Some(page) = read_public_index(&state.project) {
         return html(&dev::inject_scripts(&page)).into_response();

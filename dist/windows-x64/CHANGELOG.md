@@ -36,6 +36,39 @@ because it landed after that tag was pushed.
   They now use `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15` and
   `macos-15-intel`.
 
+### Editor
+
+- **The VS Code extension has a language server.** `nxlc lsp` was a stub that
+  returned without reading anything, and the NLS bridge read the source inline
+  in every request — something no real client sends — while advertising hover
+  and definition that it did not answer. The server now keeps the documents the
+  client opens, publishes diagnostics from the real compiler when a document
+  opens, changes, saves and closes, and answers completion, hover,
+  go-to-definition, document symbols and find-references. `scripts/lsp-smoke.js`
+  drives it over real stdio and runs in the suite.
+- **The extension speaks to it** through `language-client.js`, a
+  dependency-free JSON-RPC client, so the extension still loads from source
+  with no `npm install`. `scripts/lsp-client-check.js` exercises that client
+  against the real binary, so one that cannot talk to the server fails rather
+  than silently offering no completion.
+
+### The web page is written in NXL
+
+- **`public/index.nxl`** replaces `public/index.html` in the `web` target. The
+  dev server compiles and runs it on the server and serves what it prints as
+  HTML, so the page imports the same modules as the app instead of being markup
+  somebody has to keep in step by hand. A hand-written `public/index.html`
+  still works and is used when there is no NXL page; a page that fails to
+  compile reports why rather than falling back.
+- **Any file in a project resolves `app.*` against `src/`.** `nxlc run
+  public/index.nxl` and `nxlc test` previously looked for `public/app/…` and
+  reported every import as undeclared.
+- **Multi-line strings could not be compiled at all.** The backends escaped
+  backslashes and quotes but not newlines or control characters, so a raw
+  string literal produced a JavaScript or Rust string literal containing a
+  bare newline, which does not parse. Escaping now covers `\n`, `\r`, `\t` and
+  the remaining control characters.
+
 ### Toolchain
 
 - **`nexora new web <name>`**: a second project target that scaffolds a

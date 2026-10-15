@@ -67,6 +67,37 @@ pub fn build(dir: &Path) -> Result<DevBundle, Diagnostic> {
     })
 }
 
+/// The project's page, rendered on the server, when it writes one in NXL.
+///
+/// `public/index.nxl` is a program: it prints the page. It is compiled and run
+/// on the VM here, so the HTML a browser receives comes from NXL rather than
+/// from a file someone had to keep in step with the app by hand.
+///
+/// Modules resolve against the project's source directory, so the page can
+/// `import app.config` exactly as `src/main.nxl` does.
+///
+/// `None` means the project has no NXL page; the caller then looks for
+/// `public/index.html` and finally for its own generated host page.
+pub fn render_page(dir: &Path) -> Option<Result<String, String>> {
+    let page = dir.join("public").join("index.nxl");
+    if !page.is_file() {
+        return None;
+    }
+    let module_root = crate::cli::ProjectConfig::load(dir)
+        .map(|config| dir.join(&config.entry))
+        .ok()
+        .and_then(|entry| entry.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| dir.join("src"));
+    let module = match crate::project::compile_project_with_modules(&page, &module_root) {
+        Ok(module) => module,
+        Err(diagnostic) => return Some(Err(diagnostic.message)),
+    };
+    Some(match crate::vm::execute(&module) {
+        Ok(result) => Ok(result.output.join("\n")),
+        Err(diagnostic) => Err(diagnostic.message),
+    })
+}
+
 /// Add the dev-server scripts to a project page that does not load them.
 ///
 /// A hand-written `public/index.html` that forgets `<script src="/app.js">`

@@ -396,6 +396,51 @@ fn a_page_without_the_program_gets_it_injected() {
 }
 
 #[test]
+fn a_page_written_in_nxl_is_rendered_on_the_server() {
+    // The page is a program. The dev server compiles and runs it, so the HTML
+    // comes from NXL rather than from a file kept in step by hand.
+    let dir = project("nxl_page", "fn main() { print(\"app\"); }");
+    fs::create_dir_all(dir.path().join("public")).unwrap();
+    fs::write(
+        dir.path().join("public/index.nxl"),
+        "fn heading() -> String {\n    return \"rendered by nxl\";\n}\n\nfn main() {\n    print(`<h1>`);\n    print(heading());\n    print(`</h1>`);\n}\n",
+    )
+    .expect("page");
+
+    let (port, handle) = serve(dir.path().to_path_buf(), DevConfig::default());
+    let (status, body) = get(port, "/");
+    assert_eq!(status, 200);
+    // Each `print` is its own line, as it is on the console; HTML does not mind.
+    assert!(body.contains("<h1>"), "{body}");
+    assert!(body.contains("rendered by nxl"), "{body}");
+    // The program and reload client are still added to the rendered page.
+    assert!(body.contains("/app.js"), "{body}");
+    assert!(body.contains("/reload.js"), "{body}");
+
+    drop(handle);
+}
+
+#[test]
+fn a_broken_nxl_page_says_why_instead_of_falling_back() {
+    // Falling back to the generated host page here would look like the page
+    // simply has no content, which is not what is wrong.
+    let dir = project("nxl_page_broken", "fn main() { print(\"app\"); }");
+    fs::create_dir_all(dir.path().join("public")).unwrap();
+    fs::write(dir.path().join("public/index.nxl"), "fn main() { broken").expect("page");
+
+    let (port, handle) = serve(dir.path().to_path_buf(), DevConfig::default());
+    let (status, body) = get(port, "/");
+    assert_eq!(status, 200);
+    assert!(body.contains("does not compile"), "{body}");
+    assert!(
+        !body.contains("NXL dev server"),
+        "the fallback page must not hide the failure: {body}"
+    );
+
+    drop(handle);
+}
+
+#[test]
 fn a_project_without_public_keeps_the_generated_host_page() {
     let dir = project("no_public", "fn main() { print(\"served\"); }");
     let (port, handle) = serve(dir.path().to_path_buf(), DevConfig::default());
