@@ -16,13 +16,13 @@ name (`linux-x64`, `linux-arm64`, `macos-arm64`, `macos-x64`).
 ```bash
 tar -xzf NEXORA-<version>-<platform>.tar.gz
 cd NEXORA-<version>-<platform>   # the archive contains these files at the top level
-sh ./install.sh
+./install.sh
 ```
 
 Check what it would do without touching anything:
 
 ```bash
-sh ./install.sh --dry-run
+./install.sh --dry-run
 ```
 
 The installer verifies `nxlc` against `checksums.sha256` (using `sha256sum`, or
@@ -34,7 +34,7 @@ the archive does not match your operating system or CPU architecture.
 If you prefer a different location:
 
 ```bash
-sh ./install.sh --prefix "$HOME/.local/bin"
+./install.sh --prefix "$HOME/.local/bin"
 ```
 
 ## Verify
@@ -50,7 +50,7 @@ nxlc run ./examples/main.nxl
 ## Uninstall
 
 ```bash
-sh ./install.sh --uninstall
+./install.sh --uninstall
 ```
 
 Remove any leftover PATH line for the install directory from your shell

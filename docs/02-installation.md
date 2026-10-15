@@ -36,12 +36,12 @@ Download the archive matching your platform — `linux-x64`, `linux-arm64`,
 
 ```bash
 tar -xzf NEXORA-<version>-<platform>.tar.gz
-sh ./install.sh
+./install.sh
 ```
 
 ```bash
-sh ./install.sh --dry-run     # check without changing anything
-sh ./install.sh --prefix "$HOME/.local/bin"
+./install.sh --dry-run     # check without changing anything
+./install.sh --prefix "$HOME/.local/bin"
 ```
 
 It verifies the checksum with `sha256sum` (or `shasum -a 256` on macOS),
@@ -82,7 +82,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
 
 ```bash
 # Linux / macOS
-sh ./install.sh --uninstall
+./install.sh --uninstall
 ```
 
 Uninstall removes only the installed executable and this installer's own PATH

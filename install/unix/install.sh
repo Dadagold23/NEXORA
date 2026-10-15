@@ -22,8 +22,12 @@ DRY_RUN=0
 UNINSTALL=0
 PREFIX=""
 
-for arg in "$@"; do
-    case "$arg" in
+# `for arg in "$@"` expands the argument list once, up front, so the `shift`
+# below could not consume the value that follows --prefix: the loop would go on
+# to visit that value as if it were another option and reject it as unknown.
+# Shift a positional list instead, which is the only way to consume a value.
+while [ $# -gt 0 ]; do
+    case "$1" in
         --dry-run | --dryrun) DRY_RUN=1 ;;
         --uninstall) UNINSTALL=1 ;;
         --prefix)
@@ -39,7 +43,7 @@ for arg in "$@"; do
             exit 0
             ;;
         *)
-            echo "ERROR: unknown option '$arg'" >&2
+            echo "ERROR: unknown option '$1'" >&2
             exit 1
             ;;
     esac

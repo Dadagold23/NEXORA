@@ -118,7 +118,9 @@ rm -f "$probe"
 echo "    invalid input is rejected with a non-zero exit code"
 
 say "Dry-running the installer"
-sh "$stage_dir/install.sh" --dry-run
+# bash, not sh: the installer uses pipefail, which dash (/bin/sh on Ubuntu)
+# does not support.
+bash "$stage_dir/install.sh" --dry-run
 
 # ----------------------------------------------------------------------------
 say "Creating archive"

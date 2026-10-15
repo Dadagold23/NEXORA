@@ -350,7 +350,19 @@ fn unix_installer_refuses_a_wrong_platform() {
     );
     let host_ok = cfg!(target_os = "linux") || cfg!(target_os = "macos");
     if host_ok {
-        assert!(output.status.success(), "on a supported host: {combined}");
+        // This is a source checkout, not a released package: install/unix holds
+        // the installer and nothing else, so there is no nxlc and no checksum
+        // to verify. The dry run must fail for that reason - and specifically
+        // not with a platform complaint, which would mean the supported-host
+        // branch of the script is broken.
+        assert!(
+            !output.status.success(),
+            "a checkout without a payload cannot install: {combined}"
+        );
+        assert!(
+            combined.contains("nxlc not found next to this script"),
+            "the supported host must get past the platform check: {combined}"
+        );
     } else {
         assert!(
             !output.status.success(),
@@ -362,6 +374,117 @@ fn unix_installer_refuses_a_wrong_platform() {
             "the refusal must explain itself: {combined}"
         );
     }
+}
+
+#[test]
+fn unix_installer_dry_run_succeeds_against_a_staged_package() {
+    // The previous test only ever saw a source checkout, so on Linux and macOS
+    // nothing proved the installer can actually complete. This stages the
+    // minimum a real release contains and checks the dry run verifies the
+    // checksum, plans the install, and writes nothing.
+    if !(cfg!(target_os = "linux") || cfg!(target_os = "macos")) {
+        return; // the installer refuses to run on a Windows host at all
+    }
+    let Some(bash) = bash_path() else {
+        return;
+    };
+
+    let dir = TempDir::new("unix_staged");
+    // "unix" is one of the two directory names the installer accepts.
+    let package = dir.path().join("unix");
+    fs::create_dir_all(&package).expect("package dir");
+    fs::copy(
+        repo_file("install/unix/install.sh"),
+        package.join("install.sh"),
+    )
+    .expect("copy installer");
+
+    // A dry run never executes the payload, so its contents only have to be
+    // stable enough to checksum.
+    let payload = b"#!/bin/sh\necho 'nxlc 0.1.0'\n";
+    fs::write(package.join("nxlc"), payload).expect("write payload");
+    fs::write(
+        package.join("checksums.sha256"),
+        format!("{}  nxlc\n", sha256::hex(payload)),
+    )
+    .expect("write checksums");
+
+    let prefix = dir.path().join("prefix");
+    let output = Command::new(&bash)
+        .arg(package.join("install.sh"))
+        .arg("--dry-run")
+        .arg("--prefix")
+        .arg(&prefix)
+        .output()
+        .expect("installer runs");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.status.success(),
+        "a staged package must install cleanly: {combined}"
+    );
+    assert!(
+        combined.contains("SHA-256 matches"),
+        "the checksum must be verified before anything is planned: {combined}"
+    );
+    assert!(
+        combined.contains("Dry run complete"),
+        "the dry run must report its plan: {combined}"
+    );
+    assert!(
+        !prefix.exists(),
+        "a dry run must not create the install directory"
+    );
+}
+
+#[test]
+fn unix_installer_rejects_a_tampered_payload() {
+    // The checksum is the only thing standing between a user and a corrupted
+    // download, so it has to fail the run rather than warn.
+    if !(cfg!(target_os = "linux") || cfg!(target_os = "macos")) {
+        return;
+    }
+    let Some(bash) = bash_path() else {
+        return;
+    };
+
+    let dir = TempDir::new("unix_tampered");
+    let package = dir.path().join("unix");
+    fs::create_dir_all(&package).expect("package dir");
+    fs::copy(
+        repo_file("install/unix/install.sh"),
+        package.join("install.sh"),
+    )
+    .expect("copy installer");
+    fs::write(package.join("nxlc"), b"#!/bin/sh\necho tampered\n").expect("payload");
+    // The checksum belongs to different bytes.
+    fs::write(
+        package.join("checksums.sha256"),
+        format!("{}  nxlc\n", sha256::hex(b"the real binary")),
+    )
+    .expect("write checksums");
+
+    let output = Command::new(&bash)
+        .arg(package.join("install.sh"))
+        .arg("--dry-run")
+        .output()
+        .expect("installer runs");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success(),
+        "a payload that does not match its checksum must be refused: {combined}"
+    );
+    assert!(
+        combined.contains("SHA-256 mismatch"),
+        "the refusal must name the problem: {combined}"
+    );
 }
 
 #[test]

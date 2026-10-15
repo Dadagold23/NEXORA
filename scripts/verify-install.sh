@@ -5,7 +5,7 @@
 # the documented onboarding steps with a clean PATH. Nothing touches the real
 # user's installation unless --real-install is passed.
 #
-#   sh scripts/verify-install.sh [path/to/archive]
+#   bash scripts/verify-install.sh [path/to/archive]
 
 set -uo pipefail
 
@@ -79,8 +79,8 @@ installer="$extract/install.sh"
     exit 1
 }
 
-step "installer verifies the checksum" sh "$installer" --prefix "$prefix" --dry-run
-step "installer installs" sh "$installer" --prefix "$prefix"
+step "installer verifies the checksum" bash "$installer" --prefix "$prefix" --dry-run
+step "installer installs" bash "$installer" --prefix "$prefix"
 
 compiler="$prefix/nxlc"
 [ -x "$compiler" ] || {
@@ -139,12 +139,12 @@ else
     echo "[PASS] missing dependency is diagnosed"
 fi
 
-step "reinstall over an existing installation is safe" sh "$installer" --prefix "$prefix"
+step "reinstall over an existing installation is safe" bash "$installer" --prefix "$prefix"
 
 if [ "$real_install" -eq 1 ]; then
     echo "[SKIP] uninstall leaves the real installation in place"
 else
-    if sh "$installer" --prefix "$prefix" --uninstall >/dev/null 2>&1 && [ ! -e "$compiler" ]; then
+    if bash "$installer" --prefix "$prefix" --uninstall >/dev/null 2>&1 && [ ! -e "$compiler" ]; then
         passed=$((passed + 1))
         echo "[PASS] uninstall removes the installation"
     else
