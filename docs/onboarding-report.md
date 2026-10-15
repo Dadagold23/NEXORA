@@ -79,8 +79,9 @@ access". To claim it, the following must still happen and be recorded:
   compressed, but no measurement has been taken.
 - **Linux and macOS runs** of `verify-install.sh`; those need their platform's
   CI runner and have not been executed yet.
-- **The web application path**, which is refused today: `nexora dev` has no
-  implementation because NXL has no web development server.
+- **The web application path**: `nexora dev` and `nexora new web` are
+  implemented and tested on Windows only. The Linux and macOS runners have not
+  exercised them yet.
 
 ## Conclusion
 

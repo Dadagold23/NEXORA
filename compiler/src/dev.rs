@@ -67,6 +67,30 @@ pub fn build(dir: &Path) -> Result<DevBundle, Diagnostic> {
     })
 }
 
+/// Add the dev-server scripts to a project page that does not load them.
+///
+/// A hand-written `public/index.html` that forgets `<script src="/app.js">`
+/// would render a page with no program on it and no clue why, so the missing
+/// tag is inserted rather than left to be discovered in the browser. A page
+/// that already loads either script is left untouched.
+pub fn inject_scripts(html: &str) -> String {
+    let mut out = html.to_owned();
+    for source in ["/app.js", "/reload.js"] {
+        if html.contains(source) {
+            continue;
+        }
+        let tag = format!("<script src=\"{source}\"></script>");
+        match out.rfind("</body>") {
+            Some(index) => {
+                let (head, tail) = out.split_at(index);
+                out = format!("{head}  {tag}\n{tail}");
+            }
+            None => out.push_str(&format!("\n{tag}\n")),
+        }
+    }
+    out
+}
+
 /// The HTML page that loads the compiled program.
 pub fn host_page(project_name: &str, script_path: &str) -> String {
     format!(

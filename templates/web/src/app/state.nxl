@@ -1,0 +1,23 @@
+// Boot state, carried through the startup sequence.
+//
+// A class rather than a few loose variables, so the sequence reads as a state
+// machine: each stage advances the counter, and the page can ask whether the
+// app got all the way through.
+
+class AppState {
+    let stage: String = "created"
+    let steps: Int = 0
+
+    fn advance(next: String) {
+        self.stage = next;
+        self.steps = self.steps + 1;
+    }
+
+    fn ready() -> Bool {
+        return self.steps > 0;
+    }
+
+    fn describe() -> String {
+        return "stage=${self.stage} steps=${self.steps}";
+    }
+}

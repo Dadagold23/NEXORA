@@ -1,0 +1,20 @@
+# Line endings are part of the artifact, not an editor preference.
+#
+# The release scripts hash and ship these files, and a CRLF-prefixed shebang
+# breaks `sh install.sh` outright. GitHub's Windows runners check out with
+# core.autocrlf=true, so without this file the Unix scripts arrive with CRLF on
+# Windows and a test that asserts LF fails on exactly one platform.
+* text=auto eol=lf
+
+# cmd.exe is the one tool that genuinely wants CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Already-committed binary assets: their exact bytes are what release checksums
+# cover, so they must never be normalised.
+*.png binary
+*.ico binary
+*.zip binary
+*.gz binary
+*.exe binary
+*.pdf binary

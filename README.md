@@ -13,6 +13,12 @@ cd hello
 nexora run        # Hello, NXL!
 ```
 
+```bash
+nexora new web site
+cd site
+nexora dev        # a landing page at http://127.0.0.1:3000
+```
+
 ## Status
 
 Version 0.1.0. The language roadmap (errors and strings, iteration and data,
@@ -29,12 +35,13 @@ and covered by 572 automated tests.
 | Package mgr   | Local path dependencies, local registry, SHA-256 lockfile     |
 | REPL          | Persistent session with replay from a transcript file         |
 | Dev server    | `nexora dev` serves a project and live-reloads on change      |
+| Projects      | `new console` and `new web` scaffold a full working tree      |
 | Editor        | VS Code extension for `.nxl` highlighting, icon and commands  |
 | Releases      | Windows x64 locally; Linux/macOS built and self-tested in CI  |
 
 Not yet available: a hosted package registry, package signing, code-signed
-installers. The development server compiles to JavaScript and watches the
-project; it does not yet run NXL on the server side.
+installers. The development server compiles to JavaScript and serves the
+project's own `public/` directory; it does not yet run NXL on the server side.
 
 ## Install
 
@@ -84,7 +91,7 @@ compiler/        the compiler and toolchain (Rust)
 dist/            generated release output
 dist-brand/      the generated logo used by this README and the docs
 examples/        runnable examples
-templates/       project templates (`nexora new console`)
+templates/       project targets (`nexora new console`, `nexora new web`)
 install/         installer sources per platform
 editors/         editor integrations (VS Code extension)
 scripts/         packaging, verification and brand-asset scripts

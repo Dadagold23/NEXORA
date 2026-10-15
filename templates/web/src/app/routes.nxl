@@ -1,0 +1,9 @@
+// The routes the development server exposes for this app.
+//
+// The dev server serves the compiled program from /app.js and the reload
+// client from /reload.js; the app prints this table so the landing page can
+// show what is actually being served.
+
+fn routes() -> [String] {
+    return ["/", "/app.js", "/reload.js", "/health"];
+}

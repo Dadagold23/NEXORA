@@ -278,6 +278,23 @@ fn module_context(module: &ProjectModule) -> crate::hir::ModuleContext {
 /// `entry_file` is the entry source path; its parent directory is the
 /// module base and its dotted path is always the root namespace.
 pub fn compile_project(entry_file: &Path) -> Result<crate::nir::Module, Diagnostic> {
+    let base = entry_file
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    compile_project_with_modules(entry_file, &base)
+}
+
+/// Compile a project file whose module root is not its own directory.
+///
+/// A test in `tests/` importing `app.config` means `src/app/config.nxl`: the
+/// modules belong to the project, not to the file that happens to import them.
+/// Deriving the root from the importing file would look in `tests/app/`, so
+/// the caller passes the entry's directory instead.
+pub fn compile_project_with_modules(
+    entry_file: &Path,
+    module_root: &Path,
+) -> Result<crate::nir::Module, Diagnostic> {
     let text = std::fs::read_to_string(entry_file).map_err(|e| {
         Diagnostic::error(
             "NXL12006",
@@ -285,12 +302,8 @@ pub fn compile_project(entry_file: &Path) -> Result<crate::nir::Module, Diagnost
             Span::default(),
         )
     })?;
-    let base = entry_file
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
     let entry_name = entry_file.to_string_lossy().into_owned();
-    let mut modules = load_project(&base, "", &text, &entry_name)?;
+    let mut modules = load_project(module_root, "", &text, &entry_name)?;
     compile_modules(&mut modules)
 }
 

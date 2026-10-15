@@ -299,3 +299,122 @@ fn default_config_binds_loopback_only() {
     );
     assert!(config.watch);
 }
+
+// ── the project's own page ──────────────────────────────────────────────────────
+
+/// A project that ships a `public/` directory, like the web target scaffolds.
+fn web_project(tag: &str, source: &str) -> TempDir {
+    let dir = project(tag, source);
+    fs::create_dir_all(dir.path().join("public")).unwrap();
+    fs::write(
+        dir.path().join("public/index.html"),
+        "<!doctype html><html><body><h1>project page</h1>\
+         <script src=\"/app.js\"></script></body></html>",
+    )
+    .expect("index");
+    fs::write(dir.path().join("public/styles.css"), "body { color: red; }").expect("css");
+    dir
+}
+
+#[test]
+fn the_projects_own_page_is_served_instead_of_the_host_page() {
+    let dir = web_project("public_index", "fn main() { print(\"served\"); }");
+    let (port, handle) = serve(dir.path().to_path_buf(), DevConfig::default());
+
+    let (status, body) = get(port, "/");
+    assert_eq!(status, 200);
+    assert!(body.contains("project page"), "{body}");
+    assert!(
+        !body.contains("NXL dev server"),
+        "the generated host page must not replace the project's page: {body}"
+    );
+    // The reload client is still added, because the page needs it.
+    assert!(body.contains("/reload.js"), "{body}");
+
+    drop(handle);
+}
+
+#[test]
+fn static_assets_are_served_from_public() {
+    let dir = web_project("public_asset", "fn main() { print(\"served\"); }");
+    let (port, handle) = serve(dir.path().to_path_buf(), DevConfig::default());
+
+    let (status, body) = get(port, "/styles.css");
+    assert_eq!(status, 200, "css must be served");
+    assert!(body.contains("color: red"), "{body}");
+
+    // A file that does not exist is still a 404 rather than a crash.
+    let (status, _) = get(port, "/missing.css");
+    assert_eq!(status, 404);
+
+    drop(handle);
+}
+
+#[test]
+fn public_files_cannot_escape_their_directory() {
+    let dir = web_project("public_escape", "fn main() { print(\"served\"); }");
+    // Something worth stealing, one level above public/.
+    fs::write(dir.path().join("secret.txt"), "do not serve me").unwrap();
+    let (port, handle) = serve(dir.path().to_path_buf(), DevConfig::default());
+
+    for path in [
+        "/../secret.txt",
+        "/%2e%2e/secret.txt",
+        "/..%2fsecret.txt",
+        "/sub/../../secret.txt",
+    ] {
+        let (status, body) = get(port, path);
+        assert!(
+            status == 404 || !body.contains("do not serve me"),
+            "{path} must not serve a file outside public/ (status {status})"
+        );
+    }
+
+    drop(handle);
+}
+
+#[test]
+fn a_page_without_the_program_gets_it_injected() {
+    let dir = project("inject", "fn main() { print(\"served\"); }");
+    fs::create_dir_all(dir.path().join("public")).unwrap();
+    fs::write(
+        dir.path().join("public/index.html"),
+        "<!doctype html><html><body><h1>bare</h1></body></html>",
+    )
+    .expect("index");
+    let (port, handle) = serve(dir.path().to_path_buf(), DevConfig::default());
+
+    let (status, body) = get(port, "/");
+    assert_eq!(status, 200);
+    assert!(body.contains("bare"), "{body}");
+    assert!(
+        body.contains("/app.js"),
+        "a page that forgets the program must still get it: {body}"
+    );
+
+    drop(handle);
+}
+
+#[test]
+fn a_project_without_public_keeps_the_generated_host_page() {
+    let dir = project("no_public", "fn main() { print(\"served\"); }");
+    let (port, handle) = serve(dir.path().to_path_buf(), DevConfig::default());
+
+    let (status, body) = get(port, "/");
+    assert_eq!(status, 200);
+    assert!(body.contains("NXL dev server"), "{body}");
+
+    drop(handle);
+}
+
+#[test]
+fn script_injection_leaves_a_page_that_already_has_them() {
+    let page = "<body><script src=\"/app.js\"></script><script src=\"/reload.js\"></script></body>";
+    assert_eq!(dev::inject_scripts(page), page);
+
+    let bare = "<body></body>";
+    let injected = dev::inject_scripts(bare);
+    assert!(injected.contains("/app.js"), "{injected}");
+    assert!(injected.contains("/reload.js"), "{injected}");
+    assert!(injected.contains("</body>"), "{injected}");
+}

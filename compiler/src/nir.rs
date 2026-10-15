@@ -1529,10 +1529,12 @@ fn verify_function(
                         terminator_span,
                     )?;
                     let actual = value_types.get(value).copied().unwrap_or(Type::Unknown);
-                    if function.return_type != Type::Unknown
-                        && actual != Type::Unknown
-                        && actual != function.return_type
-                    {
+                    // `types_compatible`, not `!=`: an array literal is inferred
+                    // as `Array(0)` (element type not pinned down), while the
+                    // declared type is `Array(<id>)`. A raw comparison rejected
+                    // every `fn f() -> [String]`, so the return contract could
+                    // not be satisfied by any array-returning function.
+                    if !types_compatible(actual, function.return_type) {
                         return Err(Diagnostic::error(
                             "NXL3001",
                             format!(
@@ -1709,7 +1711,15 @@ fn verify_instruction_types(
                         {
                             operand_type
                         }
-                        UnaryOperator::Not if operand_type == Type::Bool => Type::Bool,
+                        UnaryOperator::Not
+                            if matches!(operand_type, Type::Bool | Type::Unknown) =>
+                        {
+                            // `Unknown` is accepted here, exactly as the
+                            // comparison operators accept it. A value read out
+                            // of a dynamic structure is not statically known to
+                            // be Bool; the runtime still checks it.
+                            operand_type
+                        }
                         _ => {
                             return Err(mismatch(format!(
                                 "unary operation {:?} is invalid for {operand_type:?}",
@@ -1717,7 +1727,10 @@ fn verify_instruction_types(
                             )))
                         }
                     };
-                    if *ty != expected && *ty != Type::Unknown {
+                    // `expected` can be Unknown too (when the operand was), so this
+                    // compares the two the same way every other contract
+                    // check does rather than one-directionally.
+                    if !types_compatible(*ty, expected) {
                         return Err(mismatch("unary result type is inconsistent".to_owned()));
                     }
                 }
@@ -1782,10 +1795,11 @@ fn verify_instruction_types(
                         for (argument, (_, expected)) in arguments.iter().zip(&signature.parameters)
                         {
                             let actual = types.get(argument).copied().unwrap_or(Type::Unknown);
-                            if actual != *expected
-                                && actual != Type::Unknown
-                                && *expected != Type::Unknown
-                            {
+                            // Same reasoning as the return contract: an array
+                            // literal is `Array(0)`, and a parameter declared as
+                            // `[T]` is `Array(<id>)`, so a raw comparison
+                            // rejected every call passing an array literal.
+                            if !types_compatible(actual, *expected) {
                                 return Err(mismatch(format!(
                                     "call argument has type {actual:?}, expected {expected:?}"
                                 )));
@@ -4864,11 +4878,25 @@ impl Lowerer {
                             left_type
                         }
                     }
-                    // String concatenation composes in both runtimes.
+                    // String concatenation composes in both runtimes. An operand whose type
+                    // is not known statically is accepted: array elements and
+                    // values read out of a dynamic structure are `Unknown`,
+                    // and rejecting `"prefix" + element` here would have been
+                    // the only operator that refused them - comparisons,
+                    // calls and interpolation all accept them. The result
+                    // stays `Unknown` so nothing downstream is misled.
                     BinaryOperator::Add
-                        if left_type == Type::String && right_type == Type::String =>
+                        if (left_type == Type::String
+                            && matches!(right_type, Type::String | Type::Unknown))
+                            || (matches!(left_type, Type::String | Type::Unknown)
+                                && right_type == Type::String)
+                            || (left_type == Type::Unknown || right_type == Type::Unknown) =>
                     {
-                        Type::String
+                        if left_type == Type::Unknown || right_type == Type::Unknown {
+                            Type::Unknown
+                        } else {
+                            Type::String
+                        }
                     }
                     BinaryOperator::Equal | BinaryOperator::NotEqual
                         if left_type != Type::Void && right_type != Type::Void =>

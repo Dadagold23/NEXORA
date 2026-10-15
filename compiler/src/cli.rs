@@ -242,20 +242,45 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
             if args.len() < 2 {
                 return Err(err("NXL12002", "new: missing project name"));
             }
-            // `new console hello`, `new --template console hello` and
-            // `new --template=console hello` all work.
+            // All of these name a project and a target:
+            //   new hello                  new web hello
+            //   new console hello          new --template web hello
+            //   new --template=console x   new --target web hello
+            // `--target` and `--template` are the same flag; `--target` is the
+            // word used in the docs, and `--template` is kept because the
+            // console project is not only a console-shaped program.
             let (template, name) = match args.get(1).map(String::as_str) {
                 Some(flag) if flag.starts_with("--template=") => (
                     Some(flag["--template=".len()..].to_owned()),
                     args.get(2).cloned(),
                 ),
-                Some("--template") => (args.get(2).cloned(), args.get(3).cloned()),
+                Some(flag) if flag.starts_with("--target=") => (
+                    Some(flag["--target=".len()..].to_owned()),
+                    args.get(2).cloned(),
+                ),
+                Some("--template") | Some("--target") => {
+                    (args.get(2).cloned(), args.get(3).cloned())
+                }
                 Some(candidate) if TEMPLATES.contains(&candidate) => {
                     (Some(candidate.to_owned()), args.get(2).cloned())
                 }
                 Some(candidate) => (None, Some(candidate.to_owned())),
                 None => (None, None),
             };
+            // `new <something> <name>` is only meaningful when `<something>` is
+            // a real target. Without this check a typo would scaffold a
+            // console project under the typo's name and quietly drop the name
+            // that was typed.
+            if template.is_none() && args.len() > 2 {
+                let unexpected = args[1].clone();
+                return Err(err(
+                    "NXL12008",
+                    format!(
+                        "unknown target '{unexpected}'. Available: {}. If that was the project name, quote it: new --template console \"{unexpected}\"",
+                        TEMPLATES.join(", ")
+                    ),
+                ));
+            }
             let name = name.ok_or_else(|| err("NXL12002", "new: missing project name"))?;
             Ok(Command::New { name, template })
         }
@@ -482,18 +507,18 @@ USAGE:
     nxl <COMMAND> [OPTIONS]
 
 COMMANDS:
-    new [console] <name>   Create a new NXL project from a template
+    new [<target>] <name>  Create a project (targets: console, web)
     init              Initialise a project in the current directory
     run [file]        Run a NXL program
     build             Compile the project (debug)
     build --release   Compile the project (release)
     check [file]      Type-check without producing output
-    dev               Web development server (NOT IMPLEMENTED)
+    dev               Web development server (serves the project's public/)
     fmt [file]        Format source files
     lint [file]       Lint source files
     clean             Remove build artifacts
     test [filter]     Run test files
-    repl              Start interactive REPL (NOT IMPLEMENTED)
+    repl              Start an interactive REPL session
     debug <file>      Debug a file with statement trace
     docs              Show bundled documentation
     doctor            Run toolchain diagnostics
@@ -503,7 +528,7 @@ COMMANDS:
     update            Update dependencies
     audit             Audit dependencies for vulnerabilities
     tree              Show dependency tree
-    publish           Publish package (NOT IMPLEMENTED)
+    publish           Publish the package into a registry
     db:create         Create database
     db:drop           Drop database
     db:migrate        Run migrations
@@ -890,7 +915,13 @@ fn resolve_file(dir: &Path, file: Option<&str>, cfg: &ProjectConfig) -> PathBuf 
 // ── Project commands ──────────────────────────────────────────────────────────
 
 /// The project templates that ship with the toolchain.
-pub const TEMPLATES: [&str; 1] = ["console"];
+pub const TEMPLATES: [&str; 2] = ["console", "web"];
+
+/// What a new project is opened with after it is scaffolded, per template.
+const TEMPLATE_NEXT_HINT: [(&str, &str); 2] = [
+    ("console", "cd PROJECT_NAME && nxlc run"),
+    ("web", "cd PROJECT_NAME && nexora dev"),
+];
 
 /// The files the `console` template creates, used when the on-disk template
 /// directory is not available (an installed binary run from anywhere).
@@ -934,6 +965,69 @@ fn template_files(template: &str) -> Option<Vec<(String, String)>> {
     Some(files)
 }
 
+/// The `web` template, compiled into the binary so an installed compiler can
+/// scaffold a web project without a repository checkout.
+///
+/// `include_str!` also keeps the embedded copy and `templates/web/` from
+/// drifting: the build fails if a file is missing, and a test compares the
+/// generated tree against the files on disk.
+pub const WEB_TEMPLATE: [(&str, &str); 12] = [
+    ("nxl.toml", include_str!("../../templates/web/nxl.toml")),
+    ("README.md", include_str!("../../templates/web/README.md")),
+    (".gitignore", include_str!("../../templates/web/.gitignore")),
+    (
+        "src/main.nxl",
+        include_str!("../../templates/web/src/main.nxl"),
+    ),
+    (
+        "src/app/config.nxl",
+        include_str!("../../templates/web/src/app/config.nxl"),
+    ),
+    (
+        "src/app/routes.nxl",
+        include_str!("../../templates/web/src/app/routes.nxl"),
+    ),
+    (
+        "src/app/state.nxl",
+        include_str!("../../templates/web/src/app/state.nxl"),
+    ),
+    (
+        "public/index.html",
+        include_str!("../../templates/web/public/index.html"),
+    ),
+    (
+        "public/styles.css",
+        include_str!("../../templates/web/public/styles.css"),
+    ),
+    (
+        "public/bootstrap.js",
+        include_str!("../../templates/web/public/bootstrap.js"),
+    ),
+    (
+        "public/favicon.svg",
+        include_str!("../../templates/web/public/favicon.svg"),
+    ),
+    (
+        "tests/basic.nxl",
+        include_str!("../../templates/web/tests/basic.nxl"),
+    ),
+];
+
+/// The template contents to use, preferring the on-disk copy.
+fn embedded_template(template: &str) -> Option<Vec<(String, String)>> {
+    let files: Vec<(&str, &str)> = match template {
+        "console" => CONSOLE_TEMPLATE.to_vec(),
+        "web" => WEB_TEMPLATE.to_vec(),
+        _ => return None,
+    };
+    Some(
+        files
+            .into_iter()
+            .map(|(path, text)| (path.to_owned(), text.to_owned()))
+            .collect(),
+    )
+}
+
 /// Walk a template directory, recording `(relative path, contents)` pairs.
 fn collect_template(root: &Path, dir: &Path, files: &mut Vec<(String, String)>) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -958,17 +1052,15 @@ pub fn cmd_new_from_template(name: &str, template: &str) -> CliResult<String> {
 
 /// Create a project from a named template inside `base`.
 ///
-/// Templates other than `console` are refused with an explanation rather than
-/// generating something that cannot run: there is no web toolchain yet, and a
-/// placeholder that pretends to be one would be worse than an error.
+/// An unknown template is refused with the list of what does exist, rather
+/// than generating a directory that cannot run.
 pub fn cmd_new_from_template_in(base: &Path, name: &str, template: &str) -> CliResult<String> {
-    if template != "console" {
+    if !TEMPLATES.contains(&template) {
         return Err(err(
             "NXL12008",
             format!(
-                "unknown template '{template}'. Available: {}. There is no web template yet: NXL has no web development server, so `{}` would not be runnable.",
-                TEMPLATES.join(", "),
-                template
+                "unknown target '{template}'. Available: {}. Run `nxlc new <target> <name>`.",
+                TEMPLATES.join(", ")
             ),
         ));
     }
@@ -981,12 +1073,13 @@ pub fn cmd_new_from_template_in(base: &Path, name: &str, template: &str) -> CliR
     }
 
     let files = template_files(template)
-        .unwrap_or_else(|| {
-            CONSOLE_TEMPLATE
-                .iter()
-                .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
-                .collect()
-        })
+        .or_else(|| embedded_template(template))
+        .ok_or_else(|| {
+            err(
+                "NXL12008",
+                format!("the '{template}' template is missing from this build"),
+            )
+        })?
         .into_iter()
         .map(|(path, text)| (path, text.replace("PROJECT_NAME", name)))
         .collect::<Vec<_>>();
@@ -1021,10 +1114,40 @@ pub fn cmd_new_from_template_in(base: &Path, name: &str, template: &str) -> CliR
         .map_err(|e| err("NXL12004", e.to_string()))?;
     }
 
-    Ok(format!(
-        "created {template} project '{name}' ({} files). Next: cd {name} && nxlc run",
+    // Resolve and lock whatever the manifest declares, so the project is ready
+    // to run instead of needing a second command first. A failure here is
+    // reported rather than swallowed: a project that cannot install its
+    // dependencies is not a project the user asked for.
+    let install = cmd_pkg_install_in(&project, false, None);
+    let mut report = format!(
+        "created {template} project '{name}' ({} files).",
         files.len()
-    ))
+    );
+    match install {
+        Ok(summary) => {
+            let summary = summary.trim().to_owned();
+            if summary.is_empty() {
+                report.push_str(" No dependencies to install.");
+            } else {
+                report.push(' ');
+                report.push_str(&summary);
+                report.push('.');
+            }
+        }
+        Err(error) => {
+            return Err(err(
+                &error.code,
+                format!("{report} Dependency install failed: {}", error.message),
+            ));
+        }
+    }
+    let hint = TEMPLATE_NEXT_HINT
+        .iter()
+        .find(|(key, _)| *key == template)
+        .map(|(_, hint)| hint.replace("PROJECT_NAME", name))
+        .unwrap_or_else(|| format!("cd {name}"));
+    report.push_str(&format!(" Next: {hint}"));
+    Ok(report)
 }
 
 pub fn cmd_new(name: &str) -> CliResult<String> {
@@ -1159,6 +1282,7 @@ pub fn cmd_run(dir: &Path, file: Option<&str>) -> CliResult<crate::runtime::Exec
 }
 
 pub fn cmd_test(dir: &Path, filter: Option<&str>) -> CliResult<TestReport> {
+    let cfg = ProjectConfig::load(dir).unwrap_or_default();
     let tests_dir = dir.join("tests");
     let mut files: Vec<PathBuf> = Vec::new();
     if tests_dir.is_dir() {
@@ -1183,9 +1307,18 @@ pub fn cmd_test(dir: &Path, filter: Option<&str>) -> CliResult<TestReport> {
     for path in &files {
         match fs::read_to_string(path) {
             Ok(text) => {
-                let source =
-                    crate::source::SourceFile::new(path.to_string_lossy().into_owned(), text);
-                match crate::compile_to_nir(&source) {
+                let _ = text;
+                // Project-aware, like `check`: a test file may import the
+                // modules it is testing, which is the point of testing a
+                // multi-file project. The module root is the entry's own
+                // directory, so `tests/basic.nxl` importing `app.config`
+                // finds `src/app/config.nxl`.
+                let module_root = dir
+                    .join(&cfg.entry)
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| dir.to_path_buf());
+                match crate::project::compile_project_with_modules(path, &module_root) {
                     Ok(_) => passed += 1,
                     Err(d) => {
                         failures.push(format!("{}: {}[{}]", path.display(), d.message, d.code))

@@ -50,7 +50,12 @@ nxl dev --no-watch      # do not recompile on change
 The server:
 
 - compiles the project to JavaScript and serves it at `/app.js`,
-- serves a host page at `/` and a reload client at `/reload.js`,
+- serves `public/index.html` at `/` when the project has a `public/`
+  directory, and every file under it at its own path; otherwise it serves a
+  generated host page,
+- injects `/app.js` and `/reload.js` into a project page that does not load
+  them, so a hand-written page does not silently end up empty,
+- serves a reload client at `/reload.js`,
 - watches every `.nxl` file, recompiles when one changes, and pushes a
   reload over Server-Sent Events at `/reload`,
 - shows a readable compile-error page instead of the app when the project
@@ -58,7 +63,34 @@ The server:
 - reports `503` from `/health` while the project does not compile, so a
   deployment probe sees the truth.
 
+Paths under `public/` are canonicalised before they are read, so `..` cannot
+climb out of the directory and a symlink pointing outside it is refused.
+
 It binds loopback by default and prints the URL it is listening on.
+
+### Web projects
+
+`nxl new web <name>` scaffolds a project whose `public/` holds a landing page,
+and that page is wired to the program rather than decorated around it. NXL has
+no DOM types yet, so `print()` compiles to `console.log` and the template's
+`public/bootstrap.js` takes that over before the program runs, turning the boot
+log into the page:
+
+| The program prints   | The page does                             |
+| -------------------- | ----------------------------------------- |
+| `booting <name>`     | sets the hero heading and the document title |
+| `tagline <text>`     | sets the hero sub-heading                 |
+| `route  <path>`      | appends to the served-routes list         |
+| `feature  <text>`    | appends to the feature list               |
+| `READY`              | clears the splash screen                  |
+
+The splash screen is cleared when the program says it is ready, not after a
+timer. If the program throws, the splash stays up and the reason is shown, so a
+broken app never looks healthy.
+
+`scripts/verify-web-page.js <project>` checks all of that without a browser by
+running `bootstrap.js` and the compiled bundle against a minimal DOM; the test
+suite runs it against the scaffolded template.
 
 ### What `dev` is not
 
@@ -66,6 +98,8 @@ It binds loopback by default and prints the URL it is listening on.
   the JavaScript backend, because NXL has no HTTP types in the language yet and
   so no handler can be written in NXL. Server-side demonstrations live behind
   `nxl serve` (NUF).
+- It is **not** a page builder. It serves whatever is in `public/`; it does not
+  compile templates, process assets or rewrite HTML.
 - Concurrency (`spawn`, `await`, channels) is **not available in the browser**;
   the compiler refuses it for JavaScript targets. Run such programs with
   `nxl run` on the VM.
@@ -75,5 +109,5 @@ It binds loopback by default and prints the URL it is listening on.
 
 `compiler/tests/repl_tests.rs` covers the session semantics;
 `compiler/tests/dev_tests.rs` starts a real HTTP server on an ephemeral port
-and asserts the page, the script, health, 404s, and that a broken project is
-surfaced and then recovers.
+and asserts the page, the script, health, 404s, that `public/` is served, that
+paths cannot escape it, and that a broken project is surfaced and then recovers.

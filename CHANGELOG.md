@@ -38,6 +38,52 @@ because it landed after that tag was pushed.
 
 ### Toolchain
 
+- **`nexora new web <name>`**: a second project target that scaffolds a
+  complete, runnable web application rather than a hello-world. The worktree
+  holds a manifest, four NXL modules (`src/main.nxl` plus `src/app/config`,
+  `routes` and `state`), a landing page with a splash screen
+  (`public/index.html`, `styles.css`, `bootstrap.js`, `favicon.svg`), a
+  self-check and a README. `new` also resolves and locks the new manifest's
+  dependencies before it returns, so the project is ready to run. `--target`
+  and `--template` are now the same flag; both spellings work.
+- **The dev server serves the project's own page.** `nxlc dev` serves
+  `public/index.html` at `/` and every file under `public/` at its own path,
+  falling back to its generated host page for projects that have none. Paths
+  are canonicalised before they are read, so `..` cannot climb out of `public/`
+  and an escaping symlink is refused. A project page that forgets to load
+  `/app.js` has it injected rather than silently rendering empty.
+- **The scaffolded page is wired to the program, not just decorated.** NXL has
+  no DOM types, so `print()` compiles to `console.log` and `public/bootstrap.js`
+  takes it over before the program runs: the boot log becomes the hero, the
+  feature list, the route table and the status pill. The splash screen clears
+  when the program prints `READY` — not on a timer — so a program that throws
+  leaves it up with the reason rather than looking healthy.
+  `scripts/verify-web-page.js <project>` checks this without a browser, and
+  the test suite runs it against the scaffolded template.
+
+### Compiler fixes found while building the web target
+
+- **Array type annotations could not compile at all.** A return type of `[T]`
+  or `Array<T>` was rejected with `NXL3001 ... returns Array(0), expected
+  Array(<id>)`, as was any call passing an array literal to a `[T]` parameter,
+  and any uncalled function with such a return type. An array literal is
+  inferred as `Array(0)` because its element type is not pinned down, while the
+  declaration is `Array(<id>)`; the contracts compared the two with `!=`
+  instead of the compatibility rule the rest of the compiler already uses.
+- **`+` refused dynamically typed operands.** `"prefix" + value` was the only
+  operator that rejected a value of unknown type — comparisons, calls and
+  interpolation all accept them. It now does too, and the result stays
+  `Unknown`. `Int + String` and `Array + Int` are still rejected.
+- **`!` on an unknown value, and the unary contract that checked it, both
+  required a known `Bool`.** Both now accept `Unknown`, like the comparison
+  operators do.
+- **`nxl test` could not see a project's modules.** It compiled each file in
+  `tests/` on its own, so a test importing `app.config` failed with "use of
+  undeclared name". It now loads the project, like `nxl check` does, and
+  resolves imports against the entry's directory.
+
+### Toolchain
+
 - **`nexora repl`**: a persistent session — definitions, imports, the module
   scope and local bindings survive between lines, and `--replay <file>` feeds a
   transcript through the same session path.

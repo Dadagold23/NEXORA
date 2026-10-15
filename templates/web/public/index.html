@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROJECT_NAME</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<!--
+  The splash screen is shown until the NXL program prints READY. bootstrap.js
+  clears it; if the program never gets that far, it stays put rather than
+  pretending the app is healthy.
+-->
+<div id="splash" class="splash">
+  <div class="splash-card">
+    <img class="splash-mark" src="/favicon.svg" width="96" height="96" alt="">
+    <p class="splash-name">NEXORA</p>
+    <p class="splash-sub">PROJECT_NAME</p>
+    <div class="splash-bar"><span></span></div>
+    <p class="splash-stage" id="splash-stage">starting</p>
+  </div>
+</div>
+
+<main class="page" id="page">
+
+  <header class="hero">
+    <img class="hero-mark" src="/favicon.svg" width="72" height="72" alt="">
+    <p class="eyebrow">NXL application</p>
+    <h1 id="app-name">PROJECT_NAME</h1>
+    <p class="lede" id="app-tagline">Loading the application…</p>
+    <div class="status" id="status">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">waiting for the app to report ready</span>
+    </div>
+  </header>
+
+  <section class="panel">
+    <h2>What this app does</h2>
+    <ul class="features" id="features">
+      <li class="placeholder">waiting for the app…</li>
+    </ul>
+  </section>
+
+  <section class="split">
+    <div class="panel">
+      <h2>Served routes</h2>
+      <ul class="routes" id="routes">
+        <li class="placeholder">waiting for the app…</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h2>Boot log</h2>
+      <pre class="log" id="log"></pre>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <p>
+      Served by <code>nexora dev</code>. Edit any <code>.nxl</code> file and the
+      page reloads itself.
+    </p>
+  </footer>
+
+</main>
+
+<!--
+  Order matters: bootstrap.js installs the console bridge that collects what
+  the program prints, then app.js runs the program, then the reload client
+  attaches. If a page forgets /app.js, the dev server injects it.
+-->
+<script src="/bootstrap.js"></script>
+<script src="/app.js"></script>
+<script src="/reload.js"></script>
+
+</body>
+</html>

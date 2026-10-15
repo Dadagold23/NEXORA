@@ -3430,3 +3430,90 @@ mod pkg_tests {
         fs::remove_dir_all(&tmp).ok();
     }
 }
+
+// ── array type annotations ──────────────────────────────────────────────────────
+//
+// An array literal is inferred as `Array(0)` because the element type is not
+// pinned down, while a declared `[T]` or `Array<T>` becomes `Array(<id>)`. The
+// return and argument contracts compared those two with `!=`, so every
+// array-returning or array-taking function was rejected at compile time -
+// which made it impossible to write the natural shape of an application.
+
+#[test]
+fn array_return_annotation_compiles() {
+    let source = SourceFile::new(
+        "array_return.nxl",
+        "fn features() -> [String] { return [\"one\", \"two\"]; } print(features());",
+    );
+    compile_to_nir(&source).expect("a function may return a declared array type");
+}
+
+#[test]
+fn generic_array_return_annotation_compiles() {
+    let source = SourceFile::new(
+        "array_generic.nxl",
+        "fn numbers() -> Array<Int> { return [1, 2]; } print(numbers());",
+    );
+    compile_to_nir(&source).expect("Array<T> is the same annotation as [T]");
+}
+
+#[test]
+fn array_parameter_annotation_compiles() {
+    let source = SourceFile::new(
+        "array_param.nxl",
+        "fn first(items: [String]) -> String { return items[0]; } print(first([\"a\"]));",
+    );
+    compile_to_nir(&source).expect("a function may accept a declared array type");
+}
+
+#[test]
+fn unused_array_function_still_has_to_satisfy_its_contract() {
+    // The contract check ran per function, not per call site, so an uncalled
+    // function with an array return type failed too.
+    let source = SourceFile::new(
+        "array_uncalled.nxl",
+        "fn unused() -> [Int] { return [1]; } print(\"main ran\");",
+    );
+    compile_to_nir(&source).expect("an uncalled function still needs a valid contract");
+}
+
+#[test]
+fn array_annotations_survive_execution() {
+    if !Runtime::node_available() {
+        return;
+    }
+    let source = SourceFile::new(
+        "array_run.nxl",
+        "fn features() -> [String] { return [\"one\", \"two\"]; } print(features());",
+    );
+    let result = run(&source).expect("the array round trip should execute");
+    assert!(
+        result.stdout.contains("one") && result.stdout.contains("two"),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn a_wrong_return_type_is_still_rejected() {
+    // The contract must still reject a genuinely wrong value; only the
+    // `Array(0)`-versus-`Array(<id>)` case was relaxed.
+    let source = SourceFile::new(
+        "array_wrong_return.nxl",
+        "fn broken() -> [String] { return 5; } print(broken());",
+    );
+    let error = compile_to_nir(&source).expect_err("Int is not an array");
+    assert!(
+        error.message.contains("expected Array") || error.message.contains("expected [String]"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_wrong_argument_type_is_still_rejected() {
+    let source = SourceFile::new(
+        "array_wrong_arg.nxl",
+        "fn takes_int(n: Int) -> Int { return n; } print(takes_int([1]));",
+    );
+    let error = compile_to_nir(&source).expect_err("an array is not an Int");
+    assert!(error.message.contains("expected Int"), "{error:?}");
+}
