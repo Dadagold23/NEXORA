@@ -48,6 +48,25 @@ cargo test
 
 5. Update the relevant file under `docs/` and add an entry to `CHANGELOG.md`.
 
+## Editor and brand assets
+
+The VS Code extension in `editors/vscode-nxl` and every NXL image (file icons,
+marketplace banner, GitHub social preview, the logo in the READMEs) are
+generated from `favicon.ico` by a single script. After changing that file:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-brand-assets.ps1
+node editors/vscode-nxl/scripts/verify-extension.js
+```
+
+Commit the regenerated PNGs and the SVG together with the change to
+`favicon.ico`; the verifier fails if the images and the manifest disagree about
+sizes or paths, so a half-finished regeneration cannot pass review.
+
+Two constraints worth knowing: VS Code only accepts SVG and PNG for language
+icons, and the current `favicon.ico` has a malformed header with an opaque
+white background, which the generator repairs before scaling.
+
 ## Language changes
 
 Changes to the language itself are larger than they look: they touch the

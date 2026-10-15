@@ -1,7 +1,11 @@
 # NEXORA / NXL
 
+<p align="center">
+  <img src="dist-brand/nxl-logo.png" width="128" height="128" alt="The NEXORA logo: a cyan &lt;/&gt; inside a ring, on a rounded navy tile">
+</p>
+
 An open-source programming language and toolchain: a compiler, a bytecode VM,
-a JavaScript backend, and a package manager.
+a JavaScript backend, a package manager, a REPL and a development server.
 
 ```bash
 nexora new console hello
@@ -13,7 +17,7 @@ nexora run        # Hello, NXL!
 
 Version 0.1.0. The language roadmap (errors and strings, iteration and data,
 objects and methods, modules, concurrency, backend control flow) is implemented
-and covered by 536 automated tests.
+and covered by 572 automated tests.
 
 | Area          | State                                                        |
 | ------------- | ------------------------------------------------------------ |
@@ -22,11 +26,15 @@ and covered by 536 automated tests.
 | JS backend    | Native loops, `try`, classes and modules; VM-parity tested    |
 | Rust backend  | Straight-line code and `try`; refuses the rest honestly       |
 | Concurrency   | `spawn`/`await`, channels and actor mailboxes (VM only)       |
-| Package mgr   | Local path dependencies, lockfile with SHA-256 integrity      |
+| Package mgr   | Local path dependencies, local registry, SHA-256 lockfile     |
+| REPL          | Persistent session with replay from a transcript file         |
+| Dev server    | `nexora dev` serves a project and live-reloads on change      |
+| Editor        | VS Code extension for `.nxl` highlighting, icon and commands  |
 | Releases      | Windows x64 locally; Linux/macOS built and self-tested in CI  |
 
-Not yet available: a web development server, a live package registry, package
-signing, code-signed installers.
+Not yet available: a hosted package registry, package signing, code-signed
+installers. The development server compiles to JavaScript and watches the
+project; it does not yet run NXL on the server side.
 
 ## Install
 
@@ -74,10 +82,12 @@ also run programs; without it everything runs on the VM.
 ```
 compiler/        the compiler and toolchain (Rust)
 dist/            generated release output
+dist-brand/      the generated logo used by this README and the docs
 examples/        runnable examples
 templates/       project templates (`nexora new console`)
 install/         installer sources per platform
-scripts/         packaging and verification scripts
+editors/         editor integrations (VS Code extension)
+scripts/         packaging, verification and brand-asset scripts
 docs/            documentation
 tests/           legacy Python reference prototype (superseded by compiler/tests)
 ```
@@ -90,8 +100,15 @@ verify the artifact they are about to publish, and produce the archive.
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Every change should keep the test
-suite green (`cargo test`, 536 tests) and `cargo clippy --all-targets -- -D
+suite green (`cargo test`, 572 tests) and `cargo clippy --all-targets -- -D
 warnings` clean; the release pipeline enforces both.
+
+Changing `favicon.ico` means regenerating the brand assets:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-brand-assets.ps1
+node editors/vscode-nxl/scripts/verify-extension.js
+```
 
 ## License
 

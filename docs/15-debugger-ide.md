@@ -12,3 +12,7 @@ The VM emits `Opcode::DebugSpan(span)` per executed NIR instruction; `debugger::
 ## IDE
 
 `nxl ide` prints the source-of-truth table — NIDE delegates every capability to the compiler crate, NLS, the formatter, the debugger, and the CLI. `IdeModel` in `compiler/src/ide.rs` exposes diagnostics/outline/completions/hover/definition/format with parity tests against NLS (`compiler/tests/ide_tests.rs`). No second parser/type-checker exists in the IDE layer.
+
+## Editors
+
+A VS Code extension lives in [`editors/vscode-nxl`](../editors/vscode-nxl/README.md). IMPLEMENTED: syntax highlighting, the `.nxl` file icon, and Run/Check/Build commands that invoke the real compiler. NOT IMPLEMENTED: completion, hover and inline diagnostics — the extension has no language server, so `nxlc check` output goes to the extension's output channel instead. The NLS module that would back those features already exists in the compiler crate and is not yet wired to the editor.

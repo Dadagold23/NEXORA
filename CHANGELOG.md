@@ -4,6 +4,42 @@ All notable changes to NEXORA/NXL are recorded here. The project follows
 semantic versioning; versions below are the language/toolchain releases that
 have actually been built and tested.
 
+## [Unreleased]
+
+Everything in this section is on `main` but is **not** in the `v0.1.0` tag,
+because it landed after that tag was pushed.
+
+### Toolchain
+
+- **`nexora repl`**: a persistent session — definitions, imports, the module
+  scope and local bindings survive between lines, and `--replay <file>` feeds a
+  transcript through the same session path.
+- **`nexora dev`**: a real development server (Axum/Tokio). It serves the
+  project over HTTP, watches the source tree, and pushes a reload over SSE when
+  a file changes (matched by content hash, so a touch alone does not trigger
+  one). It compiles to JavaScript only, and it does not yet execute NXL on the
+  server side.
+- **`pkg publish`**: no longer a stub. Packages are written to a registry
+  directory with an `index.json`, per-package `package.json` and SHA-256
+  checksums, and `pkg install`/`add`/`search`/`info` read them back through
+  `--registry`. Still no hosted registry and no signing.
+
+### Editor and brand
+
+- **VS Code extension** (`editors/vscode-nxl`): `.nxl` language registration,
+  a syntax grammar generated from the compiler's own lexer, the `.nxl` file
+  icon, and Run/Check/Build commands that invoke the real compiler. No language
+  server yet, so completion, hover and inline diagnostics are absent.
+- **Brand assets**: `scripts/make-brand-assets.ps1` regenerates every image
+  from `favicon.ico` — the extension icons (`nxl-32/64/128.png`, `nxl.svg`), the
+  marketplace banner (1280x600), the GitHub social preview (1280x640) and the
+  512x512 logo used by the READMEs. VS Code rejects `.ico` language icons, and
+  the checked-in ICO has a malformed header and an opaque white background, so
+  the generator flood fills the border-connected background into alpha before
+  scaling; otherwise every icon keeps white corners. Verified by
+  `node editors/vscode-nxl/scripts/verify-extension.js`, which now also checks
+  the generated image dimensions.
+
 ## [0.1.0] - 2026-10-14
 
 ### Language (phases 1-6, all approved)

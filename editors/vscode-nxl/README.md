@@ -42,23 +42,28 @@ Then open any `.nxl` file. Package it with `vsce package` to publish.
 
 ## Icons
 
-`icons/nxl-32.png`, `nxl-64.png`, `nxl-128.png` and `icons/nxl.svg` are
-generated from `favicon.ico` in the repository root:
+`icons/nxl-32.png`, `nxl-64.png`, `nxl-128.png`, `icons/nxl.svg` and
+`media/gallery-banner.png` are generated from `favicon.ico` in the repository
+root by one script, so the file icons and the marketplace banner can never
+drift apart:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\make-icons.ps1
+# from the repository root
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\make-brand-assets.ps1
 ```
 
 Two notes about the source asset:
 
 1. VS Code does **not** accept `.ico` for language icons — only SVG and PNG —
-   so the ICO is decoded, cropped to a square and re-rendered at each size.
-2. The checked-in `favicon.ico` has a non-standard header: it declares a
-   769x751 image and a payload slightly larger than the file. It decodes
-   correctly, but replacing it with a properly exported, multi-resolution
-   `.ico` would remove the cropping step entirely. The SVG wraps the 64px PNG
-   so it scales cleanly with no build step; replace it with a hand-authored
+   so the ICO is decoded and re-rendered at each size. The SVG wraps the 64px
+   PNG so it scales cleanly with no build step; replace it with a hand-authored
    vector if you prefer.
+2. The checked-in `favicon.ico` has a non-standard header: it declares a
+   769x771 image while decoding as 769x751, and its background is opaque white
+   rather than transparency. The generator repairs both — it flood fills the
+   border-connected background into alpha before scaling, which is what keeps
+   white halos out of the corners. Replacing the ICO with a properly exported,
+   multi-resolution file would remove that repair step.
 
 ## Verifying
 
@@ -66,6 +71,7 @@ Two notes about the source asset:
 node scripts/verify-extension.js
 ```
 
-Checks that the manifest is complete, that `.nxl` is claimed, that the icon
-paths exist and are PNG/SVG rather than ICO, and that the extension entry
-point parses — without needing the VS Code toolchain.
+Checks that the manifest is complete, that `.nxl` is claimed, that the icon and
+banner files exist at the sizes the marketplace expects, that the generated PNG
+and SVG assets are present, and that the extension entry point parses — all
+without needing the VS Code toolchain.

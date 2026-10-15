@@ -1,5 +1,9 @@
 # NEXORA/NXL Documentation
 
+<p align="center">
+  <img src="../dist-brand/nxl-logo.png" width="96" height="96" alt="The NEXORA logo: a cyan &lt;/&gt; inside a ring, on a rounded navy tile">
+</p>
+
 | Guide | Status covered |
 | --- | --- |
 | [Getting Started](01-getting-started.md) | Install, first project, `nexora` workflow |
@@ -17,7 +21,7 @@
 | [Security](12-security.md) | P16 |
 | [Platforms](13-platforms.md) | P19 |
 | [Testing/Perf/CI](14-testing-performance-ci.md) | P23-P25 |
-| [Debugger & IDE](15-debugger-ide.md) | P21, P22 |
+| [Debugger & IDE](15-debugger-ide.md) | P21, P22, and the VS Code extension |
 | [Troubleshooting](16-troubleshooting.md) | common errors |
 | [Architecture](17-architecture.md) | subsystem map |
 | [Contributing & Release](18-contributing-release.md) | workflow expectations |
