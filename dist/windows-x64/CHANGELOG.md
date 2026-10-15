@@ -6,6 +6,13 @@ have actually been built and tested.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-15
+
+Everything in this section is what changed since the `v0.1.0` tag. The release
+run for `v0.1.0` failed on every platform - it used retired runner labels and
+the installer bug described below - so `v0.1.0` was never published and this
+release replaces it.
+
 Everything in this section is on `main` but is **not** in the `v0.1.0` tag,
 because it landed after that tag was pushed.
 
@@ -71,6 +78,23 @@ because it landed after that tag was pushed.
 
 ### Fixes
 
+- **Commands run outside a project blamed the toolchain.**
+  `ProjectConfig::load` returns defaults when there is no manifest, so
+  `nxlc run`, `check`, `fmt` and `build` all fell through to `cannot read
+  .../src/main.nxl` — a path that reads like a missing file rather than a
+  missing project. They now say the directory is not an NXL project and name
+  the command that creates one. Naming a file still works without a manifest,
+  because a loose file is a deliberate single-file workflow.
+- **`nxlc serve` told you to run the command you had just run.** Its message
+  ended with "run `nxl serve` to listen" after you had run `serve`. It now
+  says plainly that NUF is a specification and nothing is listening, and points
+  at `nexora dev`, which is a real server.
+- **The release package shipped `templates/`.** A `templates/web/src`
+  directory next to a real project looks like a project: `cd` into it and
+  `nxlc run` reports a missing entry point instead of the fact that it is a
+  template. Both targets are compiled into the compiler, so `new` works from an
+  installed binary with nothing else on disk, and the package no longer carries
+  them.
 - **Compiler source was served as a web asset.** `public/index.nxl` is a
   program the dev server renders for `/`, but requesting it by path returned
   its text, so a browser showed the page's source instead of the page and it
@@ -240,4 +264,6 @@ because it landed after that tag was pushed.
   recorded yet, and macOS artifacts are not code-signed or notarised.
 - Windows ARM64 is not built.
 
+[Unreleased]: https://github.com/Dadagold23/NEXORA/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Dadagold23/NEXORA/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Dadagold23/NEXORA/releases/tag/v0.1.0

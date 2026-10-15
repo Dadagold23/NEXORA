@@ -1,9 +1,0 @@
-[package]
-name = "PROJECT_NAME"
-version = "0.1.0"
-edition = "2024"
-description = "A NXL web application"
-entry = "src/main.nxl"
-target = "js"
-
-[dependencies]

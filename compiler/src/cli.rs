@@ -1190,8 +1190,34 @@ pub fn cmd_clean(dir: &Path) -> CliResult<String> {
     }
 }
 
+/// The manifest for this directory, or an error that says what to do.
+///
+/// `ProjectConfig::load` returns defaults when there is no manifest, so every
+/// command run outside a project fell through to "cannot read
+/// .../src/main.nxl". That path looks like a broken toolchain rather than a
+/// missing project, and it is the first thing anyone sees when they run a
+/// command from the wrong directory.
+///
+/// Naming a file is exempt: `nxlc check some.nxl` on a loose file is a
+/// deliberate single-file workflow and should not demand a manifest.
+fn require_project(dir: &Path, file: Option<&str>, command: &str) -> CliResult<ProjectConfig> {
+    if file.is_none() && !dir.join("nxl.toml").exists() {
+        return Err(err(
+            "NXL12006",
+            format!(
+                "{} is not an NXL project: there is no nxl.toml here.\n\
+                 `nxlc {command}` has to run inside a project directory.\n\
+                 Create one with `nxlc new console <name>`, or `nxlc new web <name>` for a web app.\n\
+                 To work on a single file, name it: nxlc {command} <file.nxl>",
+                dir.display()
+            ),
+        ));
+    }
+    ProjectConfig::load(dir)
+}
+
 pub fn cmd_check(dir: &Path, file: Option<&str>) -> CliResult<Vec<String>> {
-    let cfg = ProjectConfig::load(dir)?;
+    let cfg = require_project(dir, file, "check")?;
     let path = resolve_file(dir, file, &cfg);
     if fs::read_to_string(&path).is_err() {
         return Err(err("NXL12006", format!("cannot read '{}'", path.display())));
@@ -1202,7 +1228,7 @@ pub fn cmd_check(dir: &Path, file: Option<&str>) -> CliResult<Vec<String>> {
 }
 
 pub fn cmd_fmt(dir: &Path, file: Option<&str>) -> CliResult<String> {
-    let cfg = ProjectConfig::load(dir)?;
+    let cfg = require_project(dir, file, "fmt")?;
     let targets: Vec<PathBuf> = if let Some(f) = file {
         vec![resolve_file(dir, Some(f), &cfg)]
     } else {
@@ -1229,7 +1255,7 @@ pub fn cmd_lint(dir: &Path, file: Option<&str>) -> CliResult<Vec<String>> {
 }
 
 pub fn cmd_build(dir: &Path, release: bool) -> CliResult<BuildResult> {
-    let cfg = ProjectConfig::load(dir)?;
+    let cfg = require_project(dir, None, "build")?;
     let entry = dir.join(&cfg.entry);
     if fs::read_to_string(&entry).is_err() {
         return Err(err(
@@ -1278,10 +1304,17 @@ fn compile_in_project(
 }
 
 pub fn cmd_run(dir: &Path, file: Option<&str>) -> CliResult<crate::runtime::ExecutionResult> {
-    let cfg = ProjectConfig::load(dir)?;
+    let cfg = require_project(dir, file, "run")?;
     let path = resolve_file(dir, file, &cfg);
     if fs::read_to_string(&path).is_err() {
-        return Err(err("NXL12006", format!("cannot read '{}'", path.display())));
+        return Err(err(
+            "NXL12006",
+            format!(
+                "cannot read '{}': the entry point named in nxl.toml does not exist. \
+                 Edit `entry` in nxl.toml, or pass a file: nxlc run <file.nxl>",
+                path.display()
+            ),
+        ));
     }
     let module = compile_in_project(dir, &path).map_err(CliError::from)?;
     // Prefer the in-process VM so `run` works without Node.js; fall back to
@@ -1403,7 +1436,15 @@ pub fn cmd_lsp() -> CliResult<()> {
 }
 
 pub fn cmd_serve(_dir: &Path) -> CliResult<String> {
-    Ok("NUF demo server: exposes /openapi.json (run `nxl serve` to listen)".to_owned())
+    // Say plainly that this is a stub. The old message ended with "run `nxl
+    // serve` to listen" after someone had just run serve, which reads as if the
+    // tool were telling them to repeat the command they had already typed.
+    Ok(
+        "NUF is a specification, not a server: nothing is listening. \
+        `nexora dev` is the web development server and it is real; it serves a \
+        project and live-reloads. See docs/repl-and-dev.md."
+            .to_owned(),
+    )
 }
 
 // ── Package manager commands ──────────────────────────────────────────────────

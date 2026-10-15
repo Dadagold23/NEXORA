@@ -3587,3 +3587,83 @@ fn quotes_and_backslashes_still_round_trip() {
         artifact.source
     );
 }
+
+// ── telling someone they are in the wrong directory ────────────────────────
+//
+// `ProjectConfig::load` returns defaults when there is no manifest, so every
+// command used to fall through to "cannot read .../src/main.nxl", which reads
+// like a broken toolchain. Naming a file is still exempt: a loose file is a
+// deliberate single-file workflow.
+
+#[test]
+fn commands_outside_a_project_say_so_and_say_what_to_run() {
+    let dir = std::env::temp_dir().join(format!(
+        "nxl_noproject_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    for (command, error) in [
+        (
+            "run",
+            nxl_compiler::cli::cmd_run(&dir, None).expect_err("not a project"),
+        ),
+        (
+            "build",
+            nxl_compiler::cli::cmd_build(&dir, false).expect_err("not a project"),
+        ),
+    ] {
+        assert_eq!(error.code, "NXL12006", "{command}: {error:?}");
+        assert!(
+            error.message.contains("is not an NXL project"),
+            "{command}: {error:?}"
+        );
+        assert!(
+            error.message.contains("no nxl.toml"),
+            "{command}: {error:?}"
+        );
+        assert!(
+            error.message.contains("nxlc new console"),
+            "{command} should say how to create a project: {error:?}"
+        );
+        assert!(
+            !error.message.contains("cannot read"),
+            "{command} must not report a missing entry point: {error:?}"
+        );
+    }
+
+    // A named file is a different question, and still answered.
+    let file = dir.join("loose.nxl");
+    std::fs::write(&file, "fn main() { print(\"loose\"); }").unwrap();
+    let run = nxl_compiler::cli::cmd_run(&dir, Some(file.to_str().unwrap()))
+        .expect("a loose file needs no manifest");
+    assert!(run.stdout.contains("loose"), "{run:?}");
+    assert!(
+        nxl_compiler::cli::cmd_check(&dir, Some(file.to_str().unwrap())).is_ok(),
+        "a loose file can be checked without a manifest"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn serve_says_it_is_not_a_server() {
+    let dir = std::env::temp_dir().join(format!(
+        "nxl_serve_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let message = nxl_compiler::cli::cmd_serve(&dir).expect("serve answers");
+    // It used to end with "run `nxl serve` to listen", i.e. telling someone to
+    // repeat the command they had just run.
+    assert!(message.contains("not a server"), "{message}");
+    assert!(!message.contains("to listen"), "{message}");
+    assert!(message.contains("nexora dev"), "{message}");
+    std::fs::remove_dir_all(&dir).ok();
+}

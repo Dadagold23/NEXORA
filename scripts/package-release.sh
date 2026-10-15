@@ -68,15 +68,13 @@ for doc in LICENSE CHANGELOG.md SECURITY.md; do
 done
 cp "$repo_root/examples/hello/src/main.nxl" "$stage_dir/examples/main.nxl"
 
-# Both project targets ship. The compiler has them embedded too, so an
-# installed binary can scaffold either without this directory, but a package
-# that claims to be the project templates should carry both.
-for target in console web; do
-    if [ -d "$repo_root/templates/$target" ]; then
-        mkdir -p "$stage_dir/templates/$target"
-        cp -R "$repo_root/templates/$target/." "$stage_dir/templates/$target/"
-    fi
-done
+# Both project targets are compiled into the compiler, so `nxlc new console`
+# and `nxlc new web` work from an installed binary with nothing else on disk.
+#
+# They are deliberately NOT shipped as files. A `templates/web/src` directory
+# sitting next to a real project looks like a project: `cd` into it and
+# `nxlc run` reports a missing entry point rather than the fact that it is a
+# template. `new` is the supported way to start a project.
 
 say "Generating SHA-256 checksums"
 (
