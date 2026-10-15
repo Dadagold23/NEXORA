@@ -1,0 +1,99 @@
+{
+  "name": "nxl",
+  "displayName": "NEXORA Language (NXL)",
+  "description": "Syntax highlighting and a file icon for the NXL language.",
+  "version": "0.1.0",
+  "publisher": "nexora",
+  "license": "MIT",
+  "icon": "icons/nxl-128.png",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "nxl",
+    "nexora",
+    "compiler"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dadagold23/NEXORA.git"
+  },
+  "activationEvents": [
+    "onLanguage:nxl"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "nxl",
+        "aliases": [
+          "NXL",
+          "NEXORA"
+        ],
+        "extensions": [
+          ".nxl"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": "icons/nxl.svg"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "nxl",
+        "scopeName": "source.nxl",
+        "path": "./syntaxes/nxl.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "nxl.runFile",
+        "title": "NXL: Run File",
+        "category": "NXL"
+      },
+      {
+        "command": "nxl.checkFile",
+        "title": "NXL: Check File",
+        "category": "NXL"
+      },
+      {
+        "command": "nxl.buildProject",
+        "title": "NXL: Build Project",
+        "category": "NXL"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "nxl.runFile",
+          "when": "editorLangId == nxl",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "NXL",
+      "properties": {
+        "nxl.compilerPath": {
+          "type": "string",
+          "default": "nxlc",
+          "description": "Path to the NXL compiler (nxlc). Use an absolute path if it is not on PATH."
+        },
+        "nxl.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages"
+          ],
+          "default": "off",
+          "description": "Trace NXL compiler invocations made by this extension."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "verify": "node scripts/verify-extension.js"
+  }
+}
