@@ -26,7 +26,7 @@ version="$(awk -F'"' '/^version *= *"/ { print $2; exit }' "$compiler_dir/Cargo.
 
 say() { printf '==> %s\n' "$1"; }
 
-# ── 1. Platform gate ───────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 kernel="$(uname -s)"
 machine="$(uname -m)"
 case "$kernel" in
@@ -44,7 +44,7 @@ if [ "${actual_os}-${actual_arch}" != "$target" ]; then
     exit 1
 fi
 
-# ── 2. Quality gates ───────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 cd "$compiler_dir"
 say "cargo fmt --check"
 cargo fmt -- --check
@@ -55,7 +55,7 @@ cargo test
 say "cargo build --release"
 cargo build --release
 
-# ── 3. Stage ───────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 say "Staging dist/$target (version $version)"
 rm -rf "$stage_dir"
 mkdir -p "$stage_dir/examples"
@@ -78,7 +78,7 @@ say "Generating SHA-256 checksums"
     fi
 )
 
-# ── 4. Verify the artifact that will actually ship ─────────────────────────────
+# ----------------------------------------------------------------------------
 say "Verifying the packaged artifact"
 "$stage_dir/nxlc" --version
 "$stage_dir/nxlc" doctor
@@ -120,7 +120,7 @@ echo "    invalid input is rejected with a non-zero exit code"
 say "Dry-running the installer"
 sh "$stage_dir/install.sh" --dry-run
 
-# ── 5. Archive ─────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 say "Creating archive"
 archive="$dist_dir/NEXORA-${version}-${target}.tar.gz"
 rm -f "$archive"

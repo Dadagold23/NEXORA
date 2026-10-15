@@ -45,7 +45,7 @@ function Write-Ok { param([string]$Message) Write-Host "    ok  $Message" }
 function Write-Warn { param([string]$Message) Write-Host "    warn $Message" -ForegroundColor Yellow }
 function Fail { param([string]$Message) throw $Message }
 
-# ── 1. Platform gate ────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 Write-Step 'Checking platform'
 # `$IsWindows` only exists in PowerShell Core and `$PSVersionTable.Platform`
 # only in newer hosts, so neither is assumed. Windows PowerShell 5.1 cannot run
@@ -61,7 +61,7 @@ if ($arch -ne 'AMD64' -and $arch -ne 'x64') {
 }
 Write-Ok "Windows x64"
 
-# ── 2. Locate and verify the payload ────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 $sourceDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sourceExe = Join-Path $sourceDir $script:ExeName
 $checksumFile = Join-Path $sourceDir 'checksums.sha256'
@@ -92,7 +92,7 @@ if (-not $InstallDir) {
     $InstallDir = Join-Path $env:LOCALAPPDATA 'NEXORA\bin'
 }
 
-# ── 3. Uninstall ────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 if ($Uninstall) {
     Write-Step 'Uninstalling'
     $targetExe = Join-Path $InstallDir $script:ExeName
@@ -120,7 +120,7 @@ if ($Uninstall) {
     exit 0
 }
 
-# ── 4. Install ──────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 Write-Step "Installing to $InstallDir"
 if (Test-Path -LiteralPath $InstallDir) {
     $foreign = Get-ChildItem -LiteralPath $InstallDir -File | Where-Object { $_.Name -ne $script:ExeName }
@@ -142,7 +142,7 @@ New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Copy-Item -LiteralPath $sourceExe -Destination (Join-Path $InstallDir $script:ExeName) -Force
 Write-Ok "installed $script:ExeName"
 
-# ── 5. PATH ─────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------------
 Write-Step 'Configuring the user PATH'
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $entries = @($userPath -split ';' | Where-Object { $_ })
@@ -158,7 +158,7 @@ if (($processPath -split ';') -notcontains $InstallDir) {
     $env:Path = "$processPath;$InstallDir"
 }
 
-# ── 6. Prove it works before claiming success ───────────────────────────────────
+# ----------------------------------------------------------------------------
 Write-Step 'Verifying the installation'
 $installedExe = Join-Path $InstallDir $script:ExeName
 $versionOutput = & $installedExe --version 2>&1

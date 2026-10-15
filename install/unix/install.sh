@@ -54,7 +54,7 @@ die() {
     exit 1
 }
 
-# â”€â”€ 1. Platform gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ----------------------------------------------------------------------------
 say "Checking platform"
 kernel="$(uname -s)"
 machine="$(uname -m)"
@@ -75,7 +75,7 @@ if [ "$package_id" != "${expected_os}-${expected_arch}" ] && [ "$package_id" != 
 fi
 ok "${kernel} ${machine} (${expected_os}-${expected_arch})"
 
-# â”€â”€ 2. Checksum verification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ----------------------------------------------------------------------------
 say "Verifying artifact integrity"
 payload="$SCRIPT_DIR/$EXE_NAME"
 checksum_file="$SCRIPT_DIR/checksums.sha256"
@@ -98,7 +98,7 @@ fi
 The download is corrupt or tampered with; nothing was installed."
 ok "SHA-256 matches (${actual%${actual#????????}}...)"
 
-# â”€â”€ 3. Paths â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ----------------------------------------------------------------------------
 if [ -z "$PREFIX" ]; then
     PREFIX="$HOME/.nexora/bin"
 fi
@@ -128,7 +128,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
     exit 0
 fi
 
-# â”€â”€ 4. Install â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ----------------------------------------------------------------------------
 say "Installing to $PREFIX"
 if [ -d "$PREFIX" ]; then
     foreign="$(find "$PREFIX" -maxdepth 1 -type f ! -name "$EXE_NAME" 2>/dev/null | head -n 1)"
@@ -149,7 +149,7 @@ cp "$payload" "$PREFIX/$EXE_NAME"
 chmod +x "$PREFIX/$EXE_NAME"
 ok "installed $EXE_NAME"
 
-# â”€â”€ 5. PATH (user profile only; never system-wide) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ----------------------------------------------------------------------------
 say "Configuring PATH for your shell"
 env_file="$HOME/.nexora/env"
 mkdir -p "$(dirname "$env_file")"
@@ -173,7 +173,7 @@ if ! grep -Fq '.nexora/env' "$HOME/.profile" 2>/dev/null; then
     ok "added a loader line to ~/.profile"
 fi
 
-# â”€â”€ 6. Prove it works â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ----------------------------------------------------------------------------
 say "Verifying the installation"
 version_output="$("$PREFIX/$EXE_NAME" --version)"
 ok "installed compiler reports: $version_output"

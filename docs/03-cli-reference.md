@@ -1,32 +1,85 @@
 # CLI Reference
 
-All commands are dispatched by `nxlc` (`cargo run -- <cmd>`).
+Every command is available as both `nxlc` and `nexora` — they are the same
+binary under two names. `nxlc` is the compiler spelling, `nexora` the
+project-facing one.
 
-| Command | What it does (status) |
+## Project commands
+
+| Command | What it does |
 | --- | --- |
-| `new <name>` | Scaffold a project (P12) |
-| `init` | Scaffold in the current dir (P12) |
-| `run [file]` | Run via JS runtime bridge (P12) |
-| `build [--release]` | Compile project (P12) |
-| `check` | Type-check via NIR lowering (P12) |
-| `fmt` | Normalise whitespace (P12, minimal) |
-| `lint` | Delegates to check (P12) |
-| `clean` | Remove build/ (P12) |
-| `test [filter]` | Discover *_test.nxl and compile-check (P12) |
-| `repl` | NOT IMPLEMENTED |
-| `debug <file> [--break=N]` | Statement trace + breakpoint hits (P21) |
-| `docs` | Docs pointer (P26) |
-| `doctor` | Toolchain diagnostics (P12) |
-| `install [--offline]`, `add`, `remove`, `update`, `audit`, `tree`, `publish` | NXP package manager (P13) |
-| `db:create` `db:drop` `db:migrate` `db:rollback` `db:refresh` `db:fresh [--seed]` `db:seed` `db:status` `db:audit` | NDB (P14) |
-| `make:model` `make:migration` `make:seeder` `make:factory` | NDB scaffolds (P14) |
-| `serve` | NUF demo HTTP server, exposes `/openapi.json` (P15) |
-| `bridge` | List FFI bridge status (P17) |
-| `platforms` | Print honest platform matrix (P19) |
-| `lsp` | Start NLS on stdio (P20) |
-| `ide` | Print NIDE capability sources (P22) |
-| `bench` | Run smoke benchmarks (P24) |
-| `version`, `help` | Toolchain metadata |
+| `new [console] <name>` | Create a project from a template. `new hello`, `new console hello`, `new --template console hello` and `new --template=console hello` are equivalent. `console` is the only template that exists; `new web ...` is refused with an explanation because NXL has no web development server. |
+| `init` | Create the same project layout in the current directory. |
+| `run [file]` | Run a project entry point or a single `.nxl` file on the VM. |
+| `build [--release]` | Compile the project into `build/`. |
+| `check [file]` | Parse and type-check without producing output. |
+| `test [filter]` | Parse, type-check and run every `.nxl` file in `tests/`. There is no test-block syntax yet. |
+| `clean` | Remove build output. |
+| `fmt [file]`, `lint [file]` | Normalise whitespace; lint delegates to check. |
+| `dev` | **Refused.** A web development server does not exist yet. Exits non-zero rather than pretending. |
+| `doctor` | Real environment diagnostics: compiler version and architecture, Node.js availability, `nxl.toml` and its declared entry point. |
+| `debug <file> [--break=N]` | Statement trace with breakpoint counts. |
+| `docs` | Print the documentation map. |
+| `platforms` | Print the platform support summary. |
+| `version`, `--version`, `help` | Toolchain metadata. |
+| `repl` | **Not implemented.** |
 
-Flags: `--offline` for install; `[--seed]` for db:fresh; `--break=N` for debug; `--release` for build.
-Exit codes: 0 success, 1 failure, 2 usage error.
+## Package manager (NXP)
+
+| Command | What it does |
+| --- | --- |
+| `pkg install [--offline]` | Resolve dependencies and write `nxl.lock`. |
+| `pkg add <name> [req]` | Add a registry dependency. There is no live registry, so this records the dependency and then **fails** with an explanation and a non-zero exit code. |
+| `pkg add <name> --path <dir>` | Add a local path dependency. Validated on disk, resolved (including its own path dependencies), cached and locked with a SHA-256 checksum. |
+| `pkg remove <name>` | Remove a dependency. Fails if it is not declared. |
+| `pkg update` | Re-resolve dependencies. |
+| `pkg tree` | Dependency tree with resolved versions. |
+| `pkg audit` | Match the lockfile against the local advisory set. |
+| `pkg search [term]` | Search local dependencies and the package cache. Says that it is not a live registry. |
+| `pkg info <name>` | Requirement, resolved version and source of a dependency. |
+| `pkg publish` | **Refused** — no registry service exists. |
+
+Short forms work too: `install`, `add`, `remove`, `update`, `audit`, `tree`,
+`search`, `info`.
+
+## Database (NDB)
+
+`db:create`, `db:drop`, `db:migrate`, `db:rollback`, `db:refresh`,
+`db:fresh [--seed]`, `db:seed`, `db:status`, `db:audit`.
+
+## Scaffolding
+
+`make:model`, `make:migration`, `make:seeder`, `make:factory`.
+
+## Web, tooling and interoperability
+
+| Command | Status |
+| --- | --- |
+| `serve` | NUF demonstration server: exposes `/openapi.json`. Not a development server with hot reload. |
+| `lsp` | Language server (NLS). The CLI entry point validates initialisation. |
+| `ide` | Print the IDE capability sources. |
+| `bridge` | Print FFI bridge status. |
+| `bench` | Run smoke benchmarks. |
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | Failure — a program error, a failed check, or a refused operation |
+| 2 | Usage error (missing or invalid arguments) |
+
+Commands that cannot do what was asked exit non-zero. Unsupported operations
+print an explanation and fail; they never report success for something that did
+not happen.
+
+## Project layout created by `new console`
+
+```text
+<name>/
+  nxl.toml          [package] metadata and the entry point
+  src/main.nxl      program entry point
+  tests/basic.nxl   compiled and run by `test`
+  README.md         project notes
+  .gitignore
+```
