@@ -94,11 +94,13 @@ pub enum Command {
     },
     PkgInstall {
         offline: bool,
+        registry: Option<String>,
     },
     PkgAdd {
         name: String,
         req: Option<String>,
         path: Option<String>,
+        registry: Option<String>,
     },
     PkgRemove {
         name: String,
@@ -106,12 +108,16 @@ pub enum Command {
     PkgUpdate,
     PkgAudit,
     PkgTree,
-    PkgPublish,
+    PkgPublish {
+        registry: Option<String>,
+    },
     PkgSearch {
         term: Option<String>,
+        registry: Option<String>,
     },
     PkgInfo {
         name: String,
+        registry: Option<String>,
     },
     DbCreate,
     DbDrop,
@@ -150,26 +156,76 @@ pub enum Command {
     Doctor,
 }
 
-/// Split `add` arguments into positionals (`name`, optional requirement) and
-/// the value of `--path`, which may appear anywhere after the subcommand.
-fn split_add_args(args: &[String]) -> (Vec<String>, Option<String>) {
-    let mut positional = Vec::new();
-    let mut path = None;
+/// Value of a `--flag <value>` pair, or `--flag=value`.
+fn flag_value(args: &[String], name: &str) -> Option<String> {
     let mut index = 0;
     while index < args.len() {
-        match args[index].as_str() {
-            "--path" => {
-                path = args.get(index + 1).cloned();
+        if args[index] == name {
+            return args.get(index + 1).cloned();
+        }
+        if let Some(rest) = args[index].strip_prefix(&format!("{name}=")) {
+            return Some(rest.to_owned());
+        }
+        index += 1;
+    }
+    None
+}
+
+/// The first argument that is not a flag or a flag's value.
+fn positional_arg(args: &[String], flags_with_values: &[&str]) -> Option<String> {
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index].as_str();
+        if flags_with_values.contains(&argument) {
+            index += 2;
+            continue;
+        }
+        if argument.starts_with("--") {
+            if argument.contains('=') {
+                index += 1;
+            } else {
                 index += 2;
             }
-            "--offline" => index += 1,
-            other => {
-                positional.push(other.to_owned());
-                index += 1;
+            continue;
+        }
+        return Some(args[index].clone());
+    }
+    None
+}
+
+/// Split `add` arguments into positionals (`name`, optional requirement) and
+/// the values of flags that take one. Flags may appear anywhere after the
+/// subcommand, and a flag's value is never mistaken for the requirement.
+fn split_add_args(args: &[String]) -> (Vec<String>, Option<String>, Option<String>) {
+    const VALUE_FLAGS: [&str; 2] = ["--path", "--registry"];
+    let mut positional = Vec::new();
+    let mut path = None;
+    let mut registry = None;
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index].as_str();
+        if let Some(flag) = argument.strip_prefix("--registry=") {
+            registry = Some(flag.to_owned());
+            index += 1;
+        } else if let Some(flag) = argument.strip_prefix("--path=") {
+            path = Some(flag.to_owned());
+            index += 1;
+        } else if VALUE_FLAGS.contains(&argument) {
+            let value = args.get(index + 1).cloned();
+            if argument == "--path" {
+                path = value;
+            } else {
+                registry = value;
             }
+            index += 2;
+        } else if argument == "--offline" {
+            index += 1;
+        } else {
+            positional.push(argument.to_owned());
+            index += 1;
         }
     }
-    (positional, path)
+    (positional, path, registry)
 }
 
 pub fn parse_args(args: &[String]) -> CliResult<Command> {
@@ -238,8 +294,12 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
         "doctor" => Ok(Command::Doctor),
         "install" => Ok(Command::PkgInstall {
             offline: args.iter().any(|a| a == "--offline"),
+            registry: flag_value(&args[1..], "--registry"),
         }),
-        "package:install" => Ok(Command::PkgInstall { offline: false }),
+        "package:install" => Ok(Command::PkgInstall {
+            offline: false,
+            registry: None,
+        }),
         "pkg" | "package" => {
             if args.len() < 2 {
                 return Err(err(
@@ -250,12 +310,14 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
             let sub = args[1].as_str();
             let rest = &args[2..];
             let has_flag = |name: &str| rest.iter().any(|a| a == name);
+            let registry_flag = flag_value(rest, "--registry");
             match sub {
                 "install" => Ok(Command::PkgInstall {
                     offline: has_flag("--offline"),
+                    registry: registry_flag,
                 }),
                 "add" => {
-                    let (positional, path) = split_add_args(rest);
+                    let (positional, path, registry) = split_add_args(rest);
                     let name = positional
                         .first()
                         .cloned()
@@ -264,6 +326,7 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
                         name,
                         req: positional.get(1).cloned(),
                         path,
+                        registry,
                     })
                 }
                 "remove" | "rm" => {
@@ -276,27 +339,32 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
                 "update" | "upgrade" => Ok(Command::PkgUpdate),
                 "audit" => Ok(Command::PkgAudit),
                 "tree" | "deps" => Ok(Command::PkgTree),
-                "publish" => Ok(Command::PkgPublish),
+                "publish" => Ok(Command::PkgPublish {
+                    registry: registry_flag,
+                }),
                 "search" | "find" => Ok(Command::PkgSearch {
-                    term: rest.first().cloned(),
+                    term: positional_arg(rest, &["--registry"]),
+                    registry: registry_flag,
                 }),
                 "info" | "show" => {
-                    let name = rest
-                        .first()
-                        .cloned()
-                        .ok_or_else(|| err("NXL12002", "pkg info: missing package name"))?;
-                    Ok(Command::PkgInfo { name })
+                    let name = positional_arg(rest, &["--registry"]).ok_or_else(|| {
+                        err("NXL12002", "pkg info: missing package name")
+                    })?;
+                    Ok(Command::PkgInfo {
+                        name,
+                        registry: registry_flag,
+                    })
                 }
                 other => Err(err(
                     "NXL12003",
                     format!(
-                        "unknown pkg subcommand '{other}' (try: install, add, remove, update, tree, audit, search, info)"
+                        "unknown pkg subcommand '{other}' (try: install, add, remove, update, tree, audit, search, info, publish)"
                     ),
                 )),
             }
         }
         "add" => {
-            let (positional, path) = split_add_args(&args[1..]);
+            let (positional, path, registry) = split_add_args(&args[1..]);
             let name = positional
                 .first()
                 .cloned()
@@ -305,6 +373,7 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
                 name,
                 req: positional.get(1).cloned(),
                 path,
+                registry,
             })
         }
         "remove" => {
@@ -327,16 +396,20 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
         "package:update" => Ok(Command::PkgUpdate),
         "audit" => Ok(Command::PkgAudit),
         "tree" | "deps" => Ok(Command::PkgTree),
-        "publish" => Ok(Command::PkgPublish),
+        "publish" => Ok(Command::PkgPublish {
+            registry: flag_value(&args[1..], "--registry"),
+        }),
         "search" | "find" => Ok(Command::PkgSearch {
-            term: args.get(1).cloned(),
+            term: positional_arg(&args[1..], &["--registry"]),
+            registry: flag_value(&args[1..], "--registry"),
         }),
         "info" | "show" => {
-            let name = args
-                .get(1)
-                .cloned()
+            let name = positional_arg(&args[1..], &["--registry"])
                 .ok_or_else(|| err("NXL12002", "info: missing package name"))?;
-            Ok(Command::PkgInfo { name })
+            Ok(Command::PkgInfo {
+                name,
+                registry: flag_value(&args[1..], "--registry"),
+            })
         }
         "serve" => Ok(Command::Serve),
         "bridge" => Ok(Command::Bridge),
@@ -1133,8 +1206,11 @@ pub fn cmd_test(dir: &Path, filter: Option<&str>) -> CliResult<TestReport> {
 
 // ── Stub / informational commands ─────────────────────────────────────────────
 
-pub fn cmd_repl() -> String {
-    "NXL repl — NOT IMPLEMENTED (interactive REPL deferred)".to_owned()
+pub fn cmd_repl() -> CliResult<String> {
+    // The session itself writes to stdout as it goes; this returns the
+    // session summary once the input stream ends.
+    crate::repl::cmd_repl().map_err(|e| err("NXL12004", e.to_string()))?;
+    Ok(String::from("repl session ended"))
 }
 
 pub fn cmd_debug(file: &str) -> String {
@@ -1188,14 +1264,49 @@ fn pkg_manager(dir: &Path, offline: bool) -> crate::pkg::PackageManager {
     crate::pkg::PackageManager::new(dir.join(".nxl-cache")).with_offline(offline)
 }
 
+/// Start the development server for a project.
+///
+/// `dev` serves the JavaScript build in the browser with live reload. It is a
+/// real HTTP server, but not a server-side NXL runtime: NXL has no HTTP types
+/// in the language yet, so handlers cannot yet be written in NXL.
+pub async fn cmd_dev(dir: &Path, config: crate::dev::DevConfig) -> CliResult<()> {
+    crate::devserver::serve_in(dir.to_path_buf(), config)
+        .await
+        .map_err(CliError::from)
+}
+
+/// A package manager that also resolves from a local registry directory.
+fn pkg_manager_with_registry(
+    dir: &Path,
+    offline: bool,
+    registry_dir: Option<&Path>,
+) -> crate::pkg::PackageManager {
+    let mut manager = pkg_manager(dir, offline);
+    if let Some(registry_dir) = registry_dir {
+        if registry_dir.exists() {
+            let _ = manager.attach_registry(crate::pkg::LocalRegistry::new(registry_dir));
+        }
+    }
+    manager
+}
+
 pub fn cmd_pkg_install(dir: &Path, offline: bool) -> CliResult<String> {
+    cmd_pkg_install_in(dir, offline, None)
+}
+
+/// Install dependencies, optionally resolving from a local registry.
+pub fn cmd_pkg_install_in(
+    dir: &Path,
+    offline: bool,
+    registry_dir: Option<&Path>,
+) -> CliResult<String> {
     // Ensure a manifest exists so `install` is meaningful on empty projects.
     if !dir.join("nxl.toml").exists() {
         let cfg = ProjectConfig::default();
         fs::write(dir.join("nxl.toml"), cfg.to_toml())
             .map_err(|e| err("NXL12004", e.to_string()))?;
     }
-    let mut pm = pkg_manager(dir, offline);
+    let mut pm = pkg_manager_with_registry(dir, offline, registry_dir);
     let report = pm.install(dir)?;
     if report.installed.is_empty() {
         Ok("installed 0 dependencies (no dependencies declared)".to_owned())
@@ -1210,8 +1321,13 @@ pub fn cmd_pkg_install(dir: &Path, offline: bool) -> CliResult<String> {
 /// What `pkg add` was asked to do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AddRequest<'a> {
-    /// A registry dependency, optionally with an explicit requirement.
-    Registry { name: &'a str, req: Option<&'a str> },
+    /// A registry dependency, optionally with an explicit requirement and a
+    /// local registry directory to resolve it from.
+    Registry {
+        name: &'a str,
+        req: Option<&'a str>,
+        registry: Option<&'a str>,
+    },
     /// A local path dependency, validated on disk before being recorded.
     Path { name: &'a str, path: &'a str },
 }
@@ -1255,11 +1371,55 @@ pub fn cmd_pkg_add(dir: &Path, request: AddRequest<'_>) -> CliResult<String> {
             let line = format!("{name} = \"path:{}\"\n", path.replace('\\', "/"));
             (name.to_owned(), line)
         }
-        AddRequest::Registry { name, req } => {
+        AddRequest::Registry {
+            name,
+            req,
+            registry,
+        } => {
             let req = req.unwrap_or("*");
             // Reject an unparsable requirement now instead of writing a
             // manifest that fails to install later.
             let parsed = crate::pkg::VersionReq::parse(req).map_err(CliError::from)?;
+
+            // A registry dependency is only honest if the package can actually
+            // be resolved. With `--registry`, check that directory first.
+            let registry_dir = registry
+                .map(PathBuf::from)
+                .unwrap_or_else(default_registry_dir);
+            let local = crate::pkg::LocalRegistry::new(&registry_dir);
+            if !registry_dir.exists() {
+                return Err(err(
+                    "NXL13006",
+                    format!(
+                        "cannot add '{name}': no registry at {}. Publish one with `nxl pkg publish --registry {}` or add a local path dependency instead.",
+                        registry_dir.display(),
+                        registry_dir.display()
+                    ),
+                ));
+            }
+            let available = local.list();
+            let requirement = parsed.clone();
+            if !available
+                .iter()
+                .any(|package| package.name == name && requirement.matches(&package.version))
+            {
+                let known = if available.is_empty() {
+                    "it is empty".to_owned()
+                } else {
+                    available
+                        .iter()
+                        .map(|package| format!("{} {}", package.name, package.version))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                return Err(err(
+                    "NXL13006",
+                    format!(
+                        "cannot add '{name}': no version matching '{req}' in registry {} ({known})",
+                        registry_dir.display()
+                    ),
+                ));
+            }
             let line = format!("{name} = \"{}\"\n", parsed);
             (name.to_owned(), line)
         }
@@ -1277,7 +1437,13 @@ pub fn cmd_pkg_add(dir: &Path, request: AddRequest<'_>) -> CliResult<String> {
 
     // Install, and report honestly: a dependency that cannot be resolved is
     // an error, never a success message.
-    let mut pm = pkg_manager(dir, false);
+    let registry_dir = match request {
+        AddRequest::Path { .. } => None,
+        AddRequest::Registry { registry, .. } => {
+            registry.map(PathBuf::from).or(Some(default_registry_dir()))
+        }
+    };
+    let mut pm = pkg_manager_with_registry(dir, false, registry_dir.as_deref());
     match pm.install(dir) {
         Ok(report) => {
             let source = match &request {
@@ -1351,8 +1517,32 @@ fn local_packages(dir: &Path) -> Vec<(String, String, String)> {
     out
 }
 
-pub fn cmd_pkg_search(dir: &Path, term: Option<&str>) -> CliResult<String> {
-    let packages = local_packages(dir);
+pub fn cmd_pkg_search_in(
+    dir: &Path,
+    term: Option<&str>,
+    registry_dir: Option<&Path>,
+) -> CliResult<String> {
+    let mut packages = local_packages(dir);
+    // A registry directory widens the search beyond this project's own
+    // dependencies and cache.
+    if let Some(registry_dir) = registry_dir {
+        for entry in registry_packages(registry_dir) {
+            let name = entry
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            if packages.iter().any(|(existing, _, _)| existing == &name) {
+                continue;
+            }
+            let version = entry
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default()
+                .to_owned();
+            packages.push((name, version, "registry".to_owned()));
+        }
+    }
     let matches: Vec<&(String, String, String)> = packages
         .iter()
         .filter(|(name, _, _)| term.is_none_or(|t| name.to_lowercase().contains(&t.to_lowercase())))
@@ -1370,12 +1560,36 @@ pub fn cmd_pkg_search(dir: &Path, term: Option<&str>) -> CliResult<String> {
         }
     }
     out.push_str(
-        "\nnote: this build searches local dependencies and the package cache only;\n      there is no live registry yet.\n",
+        "\nnote: results cover this project's dependencies, the package cache\n      and, with --registry, a local registry directory. There is no hosted\n      registry yet.\n",
     );
     Ok(out)
 }
 
+pub fn cmd_pkg_search(dir: &Path, term: Option<&str>) -> CliResult<String> {
+    cmd_pkg_search_in(dir, term, None)
+}
+
 pub fn cmd_pkg_info(dir: &Path, name: &str) -> CliResult<String> {
+    cmd_pkg_info_in(dir, name, None)
+}
+
+/// Package metadata, optionally widened to a local registry.
+pub fn cmd_pkg_info_in(dir: &Path, name: &str, registry_dir: Option<&Path>) -> CliResult<String> {
+    if let Some(registry_dir) = registry_dir {
+        if let Some(package) = crate::pkg::LocalRegistry::new(registry_dir)
+            .list()
+            .into_iter()
+            .find(|package| package.name == name)
+        {
+            return Ok(format!(
+                "{name}\n  version   : {}\n  source    : local registry ({})\n  checksum  : {}\n  path      : {}\n",
+                package.version,
+                registry_dir.display(),
+                package.checksum,
+                package.directory.display()
+            ));
+        }
+    }
     let manifest = crate::pkg::Manifest::load(dir).map_err(CliError::from)?;
     match local_packages(dir)
         .into_iter()
@@ -1479,13 +1693,69 @@ pub fn cmd_pkg_tree(dir: &Path) -> CliResult<String> {
     Ok(out)
 }
 
-pub fn cmd_pkg_publish() -> CliResult<String> {
-    // Refusing is the honest answer: pretending to publish would report a
-    // success that never happened.
-    Err(err(
-        "NXL13010",
-        "publishing is not available: there is no registry service yet (planned for a later phase)",
+/// Default location for the local registry: `$NXL_REGISTRY`, else
+/// `~/.nexora/registry`.
+fn default_registry_dir() -> PathBuf {
+    std::env::var("NXL_REGISTRY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| std::env::temp_dir());
+            home.join(".nexora").join("registry")
+        })
+}
+
+/// Publish the project in `dir` into a local registry.
+///
+/// Publishing writes a real, inspectable package: its manifest, its sources,
+/// per-file SHA-256 checksums and an index. There is no hosted registry, so
+/// this is the registry: a directory that can be vendored, archived and
+/// shared. Publishing is therefore genuinely useful rather than a stub.
+pub fn cmd_pkg_publish_to(dir: &Path, registry_dir: &Path) -> CliResult<String> {
+    if !dir.join("nxl.toml").exists() {
+        return Err(err(
+            "NXL13011",
+            "no nxl.toml here, so there is nothing to publish",
+        ));
+    }
+    let registry = crate::pkg::LocalRegistry::new(registry_dir);
+    let package = registry.publish(dir).map_err(CliError::from)?;
+    let total = registry.list().len();
+    Ok(format!(
+        "published {} v{} to {}\n  package   : {}\n  checksum  : sha256:{}\n  registry  : {} package version(s)",
+        package.name,
+        package.version,
+        registry_dir.display(),
+        package.directory.display(),
+        package.checksum,
+        total
     ))
+}
+
+pub fn cmd_pkg_publish(registry_dir: Option<&Path>) -> CliResult<String> {
+    let cwd = std::env::current_dir().map_err(|e| err("NXL12004", e.to_string()))?;
+    let registry = registry_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(default_registry_dir);
+    cmd_pkg_publish_to(&cwd, &registry)
+}
+
+/// Packages available in a local registry directory.
+fn registry_packages(registry_dir: &Path) -> Vec<String> {
+    crate::pkg::LocalRegistry::new(registry_dir)
+        .list()
+        .iter()
+        .map(|package| {
+            format!(
+                "{} {}  (local registry, sha256 {})",
+                package.name,
+                package.version,
+                &package.checksum[..12.min(package.checksum.len())]
+            )
+        })
+        .collect()
 }
 
 // ── NDB commands (P14) ────────────────────────────────────────────────────────

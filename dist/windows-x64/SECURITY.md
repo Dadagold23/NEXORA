@@ -56,3 +56,36 @@ mitigation is released.
   `nxl audit` currently inspects a local advisory set only.
 - The JS backend cannot execute concurrency; programs that use
   `spawn`/`await`/`channel` must run on the VM.
+
+## Security review of the current release (2026-10-15)
+
+Scope: the Windows and Unix installers, the release packaging scripts, the
+package manager's local-dependency handling, and the project templates.
+
+| Area | Finding | Status |
+| --- | --- | --- |
+| Installer integrity | Both installers verify SHA-256 against `checksums.sha256` before writing anything, and refuse to install without that file | Verified by tests (tamper and missing-checksum cases) |
+| Installer privileges | User-scoped install only; no elevation, no system PATH or system directories | Verified by review of both scripts |
+| Installer blast radius | Refuses to overwrite files it did not create; `--uninstall` removes only its own executable and PATH entry | Verified by review |
+| Unverified remote execution | No installer downloads and executes a remote binary. Archives are downloaded once, verified, then run locally | Verified |
+| Command injection | No user input is interpolated into shell commands; the Rust code spawns processes with argument arrays | Verified by review |
+| Archive extraction | Extraction uses `tar -xzf` / `Expand-Archive` on archives this project produced; no third-party archive is ever extracted | Accepted risk, documented |
+| Path dependencies | A manifest may point at any local directory containing an `nxl.toml`; the package source is copied into `.nxl-cache` and is **not** executed at install time | Accepted: requires control of the project's own manifest |
+| Lockfile integrity | Checksums are SHA-256 (previously a non-cryptographic FNV-1a stand-in that could not detect tampering) | Fixed |
+| Package supply chain | No live registry, so no third-party code can be fetched or installed. `pkg add` for a registry package fails rather than pretending | By design |
+| Credentials | None in the repository or release assets; scanned before each release | Verified |
+| Script hygiene | Release scripts have no BOM and use LF endings, so the shebang and `bash -n` work | Fixed this cycle |
+| Code signing | Release binaries and archives are **not** signed, and release metadata carries no signature | Not implemented; stated plainly |
+
+### Accepted risks worth knowing
+
+- The VM executes whatever `.nxl` file it is pointed at, with the privileges of
+  the invoking user. Only run code you trust.
+- `checksums.sha256` proves the download matches what the packaging pipeline
+  produced. It does not prove the pipeline itself was uncompromised. Signing
+  releases would close that gap; it is not implemented.
+- macOS artifacts are unnotarised, so Gatekeeper may refuse them on first run.
+- The package manager records a dependency written in `nxl.toml` and then
+  fails when it cannot resolve it. Because no live registry exists, no remote
+  code path exists today; a future registry must add verification before that
+  changes.

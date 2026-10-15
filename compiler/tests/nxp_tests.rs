@@ -70,18 +70,23 @@ fn partial_versions_are_accepted() {
 
 #[test]
 fn partial_versions_unblock_installation() {
-    // A single bad version string used to make the whole manifest unusable.
+    // A partial version must parse, and the dependency must not be recorded
+    // when it cannot be resolved.
     let dir = project("partial");
     nxl_compiler::cli::cmd_pkg_add(
         dir.path(),
         AddRequest::Registry {
             name: "anything",
             req: Some("^1.2"),
+            registry: None,
         },
     )
-    .expect_err("no live registry means this cannot resolve");
+    .expect_err("no registry means this cannot resolve");
     let manifest = fs::read_to_string(dir.path().join("nxl.toml")).unwrap();
-    assert!(manifest.contains("anything"), "{manifest}");
+    assert!(
+        !manifest.contains("anything"),
+        "an unresolvable dependency must not be recorded: {manifest}"
+    );
 }
 
 // ── path dependencies ───────────────────────────────────────────────────────────
@@ -210,27 +215,44 @@ fn adding_the_same_dependency_twice_is_idempotent() {
 // ── registry honesty ────────────────────────────────────────────────────────────
 
 #[test]
-fn registry_dependency_reports_that_no_registry_exists() {
+fn registry_dependency_without_a_registry_fails_honestly() {
     let dir = project("registry");
     let err = nxl_compiler::cli::cmd_pkg_add(
         dir.path(),
         AddRequest::Registry {
             name: "nxl-strings",
             req: Some("^1.0"),
+            registry: None,
         },
     )
-    .expect_err("there is no live registry yet");
+    .expect_err("there is no registry to resolve from");
     assert_eq!(err.code, "NXL13006", "{err:?}");
-    assert!(err.message.contains("no live registry"), "{err:?}");
-    // The dependency is still recorded, and the failure is reported.
+    assert!(
+        err.message.contains("pkg publish"),
+        "the error must say how to proceed: {err:?}"
+    );
+    // Nothing is written when the dependency cannot be satisfied.
     let manifest = fs::read_to_string(dir.path().join("nxl.toml")).unwrap();
-    assert!(manifest.contains("nxl-strings"), "{manifest}");
+    assert!(!manifest.contains("nxl-strings"), "{manifest}");
 }
 
 #[test]
-fn publish_is_refused() {
-    let err = nxl_compiler::cli::cmd_pkg_publish().expect_err("publishing must not report success");
-    assert_eq!(err.code, "NXL13010", "{err:?}");
+fn publish_writes_to_the_given_registry() {
+    // Publishing is real: it writes a package into a registry directory.
+    // The detailed round trip lives in publish_tests.rs.
+    let dir = TempDir::new("publish_basic");
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("nxl.toml"),
+        "[package]\nname = \"thing\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("src/main.nxl"), "fn main() { print(1); }").unwrap();
+
+    let registry = dir.path().join("registry");
+    let message = nxl_compiler::cli::cmd_pkg_publish_to(dir.path(), &registry).expect("publishes");
+    assert!(message.contains("thing"), "{message}");
+    assert!(registry.join("thing/1.0.0/package.json").exists());
 }
 
 #[test]
@@ -271,7 +293,7 @@ fn search_lists_local_dependencies_and_says_it_is_local_only() {
 
     let all = nxl_compiler::cli::cmd_pkg_search(dir.path(), None).unwrap();
     assert!(all.contains("nxl-math"), "{all}");
-    assert!(all.contains("no live registry"), "{all}");
+    assert!(all.contains("no hosted"), "{all}");
 
     let filtered = nxl_compiler::cli::cmd_pkg_search(dir.path(), Some("math")).unwrap();
     assert!(filtered.contains("nxl-math"), "{filtered}");
@@ -296,7 +318,7 @@ fn info_describes_a_dependency_or_fails_honestly() {
     let info = nxl_compiler::cli::cmd_pkg_info(dir.path(), "nxl-json").unwrap();
     assert!(info.contains("nxl-json"), "{info}");
     assert!(info.contains("2.0.0"), "{info}");
-    assert!(info.contains("no live registry"), "{info}");
+    assert!(info.contains("local cache only"), "{info}");
 
     let err = nxl_compiler::cli::cmd_pkg_info(dir.path(), "ghost")
         .expect_err("unknown packages must fail");
@@ -345,7 +367,9 @@ fn add_flags_may_appear_in_any_order() {
         let parsed =
             parse_args(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parses");
         match parsed {
-            Command::PkgAdd { name, req, path } => {
+            Command::PkgAdd {
+                name, req, path, ..
+            } => {
                 assert_eq!(name, "lib", "{args:?}");
                 assert_eq!(path.as_deref(), Some("vendor/lib"), "{args:?}");
                 assert_eq!(req, None, "{args:?}");

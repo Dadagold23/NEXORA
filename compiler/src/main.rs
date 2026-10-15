@@ -1,20 +1,39 @@
+use nxl_compiler::dev;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use nxl_compiler::cli::{
-    cmd_bench, cmd_bridge, cmd_build, cmd_check, cmd_clean, cmd_db_audit, cmd_db_create,
+    self, cmd_bench, cmd_bridge, cmd_build, cmd_check, cmd_clean, cmd_db_audit, cmd_db_create,
     cmd_db_drop, cmd_db_fresh, cmd_db_migrate, cmd_db_refresh, cmd_db_rollback, cmd_db_seed,
     cmd_db_status, cmd_debug, cmd_docs, cmd_fmt, cmd_ide, cmd_init, cmd_lint, cmd_lsp,
     cmd_make_factory, cmd_make_migration, cmd_make_model, cmd_make_seeder, cmd_new,
-    cmd_new_from_template, cmd_pkg_add, cmd_pkg_audit, cmd_pkg_info, cmd_pkg_install,
-    cmd_pkg_publish, cmd_pkg_remove, cmd_pkg_search, cmd_pkg_tree, cmd_pkg_update, cmd_platforms,
-    cmd_repl, cmd_run, cmd_serve, cmd_test, format_doctor_report, help_text, parse_args,
-    run_doctor, version_text, AddRequest, Command,
+    cmd_new_from_template, cmd_pkg_add, cmd_pkg_audit, cmd_pkg_info_in, cmd_pkg_install_in,
+    cmd_pkg_publish, cmd_pkg_remove, cmd_pkg_search_in, cmd_pkg_tree, cmd_pkg_update,
+    cmd_platforms, cmd_repl, cmd_run, cmd_serve, cmd_test, format_doctor_report, help_text,
+    parse_args, run_doctor, version_text, AddRequest, Command,
 };
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
+    // dev may bind a host:port, optionally overridden with --port.
+
+    let mut dev_config = dev::DevConfig::default();
+    if let Some(index) = args.iter().position(|a| a == "--port" || a == "--host") {
+        let flag = args[index].clone();
+        let value = args.get(index + 1).cloned();
+        if let Some(value) = value {
+            if flag == "--port" {
+                dev_config.address = format!("127.0.0.1:{value}");
+            } else {
+                dev_config.address = value;
+            }
+        }
+    }
+    if args.iter().any(|a| a == "--no-watch") {
+        dev_config.watch = false;
+    }
 
     let command = match parse_args(&args) {
         Ok(cmd) => cmd,
@@ -54,15 +73,13 @@ fn main() -> ExitCode {
             }
         }
 
-        Command::Dev => {
-            // The proposed web workflow has no implementation behind it, so it
-            // says so instead of starting a server that does nothing.
-            eprintln!(
-                "error[NXL12007]: `nexora dev` needs a web development server, which NXL does not have yet.\n\
-                 Run console applications with `nexora run`."
-            );
-            ExitCode::FAILURE
-        }
+        Command::Dev => match cli::cmd_dev(&cwd, dev_config).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        },
 
         Command::ProjectTest => match cmd_test(&cwd, None) {
             Ok(report) => {
@@ -192,18 +209,25 @@ fn main() -> ExitCode {
             }
         },
 
-        Command::PkgInstall { offline } => match cmd_pkg_install(&cwd, offline) {
-            Ok(msg) => {
-                println!("{msg}");
-                ExitCode::SUCCESS
+        Command::PkgInstall { offline, registry } => {
+            match cmd_pkg_install_in(&cwd, offline, registry.as_deref().map(Path::new)) {
+                Ok(msg) => {
+                    println!("{msg}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
             }
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::FAILURE
-            }
-        },
+        }
 
-        Command::PkgAdd { name, req, path } => {
+        Command::PkgAdd {
+            name,
+            req,
+            path,
+            registry,
+        } => {
             let outcome = match path {
                 Some(path) => cmd_pkg_add(
                     &cwd,
@@ -217,6 +241,7 @@ fn main() -> ExitCode {
                     AddRequest::Registry {
                         name: &name,
                         req: req.as_deref(),
+                        registry: registry.as_deref(),
                     },
                 ),
             };
@@ -276,38 +301,44 @@ fn main() -> ExitCode {
             }
         },
 
-        Command::PkgPublish => match cmd_pkg_publish() {
-            Ok(msg) => {
-                println!("{msg}");
-                ExitCode::SUCCESS
+        Command::PkgPublish { registry } => {
+            match cmd_pkg_publish(registry.as_deref().map(Path::new)) {
+                Ok(msg) => {
+                    println!("{msg}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
             }
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::FAILURE
-            }
-        },
+        }
 
-        Command::PkgSearch { term } => match cmd_pkg_search(&cwd, term.as_deref()) {
-            Ok(msg) => {
-                print!("{msg}");
-                ExitCode::SUCCESS
+        Command::PkgSearch { term, registry } => {
+            match cmd_pkg_search_in(&cwd, term.as_deref(), registry.as_deref().map(Path::new)) {
+                Ok(msg) => {
+                    print!("{msg}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
             }
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::FAILURE
-            }
-        },
+        }
 
-        Command::PkgInfo { name } => match cmd_pkg_info(&cwd, &name) {
-            Ok(msg) => {
-                print!("{msg}");
-                ExitCode::SUCCESS
+        Command::PkgInfo { name, registry } => {
+            match cmd_pkg_info_in(&cwd, &name, registry.as_deref().map(Path::new)) {
+                Ok(msg) => {
+                    print!("{msg}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
             }
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::FAILURE
-            }
-        },
+        }
 
         Command::DbCreate => match cmd_db_create(&cwd) {
             Ok(msg) => {
@@ -476,10 +507,16 @@ fn main() -> ExitCode {
             }
         },
 
-        Command::Repl => {
-            println!("{}", cmd_repl());
-            ExitCode::SUCCESS
-        }
+        Command::Repl => match cmd_repl() {
+            Ok(msg) => {
+                println!("{msg}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Debug { file } => {
             println!("{}", cmd_debug(&file));
             ExitCode::SUCCESS

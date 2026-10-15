@@ -10,7 +10,8 @@
 | [NDB Database](06-ndb.md) | P14 |
 | [NUF Web Framework](07-nuf.md) | P15 |
 | [NUI Universal UI](08-nui.md) | P18 |
-| [NXP Package Manager](09-nxp.md) | P13, path dependencies, honesty rules |
+| [NXP Package Manager](09-nxp.md) | P13, path dependencies, local registry, honesty rules |
+| [REPL and dev server](repl-and-dev.md) | `nxl repl`, `nxl dev`, and their limits |
 | [NLS Language Server](10-nls.md) | P20 |
 | [FFI Bridges](11-ffi.md) | P17 |
 | [Security](12-security.md) | P16 |

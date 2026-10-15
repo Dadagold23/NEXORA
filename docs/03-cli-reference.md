@@ -8,7 +8,7 @@ project-facing one.
 
 | Command | What it does |
 | --- | --- |
-| `new [console] <name>` | Create a project from a template. `new hello`, `new console hello`, `new --template console hello` and `new --template=console hello` are equivalent. `console` is the only template that exists; `new web ...` is refused with an explanation because NXL has no web development server. |
+| `new [console] <name>` | Create a project from a template. `new hello`, `new console hello`, `new --template console hello` and `new --template=console hello` are equivalent. `console` is the only template. |
 | `init` | Create the same project layout in the current directory. |
 | `run [file]` | Run a project entry point or a single `.nxl` file on the VM. |
 | `build [--release]` | Compile the project into `build/`. |
@@ -16,31 +16,32 @@ project-facing one.
 | `test [filter]` | Parse, type-check and run every `.nxl` file in `tests/`. There is no test-block syntax yet. |
 | `clean` | Remove build output. |
 | `fmt [file]`, `lint [file]` | Normalise whitespace; lint delegates to check. |
-| `dev` | **Refused.** A web development server does not exist yet. Exits non-zero rather than pretending. |
+| `dev [--port N] [--host H:P] [--no-watch]` | Start the development server: compiles the project to JavaScript, serves it with live reload over SSE, and shows a compile-error page that recovers on the next fix. Binds `127.0.0.1` by default. |
 | `doctor` | Real environment diagnostics: compiler version and architecture, Node.js availability, `nxl.toml` and its declared entry point. |
 | `debug <file> [--break=N]` | Statement trace with breakpoint counts. |
 | `docs` | Print the documentation map. |
 | `platforms` | Print the platform support summary. |
 | `version`, `--version`, `help` | Toolchain metadata. |
-| `repl` | **Not implemented.** |
+| `repl` | Interactive session: evaluates expressions, keeps declarations and side effects available to later inputs, supports multi-line blocks, `.help`, `.clear` and `.exit`. Errors never end the session. |
 
 ## Package manager (NXP)
 
 | Command | What it does |
 | --- | --- |
 | `pkg install [--offline]` | Resolve dependencies and write `nxl.lock`. |
-| `pkg add <name> [req]` | Add a registry dependency. There is no live registry, so this records the dependency and then **fails** with an explanation and a non-zero exit code. |
+| `pkg add <name> [req] [--registry <dir>]` | Add a dependency. With `--registry` the package must exist there and satisfy the requirement, otherwise the command fails and writes nothing. |
 | `pkg add <name> --path <dir>` | Add a local path dependency. Validated on disk, resolved (including its own path dependencies), cached and locked with a SHA-256 checksum. |
 | `pkg remove <name>` | Remove a dependency. Fails if it is not declared. |
 | `pkg update` | Re-resolve dependencies. |
 | `pkg tree` | Dependency tree with resolved versions. |
 | `pkg audit` | Match the lockfile against the local advisory set. |
-| `pkg search [term]` | Search local dependencies and the package cache. Says that it is not a live registry. |
+| `pkg search [term] [--registry <dir>]` | Search local dependencies, the package cache, and a local registry directory. |
 | `pkg info <name>` | Requirement, resolved version and source of a dependency. |
-| `pkg publish` | **Refused** — no registry service exists. |
+| `pkg publish [--registry <dir>]` | Publish the project into a registry directory: manifest, sources, per-file SHA-256 checksums and an `index.json`. Defaults to `$NXL_REGISTRY` or `~/.nexora/registry`. |
+| `pkg install [--registry <dir>]` | Resolve dependencies and write `nxl.lock`, using the given registry when provided. |
 
 Short forms work too: `install`, `add`, `remove`, `update`, `audit`, `tree`,
-`search`, `info`.
+`search`, `info`, `publish`.
 
 ## Database (NDB)
 

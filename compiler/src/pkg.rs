@@ -96,8 +96,14 @@ impl Version {
             _ => return Err(PkgError::new("NXL13001", format!("invalid version '{s}'"))),
         };
         let parse_u32 = |p: &str| {
-            p.parse::<u32>()
-                .map_err(|_| PkgError::new("NXL13001", format!("invalid version component '{p}'")))
+            p.parse::<u32>().map_err(|_| {
+                // The full string is included because "1.2" is accepted as
+                // 1.2.0, and the offending part is otherwise hard to spot.
+                PkgError::new(
+                    "NXL13001",
+                    format!("invalid version component '{p}' in '{s}'"),
+                )
+            })
         };
         Ok(Self {
             major: parse_u32(parts[0])?,
@@ -1023,13 +1029,340 @@ mod sha256 {
     }
 }
 
-// ── Package manager ───────────────────────────────────────────────────────────
+// ── Local registry on disk ────────────────────────────────────────────────────
+
+/// A package as published to a local registry directory.
+///
+/// Layout, so a registry is inspectable and vendorable:
+/// ```text
+/// <registry>/index.json                       # list of name/version/description
+/// <registry>/<name>/<version>/package.json    # manifest + metadata
+/// <registry>/<name>/<version>/source.nxl      # entry point
+/// <registry>/<name>/<version>/checksums.sha256
+/// ```
+#[derive(Debug, Clone)]
+pub struct PublishedPackage {
+    pub name: String,
+    pub version: Version,
+    pub description: Option<String>,
+    pub license: Option<String>,
+    pub dependencies: Vec<ManifestDep>,
+    /// SHA-256 of the published sources.
+    pub checksum: String,
+    pub directory: PathBuf,
+}
+
+/// A registry that lives in a directory rather than on a network service.
+///
+/// This is what `pkg publish` writes and what `pkg add --registry` /
+/// `pkg install --registry` read. It makes publishing real today while
+/// remaining honest: there is no hosted registry, only this directory.
+pub struct LocalRegistry {
+    root: PathBuf,
+}
+
+impl LocalRegistry {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    fn version_dir(&self, name: &str, version: &Version) -> PathBuf {
+        self.root.join(name).join(version.to_string())
+    }
+
+    /// Publish a project directory into this registry.
+    pub fn publish(&self, project: &Path) -> PkgResult<PublishedPackage> {
+        let manifest = Manifest::load(project)?;
+        if manifest.name.trim().is_empty() {
+            return Err(PkgError::new(
+                "NXL13011",
+                "the project manifest has no package name, so it cannot be published",
+            ));
+        }
+
+        // Collect the sources that make up the package.
+        let mut sources: Vec<(String, String)> = Vec::new();
+        let src_dir = project.join("src");
+        if src_dir.is_dir() {
+            let mut entries: Vec<PathBuf> = fs::read_dir(&src_dir)
+                .map_err(|e| PkgError::new("NXL13011", e.to_string()))?
+                .flatten()
+                .map(|entry| entry.path())
+                .collect();
+            entries.sort();
+            for path in entries {
+                if path.extension().and_then(|e| e.to_str()) == Some("nxl") {
+                    let relative = path
+                        .strip_prefix(project)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let text = fs::read_to_string(&path)
+                        .map_err(|e| PkgError::new("NXL13011", e.to_string()))?;
+                    sources.push((relative, text));
+                }
+            }
+        }
+        if sources.is_empty() {
+            return Err(PkgError::new(
+                "NXL13011",
+                "the project has no src/*.nxl sources to publish",
+            ));
+        }
+
+        // The package digest covers every source file, name included.
+        let mut digest_input = String::new();
+        for (name, text) in &sources {
+            digest_input.push_str(name);
+            digest_input.push('\0');
+            digest_input.push_str(text);
+            digest_input.push('\0');
+        }
+        let package_checksum = checksum(digest_input.as_bytes());
+
+        let dir = self.version_dir(&manifest.name, &manifest.version);
+        fs::create_dir_all(&dir).map_err(|e| PkgError::new("NXL13011", e.to_string()))?;
+        let mut checksum_lines = Vec::new();
+        for (relative, text) in &sources {
+            let target = dir.join(relative);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|e| PkgError::new("NXL13011", e.to_string()))?;
+            }
+            fs::write(&target, text).map_err(|e| PkgError::new("NXL13011", e.to_string()))?;
+            checksum_lines.push(format!("{}  {}", checksum(text.as_bytes()), relative));
+        }
+        fs::write(
+            dir.join("checksums.sha256"),
+            checksum_lines.join("\n") + "\n",
+        )
+        .map_err(|e| PkgError::new("NXL13011", e.to_string()))?;
+
+        let package = PublishedPackage {
+            name: manifest.name.clone(),
+            version: manifest.version.clone(),
+            description: manifest.description.clone(),
+            license: manifest.license.clone(),
+            dependencies: manifest.dependencies.clone(),
+            checksum: package_checksum,
+            directory: dir,
+        };
+        fs::write(
+            package.directory.join("package.json"),
+            package.metadata_json(),
+        )
+        .map_err(|e| PkgError::new("NXL13011", e.to_string()))?;
+        self.rebuild_index()?;
+        Ok(package)
+    }
+
+    /// Read a published package from its directory.
+    fn read_package(directory: &Path) -> PkgResult<PublishedPackage> {
+        let metadata = fs::read_to_string(directory.join("package.json"))
+            .map_err(|e| PkgError::new("NXL13011", e.to_string()))?;
+        let name = directory
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or_else(|| PkgError::new("NXL13011", "package directory has no name"))?;
+        let version = directory
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or_else(|| PkgError::new("NXL13011", "package directory has no version"))?;
+
+        // Small field reader: the format is written by `metadata_json` above,
+        // so a JSON parser would be a dependency for no benefit.
+        let field = |key: &str| -> Option<String> {
+            let needle = format!("\"{key}\": \"");
+            let start = metadata.find(&needle)?;
+            let rest = &metadata[start + needle.len()..];
+            let end = rest.find('"')?;
+            let value = rest[..end].to_owned();
+            (!value.is_empty()).then_some(value)
+        };
+
+        Ok(PublishedPackage {
+            name,
+            version: Version::parse(&version)?,
+            description: field("description"),
+            license: field("license"),
+            checksum: field("checksum").unwrap_or_default(),
+            dependencies: read_dependencies(&metadata),
+            directory: directory.to_path_buf(),
+        })
+    }
+
+    /// Every package in this registry.
+    pub fn list(&self) -> Vec<PublishedPackage> {
+        let mut packages = Vec::new();
+        let Ok(names) = fs::read_dir(&self.root) else {
+            return packages;
+        };
+        for name in names.flatten() {
+            let name = name.path();
+            if !name.is_dir() {
+                continue;
+            }
+            let Ok(versions) = fs::read_dir(&name) else {
+                continue;
+            };
+            for version in versions.flatten() {
+                let directory = version.path();
+                if !directory.join("package.json").exists() {
+                    continue;
+                }
+                let registry = LocalRegistry::new(directory.clone());
+                if let Ok(package) = LocalRegistry::read_package(&directory) {
+                    packages.push(package);
+                }
+                let _ = registry;
+            }
+        }
+        packages.sort_by(|a, b| {
+            (a.name.clone(), a.version.clone()).cmp(&(b.name.clone(), b.version.clone()))
+        });
+        packages
+    }
+
+    /// Rewrite `index.json` from the packages actually on disk.
+    pub fn rebuild_index(&self) -> PkgResult<()> {
+        fs::create_dir_all(&self.root).map_err(|e| PkgError::new("NXL13011", e.to_string()))?;
+        let mut entries = Vec::new();
+        for package in self.list() {
+            entries.push(format!(
+                "    {{\"name\": \"{}\", \"version\": \"{}\", \"description\": \"{}\", \"checksum\": \"{}\"}}",
+                package.name,
+                package.version,
+                package.description.clone().unwrap_or_default(),
+                package.checksum
+            ));
+        }
+        let index = format!(
+            "{{\n  \"registry\": \"local\",\n  \"packages\": [\n{}\n  ]\n}}\n",
+            entries.join(",\n")
+        );
+        fs::write(self.root.join("index.json"), index)
+            .map_err(|e| PkgError::new("NXL13011", e.to_string()))
+    }
+
+    /// Load this registry into an in-memory `Registry` for resolution.
+    pub fn load_into(&self, registry: &mut Registry) -> PkgResult<()> {
+        for package in self.list() {
+            let mut manifest = Manifest {
+                name: package.name.clone(),
+                version: package.version.clone(),
+                description: None,
+                authors: Vec::new(),
+                license: None,
+                repository: None,
+                dependencies: package.dependencies.clone(),
+                dev_dependencies: Vec::new(),
+            };
+            manifest.version = package.version.clone();
+            registry.register(
+                package.name.clone(),
+                package.version.clone(),
+                DepSource::Registry,
+                Some(manifest),
+            );
+        }
+        Ok(())
+    }
+
+    /// Read a package's sources back, for installation into the cache.
+    pub fn read_sources(&self, package: &PublishedPackage) -> PkgResult<Vec<(String, String)>> {
+        let mut sources = Vec::new();
+        let src = package.directory.join("src");
+        if !src.is_dir() {
+            return Ok(sources);
+        }
+        let mut stack = vec![src];
+        while let Some(dir) = stack.pop() {
+            let entries =
+                fs::read_dir(&dir).map_err(|e| PkgError::new("NXL13011", e.to_string()))?;
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("nxl") {
+                    let relative = path
+                        .strip_prefix(&package.directory)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let text = fs::read_to_string(&path)
+                        .map_err(|e| PkgError::new("NXL13011", e.to_string()))?;
+                    sources.push((relative, text));
+                }
+            }
+        }
+        sources.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(sources)
+    }
+}
 
 /// The NXP package manager — orchestrates install/update/add/remove/audit.
+/// Read the dependency block from a `package.json` document.
+fn read_dependencies(metadata: &str) -> Vec<ManifestDep> {
+    let Some(start) = metadata.find("\"dependencies\"") else {
+        return Vec::new();
+    };
+    let block = &metadata[start..];
+    let Some(open) = block.find('{') else {
+        return Vec::new();
+    };
+    let Some(close) = block[open..].find('}') else {
+        return Vec::new();
+    };
+    block[open + 1..open + close]
+        .lines()
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            let name = name.trim().trim_matches(',').trim_matches('"').to_owned();
+            let value = value.trim().trim_matches(',').trim_matches('"');
+            if name.is_empty() {
+                return None;
+            }
+            let req = VersionReq::parse(value).ok()?;
+            Some(ManifestDep {
+                name,
+                req,
+                source: DepSource::Registry,
+            })
+        })
+        .collect()
+}
+
+impl PublishedPackage {
+    /// The `package.json` document for this package.
+    pub fn metadata_json(&self) -> String {
+        let deps = self
+            .dependencies
+            .iter()
+            .map(|dep| format!("    \"{}\": \"{}\"", dep.name, dep.req))
+            .collect::<Vec<_>>()
+            .join(",\n");
+        format!(
+            "{{\n  \"name\": \"{}\",\n  \"version\": \"{}\",\n  \"description\": \"{}\",\n  \"license\": \"{}\",\n  \"checksum\": \"{}\",\n  \"dependencies\": {{\n{}\n  }}\n}}\n",
+            self.name,
+            self.version,
+            self.description.clone().unwrap_or_default(),
+            self.license.clone().unwrap_or_default(),
+            self.checksum,
+            deps
+        )
+    }
+}
+
 pub struct PackageManager {
     pub registry: Registry,
     pub cache: PackageCache,
     pub offline: bool,
+    /// A local registry directory this manager can install from.
+    pub local_registry: Option<LocalRegistry>,
 }
 
 impl PackageManager {
@@ -1038,7 +1371,19 @@ impl PackageManager {
             registry: Registry::new(),
             cache: PackageCache::new(cache_root),
             offline: false,
+            local_registry: None,
         }
+    }
+
+    /// Resolve registry dependencies from a local registry directory.
+    ///
+    /// Without this there is nothing to resolve registry packages from, which
+    /// is why `pkg add` for an unpublished package fails rather than
+    /// pretending.
+    pub fn attach_registry(&mut self, registry: LocalRegistry) -> PkgResult<()> {
+        registry.load_into(&mut self.registry)?;
+        self.local_registry = Some(registry);
+        Ok(())
     }
 
     pub fn with_offline(mut self, offline: bool) -> Self {
@@ -1086,7 +1431,44 @@ impl PackageManager {
                         )
                     }
                     DepSource::Registry => {
-                        format!("// stub source for {}@{}", pkg.name, pkg.version)
+                        // Real sources when a local registry is attached,
+                        // otherwise an explicit placeholder rather than a
+                        // silent success.
+                        match (
+                            &self.local_registry,
+                            self.registry.manifest(&pkg.name, &pkg.version),
+                        ) {
+                            (Some(local), Some(_)) => {
+                                let published = local
+                                    .list()
+                                    .into_iter()
+                                    .find(|p| p.name == pkg.name && p.version == pkg.version);
+                                match published {
+                                    Some(package) => {
+                                        let sources = local.read_sources(&package)?;
+                                        if sources.is_empty() {
+                                            return Err(PkgError::new(
+                                                "NXL13012",
+                                                format!(
+                                                    "registry package '{}@{}' contains no sources",
+                                                    pkg.name, pkg.version
+                                                ),
+                                            ));
+                                        }
+                                        sources
+                                            .into_iter()
+                                            .map(|(_, text)| text)
+                                            .collect::<Vec<_>>()
+                                            .join("\n")
+                                    }
+                                    None => format!(
+                                        "// source unavailable for {}@{} in the registry",
+                                        pkg.name, pkg.version
+                                    ),
+                                }
+                            }
+                            _ => format!("// stub source for {}@{}", pkg.name, pkg.version),
+                        }
                     }
                 };
                 self.cache.store(&pkg.name, &pkg.version, &src)?;

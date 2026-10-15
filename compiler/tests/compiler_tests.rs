@@ -2431,9 +2431,11 @@ mod cli_tests {
     // ── stub commands ─────────────────────────────────────────────────────────
 
     #[test]
-    fn cli_repl_stub_returns_message() {
-        let msg = cmd_repl();
-        assert!(msg.contains("NOT IMPLEMENTED"));
+    fn cli_repl_reports_the_end_of_a_session() {
+        // The REPL reads stdin; with no input it reports the session ending
+        // rather than claiming to be unimplemented.
+        let message = cmd_repl().expect("session ends cleanly");
+        assert!(message.contains("repl session ended"), "{message}");
     }
 
     #[test]
@@ -3184,19 +3186,31 @@ mod pkg_tests {
     fn pkg_cli_parse_pkg_commands() {
         assert_eq!(
             parse_args(&["install".into()]).unwrap(),
-            Command::PkgInstall { offline: false }
+            Command::PkgInstall {
+                offline: false,
+                registry: None
+            }
         );
         assert_eq!(
             parse_args(&["install".into(), "--offline".into()]).unwrap(),
-            Command::PkgInstall { offline: true }
+            Command::PkgInstall {
+                offline: true,
+                registry: None
+            }
         );
         assert_eq!(
             parse_args(&["pkg".into(), "install".into()]).unwrap(),
-            Command::PkgInstall { offline: false }
+            Command::PkgInstall {
+                offline: false,
+                registry: None
+            }
         );
         assert_eq!(
             parse_args(&["package:install".into()]).unwrap(),
-            Command::PkgInstall { offline: false }
+            Command::PkgInstall {
+                offline: false,
+                registry: None
+            }
         );
 
         assert_eq!(
@@ -3204,6 +3218,7 @@ mod pkg_tests {
             Command::PkgAdd {
                 name: "serde".into(),
                 req: None,
+                registry: None,
                 path: None,
             }
         );
@@ -3212,6 +3227,7 @@ mod pkg_tests {
             Command::PkgAdd {
                 name: "serde".into(),
                 req: Some("^1.0".into()),
+                registry: None,
                 path: None,
             }
         );
@@ -3226,6 +3242,7 @@ mod pkg_tests {
             Command::PkgAdd {
                 name: "serde".into(),
                 req: None,
+                registry: None,
                 path: Some("../vendor/serde".into()),
             }
         );
@@ -3234,6 +3251,7 @@ mod pkg_tests {
             Command::PkgAdd {
                 name: "serde".into(),
                 req: None,
+                registry: None,
                 path: None,
             }
         );
@@ -3258,7 +3276,7 @@ mod pkg_tests {
         assert_eq!(parse_args(&["deps".into()]).unwrap(), Command::PkgTree);
         assert_eq!(
             parse_args(&["publish".into()]).unwrap(),
-            Command::PkgPublish
+            Command::PkgPublish { registry: None }
         );
     }
 
@@ -3277,8 +3295,7 @@ mod pkg_tests {
         let audit_res = cmd_pkg_audit(&tmp).unwrap();
         assert!(audit_res.contains("0 vulnerabilities"));
 
-        let pub_err = cmd_pkg_publish().expect_err("publishing must not report success");
-        assert_eq!(pub_err.code, "NXL13010", "{pub_err:?}");
+        // Publishing writes into a registry directory; see publish_tests.rs.
 
         fs::remove_dir_all(&tmp).ok();
     }
@@ -3341,13 +3358,14 @@ mod pkg_tests {
             AddRequest::Registry {
                 name: "not-published",
                 req: Some("^1.0"),
+                registry: None,
             },
         )
         .expect_err("unknown packages must not resolve");
         assert_eq!(err.code, "NXL13006", "{err:?}");
         assert!(
-            err.message.contains("no live registry"),
-            "the error should explain why: {err:?}"
+            err.message.contains("pkg publish"),
+            "the error should say how to proceed: {err:?}"
         );
 
         fs::remove_dir_all(&tmp).ok();
@@ -3379,8 +3397,12 @@ mod pkg_tests {
     }
 
     #[test]
-    fn pkg_cli_publish_is_refused_not_faked() {
-        let err = cmd_pkg_publish().expect_err("publishing must not report success");
-        assert_eq!(err.code, "NXL13010", "{err:?}");
+    fn pkg_cli_publish_needs_a_project() {
+        let tmp = tmp_dir("cli_publish_empty");
+        let registry = tmp.join("registry");
+        let err = cmd_pkg_publish(Some(registry.as_path()))
+            .expect_err("publishing outside a project must fail");
+        assert_eq!(err.code, "NXL13011", "{err:?}");
+        fs::remove_dir_all(&tmp).ok();
     }
 }
