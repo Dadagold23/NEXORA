@@ -29,12 +29,18 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      # Report every platform instead of cancelling the siblings when one leg
+      # fails. With the default fail-fast, a red ubuntu plus two grey legs
+      # says nothing about whether Windows and macOS are actually broken.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace
+      # --no-fail-fast runs the whole suite even after a failure, so one run
+      # reports every broken test instead of only the first one.
+      - run: cargo test --workspace --no-fail-fast
         working-directory: compiler
 
   dependency-audit:
