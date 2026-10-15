@@ -79,14 +79,20 @@ cp "$repo_root/examples/hello/src/main.nxl" "$stage_dir/examples/main.nxl"
 say "Generating SHA-256 checksums"
 (
     cd "$stage_dir"
-    # Collect first, write once: redirecting straight into checksums.sha256
-    # while the pipeline is still running leaves a truncated file behind if the
-    # command is interrupted, and shellcheck flags the read-then-write shape
-    # (SC2094).
-    if command -v sha256sum >/dev/null 2>&1; then
-        sums="$(find . -maxdepth 1 -type f ! -name checksums.sha256 -printf '%P\n' | sort | xargs sha256sum)"
-    else
-        sums="$(find . -maxdepth 1 -type f ! -name checksums.sha256 -exec basename {} \; | sort | xargs shasum -a 256)"
+    # `find -printf` is GNU-only: BSD find on macOS has no such predicate, and
+    # the earlier version chose the hashing tool and the find dialect from the
+    # same test, so a macOS runner that had coreutils' sha256sum on PATH still
+    # ran GNU find and died. Pick the list one way and the hashing tool another.
+    names="$(find . -maxdepth 1 -type f ! -name checksums.sha256 | sed 's|^\./||' | sort)"
+    # xargs with no input still runs the command once, which would make the
+    # hasher read stdin and wait forever.
+    sums=""
+    if [ -n "$names" ]; then
+        if command -v sha256sum >/dev/null 2>&1; then
+            sums="$(printf '%s\n' "$names" | xargs sha256sum)"
+        else
+            sums="$(printf '%s\n' "$names" | xargs shasum -a 256)"
+        fi
     fi
     printf '%s\n' "$sums" >checksums.sha256
 )
