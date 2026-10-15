@@ -100,7 +100,7 @@ fi
   expected $expected
   actual   $actual
 The download is corrupt or tampered with; nothing was installed."
-ok "SHA-256 matches (${actual%${actual#????????}}...)"
+ok "SHA-256 matches ($(printf '%s' "$actual" | cut -c1-8)...)"
 
 # ----------------------------------------------------------------------------
 if [ -z "$PREFIX" ]; then
@@ -173,6 +173,9 @@ case ":$PATH:" in
         ;;
 esac
 if ! grep -Fq '.nexora/env' "$HOME/.profile" 2>/dev/null; then
+    # The single quotes are deliberate: this line is written into .profile as
+    # text, and $HOME has to expand when the user's shell reads it, not now.
+    # shellcheck disable=SC2016
     printf '\n# Added by the NEXORA installer\n[ -f "$HOME/.nexora/env" ] && . "$HOME/.nexora/env"\n' >>"$HOME/.profile"
     ok "added a loader line to ~/.profile"
 fi

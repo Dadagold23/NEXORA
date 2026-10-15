@@ -18,9 +18,16 @@ if [ "${2:-}" = "--real-install" ]; then
 fi
 
 if [ -z "$archive" ]; then
-    archive="$(ls -t "$repo_root"/dist/NEXORA-*-"$target".tar.gz 2>/dev/null | head -n 1 || true)"
-    target="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
-    archive="$(ls -t "$repo_root"/dist/NEXORA-*.*.tar.gz 2>/dev/null | head -n 1 || true)"
+    # Newest matching archive, chosen with `-nt` rather than by parsing `ls`
+    # output: filenames here contain no whitespace, but a future one might,
+    # and shellcheck is right to flag the parsing (SC2012).
+    archive=""
+    for candidate in "$repo_root"/dist/NEXORA-*.*.tar.gz; do
+        [ -f "$candidate" ] || continue
+        if [ -z "$archive" ] || [ "$candidate" -nt "$archive" ]; then
+            archive="$candidate"
+        fi
+    done
 fi
 [ -n "$archive" ] || {
     echo "no release archive given or found; run scripts/package-release.sh first" >&2
@@ -108,7 +115,7 @@ fi
 
 work="$scratch/workspace"
 mkdir -p "$work"
-(
+if (
     cd "$work" || exit 1
     run_nxlc new console hello-app >/dev/null || exit 1
     cd hello-app || exit 1
@@ -117,10 +124,12 @@ mkdir -p "$work"
         echo "unexpected output: $output"
         exit 1
     }
-) && {
+); then
     passed=$((passed + 1))
     echo "[PASS] project creation works in a clean directory"
-} || fail_step "project creation works in a clean directory" "see output above"
+else
+    fail_step "project creation works in a clean directory" "see output above"
+fi
 
 spaced="$scratch/dir with spaces"
 mkdir -p "$spaced"

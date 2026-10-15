@@ -45,18 +45,25 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # shellcheck is Linux-only here: macOS has no apt-get, and installing it
+      # through Homebrew on every macOS runner would make a linter worth more
+      # than it costs. macOS instead proves the installer parses.
       - name: Install shellcheck (installer lint)
-        if: runner.os != 'Windows'
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: Lint the Unix installer
-        if: runner.os != 'Windows'
+        if: runner.os == 'Linux'
         run: shellcheck install/unix/install.sh
 
+      # bash is available on every runner, Windows included via Git bash, so
+      # the syntax check runs everywhere rather than only where shellcheck does.
       - name: Verify the installer scripts parse
-        if: runner.os == 'Windows'
         shell: bash
-        run: bash -n install/unix/install.sh && bash -n scripts/package-release.sh
+        run: |
+          bash -n install/unix/install.sh
+          bash -n scripts/package-release.sh
+          bash -n scripts/verify-install.sh
 
       - name: Package (runs fmt, clippy, tests, release build, staging, artifact tests)
         shell: bash
