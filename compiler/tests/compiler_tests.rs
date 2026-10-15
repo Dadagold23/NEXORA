@@ -3351,14 +3351,17 @@ mod pkg_tests {
         )
         .unwrap();
 
-        // There is no live registry, so this must fail loudly rather than
-        // reporting a success that never happened.
+        // The registry directory is named explicitly and lives under this
+        // test's own temp directory. Leaving it unset would fall back to the
+        // real ~/.nexora/registry, so the result would depend on whether the
+        // machine running the suite happens to have published anything.
+        let missing = tmp.join("no-such-registry");
         let err = cmd_pkg_add(
             &tmp,
             AddRequest::Registry {
                 name: "not-published",
                 req: Some("^1.0"),
-                registry: None,
+                registry: Some(missing.to_str().unwrap()),
             },
         )
         .expect_err("unknown packages must not resolve");
@@ -3366,6 +3369,27 @@ mod pkg_tests {
         assert!(
             err.message.contains("pkg publish"),
             "the error should say how to proceed: {err:?}"
+        );
+
+        // A registry that exists but does not carry the package fails the same
+        // way, rather than recording a dependency that cannot be installed.
+        let empty = tmp.join("empty-registry");
+        fs::create_dir_all(&empty).unwrap();
+        let err = cmd_pkg_add(
+            &tmp,
+            AddRequest::Registry {
+                name: "not-published",
+                req: Some("^1.0"),
+                registry: Some(empty.to_str().unwrap()),
+            },
+        )
+        .expect_err("an empty registry must not resolve anything");
+        assert_eq!(err.code, "NXL13006", "{err:?}");
+        assert!(
+            !fs::read_to_string(tmp.join("nxl.toml"))
+                .unwrap()
+                .contains("not-published"),
+            "a failed add must not write a dependency line"
         );
 
         fs::remove_dir_all(&tmp).ok();

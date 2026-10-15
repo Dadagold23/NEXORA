@@ -73,12 +73,13 @@ fn partial_versions_unblock_installation() {
     // A partial version must parse, and the dependency must not be recorded
     // when it cannot be resolved.
     let dir = project("partial");
+    let missing = dir.path().join("no-such-registry");
     nxl_compiler::cli::cmd_pkg_add(
         dir.path(),
         AddRequest::Registry {
             name: "anything",
             req: Some("^1.2"),
-            registry: None,
+            registry: Some(missing.to_str().unwrap()),
         },
     )
     .expect_err("no registry means this cannot resolve");
@@ -217,12 +218,16 @@ fn adding_the_same_dependency_twice_is_idempotent() {
 #[test]
 fn registry_dependency_without_a_registry_fails_honestly() {
     let dir = project("registry");
+    // The registry is named explicitly and does not exist. Falling back to the
+    // default would read the machine's real ~/.nexora/registry, so this test
+    // would pass or fail depending on what the developer has published before.
+    let missing = dir.path().join("no-such-registry");
     let err = nxl_compiler::cli::cmd_pkg_add(
         dir.path(),
         AddRequest::Registry {
             name: "nxl-strings",
             req: Some("^1.0"),
-            registry: None,
+            registry: Some(missing.to_str().unwrap()),
         },
     )
     .expect_err("there is no registry to resolve from");
