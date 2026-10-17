@@ -151,6 +151,7 @@ pub enum Command {
     Repl,
     Debug {
         file: String,
+        breakpoints: Vec<usize>,
     },
     Docs,
     Doctor,
@@ -308,12 +309,39 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
         }),
         "repl" => Ok(Command::Repl),
         "debug" => {
-            if args.len() < 2 {
-                return Err(err("NXL12002", "debug: missing file argument"));
+            let rest = &args[1..];
+            let file = positional_arg(rest, &["--break"])
+                .ok_or_else(|| err("NXL12002", "debug: missing file argument"))?;
+            // `--break=N` (and `--break N`) may repeat; each names a 1-based
+            // source line to report hits for.
+            let mut breakpoints = Vec::new();
+            let mut index = 0;
+            while index < rest.len() {
+                let value = if rest[index] == "--break" {
+                    let value = rest.get(index + 1).cloned();
+                    index += 2;
+                    value
+                } else if let Some(value) = rest[index].strip_prefix("--break=") {
+                    index += 1;
+                    Some(value.to_owned())
+                } else {
+                    index += 1;
+                    None
+                };
+                if let Some(value) = value {
+                    let line = value.parse::<usize>().map_err(|_| {
+                        err(
+                            "NXL12002",
+                            format!("debug: --break expects a line number, got '{value}'"),
+                        )
+                    })?;
+                    if line == 0 {
+                        return Err(err("NXL12002", "debug: --break line numbers are 1-based"));
+                    }
+                    breakpoints.push(line);
+                }
             }
-            Ok(Command::Debug {
-                file: args[1].clone(),
-            })
+            Ok(Command::Debug { file, breakpoints })
         }
         "docs" => Ok(Command::Docs),
         "doctor" => Ok(Command::Doctor),
@@ -519,7 +547,8 @@ COMMANDS:
     clean             Remove build artifacts
     test [filter]     Run test files
     repl              Start an interactive REPL session
-    debug <file>      Debug a file with statement trace
+    debug <file> [--break=N]
+                      Trace a file's statements and report breakpoint hits
     docs              Show bundled documentation
     doctor            Run toolchain diagnostics
     install           Install dependencies into nxl.lock (--offline supported)
@@ -1443,11 +1472,18 @@ pub fn cmd_repl() -> CliResult<String> {
     Ok(String::from("repl session ended"))
 }
 
-pub fn cmd_debug(file: &str) -> String {
+/// Run `file` on the VM under tracing and report the statement trace plus any
+/// breakpoint hits. Breakpoints are 1-based source lines; loops count every
+/// hit. Read failures are reported rather than panicking.
+pub fn cmd_debug(file: &str, breakpoints: &[usize]) -> String {
     match fs::read_to_string(file) {
         Ok(text) => {
-            let lines = text.lines().count();
-            format!("debug {file}: {lines} line(s) traced, no breakpoints hit")
+            let mut debugger = crate::debugger::Debugger::new();
+            for line in breakpoints {
+                debugger.add_breakpoint(*line);
+            }
+            let report = debugger.run(&text);
+            crate::debugger::format_report(&report)
         }
         Err(e) => format!("cannot read {file}: {e}"),
     }

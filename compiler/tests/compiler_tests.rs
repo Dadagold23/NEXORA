@@ -2167,9 +2167,38 @@ mod cli_tests {
         assert_eq!(
             parse_args(&args(&["debug", "main.nxl"])).unwrap(),
             Command::Debug {
-                file: "main.nxl".into()
+                file: "main.nxl".into(),
+                breakpoints: vec![],
             }
         );
+    }
+
+    #[test]
+    fn cli_parse_debug_with_breakpoints() {
+        // The `--break` flag is honored in both spellings and repeats.
+        assert_eq!(
+            parse_args(&args(&["debug", "main.nxl", "--break=3", "--break", "7"])).unwrap(),
+            Command::Debug {
+                file: "main.nxl".into(),
+                breakpoints: vec![3, 7],
+            }
+        );
+        // The flag may also precede the file.
+        assert_eq!(
+            parse_args(&args(&["debug", "--break=5", "main.nxl"])).unwrap(),
+            Command::Debug {
+                file: "main.nxl".into(),
+                breakpoints: vec![5],
+            }
+        );
+    }
+
+    #[test]
+    fn cli_parse_debug_rejects_bad_breakpoint() {
+        let err = parse_args(&args(&["debug", "main.nxl", "--break=abc"])).unwrap_err();
+        assert_eq!(err.code, "NXL12002");
+        let err = parse_args(&args(&["debug", "main.nxl", "--break=0"])).unwrap_err();
+        assert_eq!(err.code, "NXL12002");
     }
 
     #[test]
@@ -2673,7 +2702,42 @@ mod cli_tests {
 
     #[test]
     fn cli_debug_reports_trace_and_breakpoints() {
-        let msg = cmd_debug("main.nxl");
+        let tmp = std::env::temp_dir().join(format!(
+            "nxl_test_debug_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("prog.nxl");
+        fs::write(
+            &file,
+            "let mut i = 0;\nwhile i < 2 {\n    print(i);\n    i = i + 1;\n}\n",
+        )
+        .unwrap();
+
+        // Without breakpoints: a trace summary and no hits.
+        let plain = cmd_debug(file.to_str().unwrap(), &[]);
+        assert!(plain.contains("statement trace lines"), "{plain}");
+        assert!(plain.contains("no breakpoints hit"), "{plain}");
+        assert!(plain.contains("| 0"), "output should be shown: {plain}");
+
+        // Line 3 runs each iteration; the span stream can emit more than one
+        // span per iteration, so require at least one hit per iteration.
+        let traced = cmd_debug(file.to_str().unwrap(), &[3]);
+        assert!(traced.contains("breakpoint hits"), "{traced}");
+        assert!(
+            traced.matches("-> line 3").count() >= 2,
+            "line 3 should be hit at least twice: {traced}"
+        );
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn cli_debug_missing_file_is_reported() {
+        let msg = cmd_debug("definitely_missing.nxl", &[]);
         assert!(msg.contains("cannot read"), "{msg}");
     }
 
