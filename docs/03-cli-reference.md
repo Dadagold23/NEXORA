@@ -1,8 +1,8 @@
 # CLI Reference
 
-Every command is available as both `nxlc` and `nexora` — they are the same
-binary under two names. `nxlc` is the compiler spelling, `nexora` the
-project-facing one.
+The compiler binary is `nxlc`. It also answers to `nexora`: the program reads
+its own invocation name, so a copy or symlink called `nexora` runs the same
+commands. The release installers create only `nxlc`.
 
 ## Project commands
 
@@ -10,7 +10,7 @@ project-facing one.
 | --- | --- |
 | `new [<target>] <name>` | Create a project from a target. `new hello`, `new console hello`, `new --template console hello`, `new --template=console hello`, `new --target console hello` and `new --target=console hello` are equivalent. Targets: `console`, `web`. Dependencies declared by the new manifest are resolved and locked before the command returns. |
 | `init` | Create the same project layout in the current directory. |
-| `run [file]` | Run a project entry point or a single `.nxl` file on the VM. |
+| `run [file]` | Run a project entry point or a single `.nxl` file on the VM. The VM is authoritative: a runtime failure (for example, division by zero) is reported with a non-zero exit. The JavaScript runtime is consulted only when the VM cannot compile the module at all, so a program's own error is never masked by re-running it elsewhere. |
 | `build [--release]` | Compile the project into `build/`. |
 | `check [file]` | Parse and type-check without producing output. |
 | `test [filter]` | Parse, type-check and run every `.nxl` file in `tests/`. There is no test-block syntax yet. |

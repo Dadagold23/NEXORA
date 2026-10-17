@@ -1344,21 +1344,38 @@ pub fn cmd_run(dir: &Path, file: Option<&str>) -> CliResult<crate::runtime::Exec
             ),
         ));
     }
-    let module = compile_in_project(dir, &path).map_err(CliError::from)?;
-    // Prefer the in-process VM so `run` works without Node.js; fall back to
-    // the JS runtime when the VM cannot execute the program.
-    match crate::vm::execute(&module) {
-        Ok(vm_result) => Ok(crate::runtime::ExecutionResult {
-            stdout: vm_result.output.join("\n")
-                + if vm_result.output.is_empty() {
-                    ""
-                } else {
-                    "\n"
-                },
-            stderr: String::new(),
-            exit_code: 0,
-        }),
-        Err(_) => crate::runtime::run_module(&module).map_err(CliError::from),
+    execute_entry(dir, &path)
+}
+
+/// Execute a compiled project entry point, preferring the in-process VM.
+///
+/// The VM is authoritative. When it compiles the module and the program then
+/// fails at runtime — a raised value or a fault such as division by zero — that
+/// failure is returned as an error for the caller to surface. It is never
+/// hidden by silently re-running the program on another engine. The JS runtime
+/// is consulted only when the VM cannot *compile* the module at all, so `run`
+/// still works without Node.js for the constructs the VM does not implement.
+fn execute_entry(dir: &Path, path: &Path) -> CliResult<crate::runtime::ExecutionResult> {
+    let module = compile_in_project(dir, path).map_err(CliError::from)?;
+    match crate::vm::try_execute(&module) {
+        Ok(vm_result) => Ok(runtime_result_from_vm(&vm_result)),
+        Err(crate::vm::VmFailure::Runtime(diagnostic)) => Err(CliError::from(diagnostic)),
+        Err(crate::vm::VmFailure::Unsupported(_)) => {
+            crate::runtime::run_module(&module).map_err(CliError::from)
+        }
+    }
+}
+
+fn runtime_result_from_vm(vm_result: &crate::vm::VmResult) -> crate::runtime::ExecutionResult {
+    crate::runtime::ExecutionResult {
+        stdout: vm_result.output.join("\n")
+            + if vm_result.output.is_empty() {
+                ""
+            } else {
+                "\n"
+            },
+        stderr: String::new(),
+        exit_code: 0,
     }
 }
 
@@ -1386,25 +1403,30 @@ pub fn cmd_test(dir: &Path, filter: Option<&str>) -> CliResult<TestReport> {
     let mut failures = Vec::new();
     for path in &files {
         match fs::read_to_string(path) {
-            Ok(text) => {
-                let _ = text;
-                // Project-aware, like `check` and `run`: a test may import the
-                // modules it is testing, which is the point of testing a
-                // multi-file project. The module root is the entry's own
-                // directory, so `tests/basic.nxl` importing `app.config`
-                // finds `src/app/config.nxl`.
-                match compile_in_project(dir, path) {
-                    Ok(_) => passed += 1,
-                    Err(d) => {
-                        failures.push(format!("{}: {}[{}]", path.display(), d.message, d.code))
-                    }
+            Ok(_) => {
+                // A test is a real program: it is executed, not merely
+                // compiled. A file that parses, type-checks, and then throws
+                // or faults at runtime is a failing test — the pass count must
+                // never include programs that did not run to completion.
+                match execute_entry(dir, path) {
+                    Ok(result) if result.success() => passed += 1,
+                    Ok(result) => failures.push(format!(
+                        "{}: exited with code {}",
+                        path.display(),
+                        result.exit_code
+                    )),
+                    Err(diagnostic) => failures.push(format!(
+                        "{}: {}[{}]",
+                        path.display(),
+                        diagnostic.message,
+                        diagnostic.code
+                    )),
                 }
             }
             Err(e) => failures.push(format!("{}: cannot read: {e}", path.display())),
         }
     }
     let total = files.len();
-    // Files that compiled count as passed; total is the number discovered.
     Ok(TestReport {
         passed,
         total,

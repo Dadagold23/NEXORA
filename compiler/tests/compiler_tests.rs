@@ -505,6 +505,117 @@ fn nir_verifier_rejects_memory_load_through_non_reference() {
     assert_eq!(diagnostic.code, "NXL3001");
 }
 
+// The verifier must reject malformed modules that a buggy pass might hand to a
+// backend. Each test injects exactly one violation into an otherwise valid
+// module and asserts that `verify` refuses it, so no invalid IR can reach code
+// generation unnoticed.
+
+#[test]
+fn nir_verifier_rejects_duplicate_value_definition() {
+    let source = SourceFile::new("dup_value.nxl", "let value = 1;");
+    let mut module = compile_to_nir(&source).expect("source should lower");
+    let function = &mut module.functions[0];
+    let block = &mut function.basic_blocks[0];
+    let constant = block
+        .instructions
+        .iter()
+        .find(|instruction| matches!(instruction, nxl_compiler::nir::Instruction::Constant { .. }))
+        .cloned()
+        .expect("source should define a constant");
+    block.instructions.push(constant);
+    function.refresh_metadata();
+    let diagnostic = module
+        .verify()
+        .expect_err("a value defined twice must be rejected");
+    assert_eq!(diagnostic.code, "NXL3001");
+}
+
+#[test]
+fn nir_verifier_rejects_branch_on_non_boolean() {
+    let source = SourceFile::new("branch_non_bool.nxl", "let flag = 1; if true { print(1); }");
+    let mut module = compile_to_nir(&source).expect("source should lower");
+    let function = &mut module.functions[0];
+    let integer = function.basic_blocks[0]
+        .instructions
+        .iter()
+        .find_map(|instruction| match instruction {
+            nxl_compiler::nir::Instruction::Constant {
+                result,
+                ty: nxl_compiler::nir::Type::Int,
+                ..
+            } => Some(*result),
+            _ => None,
+        })
+        .expect("source should define an integer constant");
+    let branch = function
+        .basic_blocks
+        .iter_mut()
+        .find(|block| {
+            matches!(
+                block.terminator,
+                nxl_compiler::nir::Terminator::Branch { .. }
+            )
+        })
+        .expect("lowered if should have a branch terminator");
+    if let nxl_compiler::nir::Terminator::Branch { condition, .. } = &mut branch.terminator {
+        *condition = integer;
+    }
+    let diagnostic = module
+        .verify()
+        .expect_err("a non-boolean branch condition must be rejected");
+    assert_eq!(diagnostic.code, "NXL3001");
+}
+
+#[test]
+fn nir_verifier_rejects_return_type_mismatch() {
+    let source = SourceFile::new(
+        "return_mismatch.nxl",
+        "fn value() -> Int { return 1; }\nfn main() { print(value()); }",
+    );
+    let mut module = compile_to_nir(&source).expect("source should lower");
+    let function = module
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "value")
+        .expect("value() should exist");
+    function.return_type = nxl_compiler::nir::Type::Bool;
+    let diagnostic = module
+        .verify()
+        .expect_err("a return that contradicts the declared type must be rejected");
+    assert_eq!(diagnostic.code, "NXL3001");
+}
+
+#[test]
+fn nir_verifier_rejects_value_less_return_for_non_void() {
+    let source = SourceFile::new("bare_return.nxl", "fn value() -> Int { return 1; }");
+    let mut module = compile_to_nir(&source).expect("source should lower");
+    let function = module
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "value")
+        .expect("value() should exist");
+    for block in &mut function.basic_blocks {
+        if let nxl_compiler::nir::Terminator::Return { value, .. } = &mut block.terminator {
+            *value = None;
+        }
+    }
+    let diagnostic = module
+        .verify()
+        .expect_err("a value-less return for a non-void function must be rejected");
+    assert_eq!(diagnostic.code, "NXL3001");
+}
+
+#[test]
+fn nir_verifier_rejects_undefined_entry_point() {
+    let source = SourceFile::new("entry.nxl", "let value = 1;");
+    let mut module = compile_to_nir(&source).expect("source should lower");
+    module.entry_point = Some("ghost".to_owned());
+    let diagnostic = module
+        .verify()
+        .expect_err("an entry point that names no function must be rejected");
+    assert_eq!(diagnostic.code, "NXL3001");
+}
+
 #[test]
 fn lowers_for_loop_binding_in_loop_scope() {
     let source = SourceFile::new(
@@ -1901,9 +2012,9 @@ mod stdlib_tests {
 #[cfg(test)]
 mod cli_tests {
     use nxl_compiler::cli::{
-        cmd_build, cmd_check, cmd_clean, cmd_debug, cmd_docs, cmd_fmt, cmd_new, cmd_repl, cmd_test,
-        format_doctor_report, help_text, parse_args, run_doctor, version_text, BuildProfile,
-        BuildTarget, Command, Dependency, ProjectConfig,
+        cmd_build, cmd_check, cmd_clean, cmd_debug, cmd_docs, cmd_fmt, cmd_new, cmd_repl, cmd_run,
+        cmd_test, format_doctor_report, help_text, parse_args, run_doctor, version_text,
+        BuildProfile, BuildTarget, Command, Dependency, ProjectConfig,
     };
     use std::fs;
 
@@ -2409,6 +2520,110 @@ mod cli_tests {
         let report = cmd_test(&tmp, Some("math")).unwrap();
         fs::remove_dir_all(&tmp).ok();
         assert_eq!(report.total, 1);
+    }
+
+    #[test]
+    fn cli_cmd_test_executes_tests_and_reports_runtime_failures() {
+        let tmp = std::env::temp_dir().join(format!(
+            "nxl_test_runtime_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        fs::create_dir_all(tmp.join("tests")).unwrap();
+        fs::write(tmp.join("tests").join("ok.nxl"), "print(\"ok\");").unwrap();
+        fs::write(tmp.join("tests").join("bad.nxl"), "throw \"boom\";").unwrap();
+        let report = cmd_test(&tmp, None).unwrap();
+        fs::remove_dir_all(&tmp).ok();
+        assert_eq!(report.total, 2, "both files are discovered");
+        assert_eq!(
+            report.passed, 1,
+            "only the file that ran to completion passes: {:?}",
+            report.failures
+        );
+        assert!(!report.success(), "a test that throws must fail the run");
+        assert_eq!(report.failures.len(), 1);
+        assert!(
+            report.failures[0].contains("bad.nxl"),
+            "the failure names the failing test: {:?}",
+            report.failures
+        );
+    }
+
+    #[test]
+    fn cli_cmd_test_counts_a_runnable_test_as_passed() {
+        let tmp = std::env::temp_dir().join(format!(
+            "nxl_test_runnable_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        fs::create_dir_all(tmp.join("tests")).unwrap();
+        fs::write(
+            tmp.join("tests").join("basic.nxl"),
+            "fn add(a: Int, b: Int) -> Int { return a + b; }\n\
+             fn main() { if add(2, 3) != 5 { throw \"add(2, 3) should be 5\"; } }\n",
+        )
+        .unwrap();
+        let report = cmd_test(&tmp, None).unwrap();
+        fs::remove_dir_all(&tmp).ok();
+        assert_eq!(report.total, 1);
+        assert_eq!(report.passed, 1);
+        assert!(report.success(), "failures: {:?}", report.failures);
+    }
+
+    #[test]
+    fn cli_cmd_run_surfaces_a_vm_runtime_error_instead_of_masking_it() {
+        // Regression for a silent fallback: the VM traps division by zero, but
+        // the CLI used to re-run the program in Node.js, where `1 / 0` is
+        // `Infinity`, turning a hard error into a successful exit. The VM is
+        // authoritative, so the error must be reported.
+        let tmp = std::env::temp_dir().join(format!(
+            "nxl_run_divzero_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("main.nxl");
+        fs::write(&file, "fn main() { let divisor = 0; print(10 / divisor); }").unwrap();
+        let outcome = cmd_run(&tmp, Some(file.to_str().unwrap()));
+        let error = outcome.expect_err("division by zero must not exit successfully");
+        fs::remove_dir_all(&tmp).ok();
+        assert_eq!(error.code, "NXL9001", "{error:?}");
+        assert!(
+            error.message.contains("division by zero"),
+            "the real cause is reported: {error:?}"
+        );
+    }
+
+    #[test]
+    fn cli_check_passes_while_run_fails_for_a_program_that_throws() {
+        // Compiling is not running. A well-typed program can still fail when it
+        // executes, and `check` succeeding must not be read as the program
+        // passing.
+        let tmp = std::env::temp_dir().join(format!(
+            "nxl_check_vs_run_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("main.nxl");
+        fs::write(&file, "fn main() { throw \"late failure\"; }").unwrap();
+        let checked = cmd_check(&tmp, Some(file.to_str().unwrap()));
+        let ran = cmd_run(&tmp, Some(file.to_str().unwrap()));
+        fs::remove_dir_all(&tmp).ok();
+        assert!(
+            checked.is_ok(),
+            "the program is well-typed and must compile: {checked:?}"
+        );
+        let error = ran.expect_err("the program throws when it runs, so run must fail");
+        assert_eq!(error.code, "NXL9001", "{error:?}");
     }
 
     // ── doctor ────────────────────────────────────────────────────────────────

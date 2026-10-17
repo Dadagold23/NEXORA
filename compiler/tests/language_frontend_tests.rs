@@ -1642,6 +1642,54 @@ fn try_catches_runtime_errors() {
 }
 
 #[test]
+fn integer_overflow_is_a_catchable_error_not_a_crash() {
+    // Overflowing integer arithmetic must surface as a runtime error that the
+    // language can catch, not as a Rust panic (debug) or a silent wrap
+    // (release). Without this, `+` on `i64::MAX` aborts the process.
+    let source = SourceFile::new(
+        "overflow.nxl",
+        r#"try { let big = 9223372036854775807; print(big + 1); } catch e { print("caught"); }"#,
+    );
+    let result = nxl_compiler::vm::run(&source).expect("integer overflow should be catchable");
+    assert_eq!(result.output, vec!["caught"]);
+}
+
+#[test]
+fn integer_overflow_in_each_operator_is_catchable() {
+    for (name, program) in [
+        ("mul", "let big = 9223372036854775807; print(big * 2);"),
+        (
+            "sub",
+            "let small = -9223372036854775807 - 1; print(small - 1);",
+        ),
+        (
+            "neg",
+            "let small = -9223372036854775807 - 1; print(-small);",
+        ),
+        (
+            "div",
+            "let small = -9223372036854775807 - 1; print(small / -1);",
+        ),
+        (
+            "rem",
+            "let small = -9223372036854775807 - 1; print(small % -1);",
+        ),
+    ] {
+        let source = SourceFile::new(
+            format!("overflow_{name}.nxl"),
+            format!(r#"try {{ {program} }} catch e {{ print("caught"); }}"#),
+        );
+        let result = nxl_compiler::vm::run(&source)
+            .unwrap_or_else(|error| panic!("{name}: overflow should be catchable, got {error:?}"));
+        assert_eq!(
+            result.output,
+            vec!["caught"],
+            "{name}: overflow must be caught"
+        );
+    }
+}
+
+#[test]
 fn rejects_return_across_try_boundary() {
     let source = SourceFile::new(
         "try_return.nxl",

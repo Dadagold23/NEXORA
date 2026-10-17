@@ -2820,7 +2820,10 @@ fn is_truthy(v: &Value) -> bool {
 
 fn eval_unary(op: UnaryOp, v: Value) -> Result<Value, String> {
     match (op, v) {
-        (UnaryOp::Neg, Value::Integer(n)) => Ok(Value::Integer(-n)),
+        (UnaryOp::Neg, Value::Integer(n)) => Ok(Value::Integer(
+            n.checked_neg()
+                .ok_or_else(|| "integer overflow".to_owned())?,
+        )),
         (UnaryOp::Neg, Value::Float(f)) => Ok(Value::Float(-f)),
         (UnaryOp::Not, Value::Boolean(b)) => Ok(Value::Boolean(!b)),
         (op, v) => Err(format!("type error: {op:?} cannot be applied to {v:?}")),
@@ -2830,21 +2833,38 @@ fn eval_unary(op: UnaryOp, v: Value) -> Result<Value, String> {
 fn eval_binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, String> {
     match (op, lhs, rhs) {
         // Integer arithmetic
-        (BinaryOp::Add, Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
-        (BinaryOp::Sub, Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a - b)),
-        (BinaryOp::Mul, Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a * b)),
+        // Integer arithmetic uses checked operations so that overflow is a
+        // catchable runtime error, not a Rust panic (debug) or a silent wrap
+        // (release). This keeps the two build profiles behaving identically.
+        (BinaryOp::Add, Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(
+            a.checked_add(b)
+                .ok_or_else(|| "integer overflow".to_owned())?,
+        )),
+        (BinaryOp::Sub, Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(
+            a.checked_sub(b)
+                .ok_or_else(|| "integer overflow".to_owned())?,
+        )),
+        (BinaryOp::Mul, Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(
+            a.checked_mul(b)
+                .ok_or_else(|| "integer overflow".to_owned())?,
+        )),
         (BinaryOp::Div, Value::Integer(a), Value::Integer(b)) => {
             if b == 0 {
                 Err("division by zero".to_owned())
             } else {
-                Ok(Value::Integer(a / b))
+                // `i64::MIN / -1` overflows even though the divisor is non-zero.
+                a.checked_div(b)
+                    .map(Value::Integer)
+                    .ok_or_else(|| "integer overflow".to_owned())
             }
         }
         (BinaryOp::Rem, Value::Integer(a), Value::Integer(b)) => {
             if b == 0 {
                 Err("remainder by zero".to_owned())
             } else {
-                Ok(Value::Integer(a % b))
+                a.checked_rem(b)
+                    .map(Value::Integer)
+                    .ok_or_else(|| "integer overflow".to_owned())
             }
         }
         // Float arithmetic
@@ -2957,8 +2977,18 @@ fn eval_binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, String> {
         (BinaryOp::BitAnd, Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a & b)),
         (BinaryOp::BitOr, Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a | b)),
         (BinaryOp::BitXor, Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a ^ b)),
-        (BinaryOp::Shl, Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a << b)),
-        (BinaryOp::Shr, Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a >> b)),
+        // Shifts use checked operations: a shift amount outside `0..64` is an
+        // error, not undefined behaviour or a panic.
+        (BinaryOp::Shl, Value::Integer(a), Value::Integer(b)) => u32::try_from(b)
+            .ok()
+            .and_then(|shift| a.checked_shl(shift))
+            .map(Value::Integer)
+            .ok_or_else(|| "invalid shift amount".to_owned()),
+        (BinaryOp::Shr, Value::Integer(a), Value::Integer(b)) => u32::try_from(b)
+            .ok()
+            .and_then(|shift| a.checked_shr(shift))
+            .map(Value::Integer)
+            .ok_or_else(|| "invalid shift amount".to_owned()),
         (op, lhs, rhs) => Err(format!(
             "type error: {op:?} cannot be applied to {lhs:?} and {rhs:?}"
         )),
@@ -2967,10 +2997,35 @@ fn eval_binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, String> {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/// Why the VM did not produce a result.
+///
+/// The two cases must not be conflated by callers that prefer the VM but may
+/// fall back to another engine (see `cli::execute_entry`): a module the VM
+/// cannot *compile* might be runnable elsewhere, but a program that the VM
+/// compiled, ran, and that then failed is the program's own error and must be
+/// surfaced rather than silently re-run on a different engine.
+#[derive(Debug)]
+pub enum VmFailure {
+    /// The module could not be compiled to bytecode (a construct the VM does
+    /// not implement). A caller may legitimately try another engine.
+    Unsupported(Diagnostic),
+    /// The program compiled and ran, then raised or faulted. This is the
+    /// program's own failure and must not be masked.
+    Runtime(Diagnostic),
+}
+
+/// Compile and execute a module, keeping "the VM cannot run this" distinct from
+/// "this program failed at runtime".
+pub fn try_execute(module: &Module) -> Result<VmResult, VmFailure> {
+    let program = compile(module).map_err(VmFailure::Unsupported)?;
+    execute_program(&program).map_err(VmFailure::Runtime)
+}
+
 /// Compile a NIR module to bytecode and execute it in the VM.
 pub fn execute(module: &Module) -> Result<VmResult, Diagnostic> {
-    let program = compile(module)?;
-    execute_program(&program)
+    try_execute(module).map_err(|failure| match failure {
+        VmFailure::Unsupported(diagnostic) | VmFailure::Runtime(diagnostic) => diagnostic,
+    })
 }
 
 /// Execute a pre-compiled program in the VM.
