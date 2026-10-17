@@ -1171,3 +1171,430 @@ pub fn all_modules() -> Vec<StdlibModule> {
         StdlibModule::Testing,
     ]
 }
+
+// ── Builtins exposed to NXL programs ──────────────────────────────────────────
+
+/// The static type of a stdlib builtin parameter or result.
+///
+/// The NXL type system has no dedicated `Char` or list-of-string type yet, so
+/// only functions whose signature is built from these four types are exposed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuiltinType {
+    Int,
+    Float,
+    Str,
+    Bool,
+}
+
+impl BuiltinType {
+    /// Whether an argument of type `arg` is acceptable where `self` is
+    /// declared. Integers promote to Float; nothing else is implicit.
+    pub fn accepts(self, arg: BuiltinType) -> bool {
+        self == arg || (self == BuiltinType::Float && arg == BuiltinType::Int)
+    }
+}
+
+impl NxlValue {
+    /// The `BuiltinType` of a scalar value, or `None` for null/list/map.
+    pub fn builtin_type(&self) -> Option<BuiltinType> {
+        match self {
+            NxlValue::Bool(_) => Some(BuiltinType::Bool),
+            NxlValue::Int(_) => Some(BuiltinType::Int),
+            NxlValue::Float(_) => Some(BuiltinType::Float),
+            NxlValue::Str(_) => Some(BuiltinType::Str),
+            _ => None,
+        }
+    }
+}
+
+/// A stdlib function reachable from NXL, keyed by its fully qualified name
+/// (`std::math::sqrt`). Kept in step with the VM dispatch and the JavaScript
+/// backend so all three runtimes agree.
+pub struct BuiltinSpec {
+    pub name: &'static str,
+    pub params: &'static [BuiltinType],
+    pub ret: BuiltinType,
+}
+
+impl BuiltinSpec {
+    pub fn arity(&self) -> usize {
+        self.params.len()
+    }
+}
+
+use BuiltinType::{Bool as B, Float as F, Int as I, Str as S};
+
+static STDLIB_BUILTINS: &[BuiltinSpec] = &[
+    // std::strings — single-signature functions over String/Int/Bool.
+    BuiltinSpec {
+        name: "std::strings::to_upper",
+        params: &[S],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::strings::to_lower",
+        params: &[S],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::strings::trim",
+        params: &[S],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::strings::trim_start",
+        params: &[S],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::strings::trim_end",
+        params: &[S],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::strings::len",
+        params: &[S],
+        ret: I,
+    },
+    BuiltinSpec {
+        name: "std::strings::is_empty",
+        params: &[S],
+        ret: B,
+    },
+    BuiltinSpec {
+        name: "std::strings::contains",
+        params: &[S, S],
+        ret: B,
+    },
+    BuiltinSpec {
+        name: "std::strings::starts_with",
+        params: &[S, S],
+        ret: B,
+    },
+    BuiltinSpec {
+        name: "std::strings::ends_with",
+        params: &[S, S],
+        ret: B,
+    },
+    BuiltinSpec {
+        name: "std::strings::replace",
+        params: &[S, S, S],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::strings::repeat",
+        params: &[S, I],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::strings::reverse",
+        params: &[S],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::strings::substring",
+        params: &[S, I, I],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::strings::parse_int",
+        params: &[S],
+        ret: I,
+    },
+    BuiltinSpec {
+        name: "std::strings::parse_float",
+        params: &[S],
+        ret: F,
+    },
+    // std::math — the Float-parameter subset (Int promotes to Float).
+    BuiltinSpec {
+        name: "std::math::sqrt",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::cbrt",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::exp",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::ln",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::log2",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::log10",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::floor",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::ceil",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::round",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::trunc",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::sin",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::cos",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::tan",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::asin",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::acos",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::atan",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::atan2",
+        params: &[F, F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::pow_float",
+        params: &[F, F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::to_radians",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::to_degrees",
+        params: &[F],
+        ret: F,
+    },
+    BuiltinSpec {
+        name: "std::math::is_nan",
+        params: &[F],
+        ret: B,
+    },
+    BuiltinSpec {
+        name: "std::math::is_infinite",
+        params: &[F],
+        ret: B,
+    },
+    BuiltinSpec {
+        name: "std::math::is_finite",
+        params: &[F],
+        ret: B,
+    },
+];
+
+/// Look up a stdlib builtin by its fully qualified name.
+pub fn builtin(name: &str) -> Option<&'static BuiltinSpec> {
+    STDLIB_BUILTINS.iter().find(|spec| spec.name == name)
+}
+
+/// The canonical `std::<module>` prefix for a module name, accepting both the
+/// qualified (`std::math`) and short (`math`) spellings. `None` for modules
+/// that are not implemented yet (http/crypto/networking) or unknown.
+pub fn canonical_module(name: &str) -> Option<&'static str> {
+    StdlibModule::from_name(name)
+        .filter(|module| module.is_implemented())
+        .map(|module| module.name())
+}
+
+fn as_float(v: &NxlValue) -> StdResult<f64> {
+    match v {
+        NxlValue::Float(n) => Ok(*n),
+        NxlValue::Int(n) => Ok(*n as f64),
+        _ => Err(StdlibError::new(
+            "NXL11011",
+            "expected a Float argument".to_owned(),
+        )),
+    }
+}
+
+fn as_int(v: &NxlValue) -> StdResult<i64> {
+    match v {
+        NxlValue::Int(n) => Ok(*n),
+        _ => Err(StdlibError::new(
+            "NXL11011",
+            "expected an Int argument".to_owned(),
+        )),
+    }
+}
+
+fn as_str(v: &NxlValue) -> StdResult<&str> {
+    match v {
+        NxlValue::Str(s) => Ok(s),
+        _ => Err(StdlibError::new(
+            "NXL11011",
+            "expected a String argument".to_owned(),
+        )),
+    }
+}
+
+/// Invoke a stdlib builtin. Validates arity and argument types (Int promotes
+/// to Float) and returns the result as an `NxlValue`. Failures are ordinary
+/// `StdlibError`s, which the runtimes surface as catchable runtime errors.
+pub fn call_builtin(name: &str, args: &[NxlValue]) -> StdResult<NxlValue> {
+    let spec = builtin(name).ok_or_else(|| {
+        StdlibError::new(
+            "NXL11010",
+            format!("unknown standard-library function '{name}'"),
+        )
+    })?;
+    if args.len() != spec.params.len() {
+        return Err(StdlibError::new(
+            "NXL11010",
+            format!(
+                "'{name}' expects {} argument(s), got {}",
+                spec.params.len(),
+                args.len()
+            ),
+        ));
+    }
+    for (index, (param, arg)) in spec.params.iter().zip(args).enumerate() {
+        match arg.builtin_type() {
+            Some(actual) if param.accepts(actual) => {}
+            _ => {
+                return Err(StdlibError::new(
+                    "NXL11011",
+                    format!("'{name}' argument {} has the wrong type", index + 1),
+                ))
+            }
+        }
+    }
+
+    match name {
+        "std::strings::to_upper" => Ok(NxlValue::Str(strings::to_upper(as_str(&args[0])?))),
+        "std::strings::to_lower" => Ok(NxlValue::Str(strings::to_lower(as_str(&args[0])?))),
+        "std::strings::trim" => Ok(NxlValue::Str(strings::trim(as_str(&args[0])?).to_owned())),
+        "std::strings::trim_start" => Ok(NxlValue::Str(
+            strings::trim_start(as_str(&args[0])?).to_owned(),
+        )),
+        "std::strings::trim_end" => Ok(NxlValue::Str(
+            strings::trim_end(as_str(&args[0])?).to_owned(),
+        )),
+        "std::strings::len" => Ok(NxlValue::Int(strings::len(as_str(&args[0])?) as i64)),
+        "std::strings::is_empty" => Ok(NxlValue::Bool(strings::is_empty(as_str(&args[0])?))),
+        "std::strings::contains" => Ok(NxlValue::Bool(strings::contains(
+            as_str(&args[0])?,
+            as_str(&args[1])?,
+        ))),
+        "std::strings::starts_with" => Ok(NxlValue::Bool(strings::starts_with(
+            as_str(&args[0])?,
+            as_str(&args[1])?,
+        ))),
+        "std::strings::ends_with" => Ok(NxlValue::Bool(strings::ends_with(
+            as_str(&args[0])?,
+            as_str(&args[1])?,
+        ))),
+        "std::strings::replace" => Ok(NxlValue::Str(strings::replace(
+            as_str(&args[0])?,
+            as_str(&args[1])?,
+            as_str(&args[2])?,
+        ))),
+        "std::strings::repeat" => {
+            let text = as_str(&args[0])?;
+            let count = as_int(&args[1])?;
+            let count = usize::try_from(count).map_err(|_| {
+                StdlibError::new("NXL11011", "repeat count must not be negative".to_owned())
+            })?;
+            // Guard the capacity computation so an absurd count errors instead
+            // of aborting the process with an allocation panic.
+            if (text.len() as u64).checked_mul(count as u64).is_none() {
+                return Err(StdlibError::new(
+                    "NXL11011",
+                    "repeat result is too large".to_owned(),
+                ));
+            }
+            Ok(NxlValue::Str(strings::repeat(text, count)))
+        }
+        "std::strings::reverse" => Ok(NxlValue::Str(strings::reverse(as_str(&args[0])?))),
+        "std::strings::substring" => {
+            let start = usize::try_from(as_int(&args[1])?).map_err(|_| {
+                StdlibError::new(
+                    "NXL11002",
+                    "substring start must not be negative".to_owned(),
+                )
+            })?;
+            let end = usize::try_from(as_int(&args[2])?).map_err(|_| {
+                StdlibError::new("NXL11002", "substring end must not be negative".to_owned())
+            })?;
+            strings::substring(as_str(&args[0])?, start, end).map(NxlValue::Str)
+        }
+        "std::strings::parse_int" => strings::parse_int(as_str(&args[0])?).map(NxlValue::Int),
+        "std::strings::parse_float" => strings::parse_float(as_str(&args[0])?).map(NxlValue::Float),
+
+        "std::math::sqrt" => Ok(NxlValue::Float(math::sqrt(as_float(&args[0])?))),
+        "std::math::cbrt" => Ok(NxlValue::Float(math::cbrt(as_float(&args[0])?))),
+        "std::math::exp" => Ok(NxlValue::Float(math::exp(as_float(&args[0])?))),
+        "std::math::ln" => Ok(NxlValue::Float(math::ln(as_float(&args[0])?))),
+        "std::math::log2" => Ok(NxlValue::Float(math::log2(as_float(&args[0])?))),
+        "std::math::log10" => Ok(NxlValue::Float(math::log10(as_float(&args[0])?))),
+        "std::math::floor" => Ok(NxlValue::Float(math::floor(as_float(&args[0])?))),
+        "std::math::ceil" => Ok(NxlValue::Float(math::ceil(as_float(&args[0])?))),
+        "std::math::round" => Ok(NxlValue::Float(math::round(as_float(&args[0])?))),
+        "std::math::trunc" => Ok(NxlValue::Float(math::trunc(as_float(&args[0])?))),
+        "std::math::sin" => Ok(NxlValue::Float(math::sin(as_float(&args[0])?))),
+        "std::math::cos" => Ok(NxlValue::Float(math::cos(as_float(&args[0])?))),
+        "std::math::tan" => Ok(NxlValue::Float(math::tan(as_float(&args[0])?))),
+        "std::math::asin" => Ok(NxlValue::Float(math::asin(as_float(&args[0])?))),
+        "std::math::acos" => Ok(NxlValue::Float(math::acos(as_float(&args[0])?))),
+        "std::math::atan" => Ok(NxlValue::Float(math::atan(as_float(&args[0])?))),
+        "std::math::atan2" => Ok(NxlValue::Float(math::atan2(
+            as_float(&args[0])?,
+            as_float(&args[1])?,
+        ))),
+        "std::math::pow_float" => Ok(NxlValue::Float(math::pow_float(
+            as_float(&args[0])?,
+            as_float(&args[1])?,
+        ))),
+        "std::math::to_radians" => Ok(NxlValue::Float(math::to_radians(as_float(&args[0])?))),
+        "std::math::to_degrees" => Ok(NxlValue::Float(math::to_degrees(as_float(&args[0])?))),
+        "std::math::is_nan" => Ok(NxlValue::Bool(math::is_nan(as_float(&args[0])?))),
+        "std::math::is_infinite" => Ok(NxlValue::Bool(math::is_infinite(as_float(&args[0])?))),
+        "std::math::is_finite" => Ok(NxlValue::Bool(math::is_finite(as_float(&args[0])?))),
+
+        _ => Err(StdlibError::new(
+            "NXL11010",
+            format!("unknown standard-library function '{name}'"),
+        )),
+    }
+}

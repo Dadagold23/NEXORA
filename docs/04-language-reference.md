@@ -105,8 +105,9 @@ Implemented in `project.rs`/`nir.rs`/`hir.rs`, tested in
   `nxl test` files stay self-contained; `catch e: T` resolves `T`
   through imports
 - limits: no relative imports, no `module`-declaration enforcement
-  (informational), no privacy (everything public), no stdlib files yet,
-  module globals need bare names, no re-exports
+  (informational), no privacy (everything public), module globals need bare
+  names, no re-exports; the standard library is exposed through
+  `std.<module>` imports (see "Standard library" below)
 
 ## Phase 5 - concurrency (VM threads; JS honest errors)
 
@@ -130,4 +131,34 @@ The VM stays authoritative; the JavaScript backend now emits real control flow, 
 - a name now owns its JavaScript variable, so a rebinding read inside a loop or a function sees the current value (this also fixed stale reads of loop counters)
 - loops are recovered from loop metadata recorded by lowering (`Function::loops`), not by guessing at the CFG; control flow outside that shape is refused with NXL2007 instead of mis-emitted
 
-Rust target (`compile_native`): `throw` becomes a panic carrying the rendered message, and `try`/`catch`/`finally` emit `catch_unwind` with a `finally` block that runs on both paths (an uncaught error still propagates). Generated Rust is compiled and executed by the test suite when `rustc` is available. Everything else - branching, loops, `for ... in`, composites, methods, match patterns, concurrency, `catch e: Type` - is refused with NXL2007 and a pointer to a working target instead of silently dropping code.
+Rust target (`compile_native`): `throw` becomes a panic carrying the rendered message, and `try`/`catch`/`finally` emit `catch_unwind` with a `finally` block that runs on both paths (an uncaught error still propagates). Generated Rust is compiled and executed by the test suite when `rustc` is available. Everything else - branching, loops, `for ... in`, composites, methods, match patterns, concurrency, `catch e: Type`, and standard-library calls - is refused with NXL2007 and a pointer to a working target instead of silently dropping code.
+
+## Standard library (`std.strings`, `std.math`)
+
+Implemented in `stdlib.rs`, resolved by `nir.rs` (`lower_builtin_call`),
+executed by `vm.rs`, and mirrored by the JavaScript backend; tested in
+`language_frontend_tests.rs` (the `stdlib_*` tests run every function on the
+VM and on emitted Node.js and require identical output).
+
+- Names come from imports: `import std.math;` exposes `std.math.sqrt(..)`
+  (also `math.sqrt(..)` once aliased), and `from std.strings import len` binds
+  `len` directly. A user declaration with the same bare name still wins.
+- `std.strings` (16 functions): `to_upper`, `to_lower`, `trim`,
+  `trim_start`, `trim_end`, `len` (code points, not bytes), `is_empty`,
+  `contains`, `starts_with`, `ends_with`, `replace`, `repeat`, `reverse`,
+  `substring`, `parse_int`, `parse_float`.
+- `std.math` (23 functions, all `Float`): `sqrt`, `cbrt`, `exp`, `ln`,
+  `log2`, `log10`, `floor`, `ceil`, `round` (half away from zero), `trunc`,
+  `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `pow_float`,
+  `to_radians`, `to_degrees`, `is_nan`, `is_infinite`, `is_finite`.
+- Calling convention: arity is checked at compile time (a wrong count is
+  NXL2002); argument *types* are checked at run time, so a mismatch is a
+  catchable error rather than a compile failure. `Int` promotes to `Float`
+  for math functions.
+- Both runtimes agree exactly: `len` counts code points, `round` rounds half
+  away from zero, `substring` uses character indices, and `replace` replaces
+  every occurrence.
+- Not yet available (importing them fails loudly with NXL2002 rather than
+  resolving to a stub): the other `std` modules - `json`, `collections`,
+  `env`, `process`, `fs`, `time`, `random`, `testing`, and so on. The Rust
+  target rejects standard-library calls with NXL2007.

@@ -634,10 +634,14 @@ pub fn lower(program: &Program) -> Result<Module, Diagnostic> {
 }
 
 pub fn lower_hir(hir: &crate::hir::HirModule) -> Result<Module, Diagnostic> {
+    // Single-file lowering still needs the file's imports so qualified stdlib
+    // calls (`std.math.sqrt`) and selected imports (`from std.strings import …`)
+    // resolve; the entry file is the root namespace.
+    let imports = crate::project::parse_imports(&hir.program);
     lower_project_files(&[ProjectFile {
         path: String::new(),
         hir: hir.clone(),
-        imports: Vec::new(),
+        imports,
         aliases: HashMap::new(),
     }])
 }
@@ -3440,6 +3444,64 @@ impl Lowerer {
         None
     }
 
+    /// A bare name brought in by `from std.<module> import <name>` resolves to
+    /// the stdlib builtin `std::<module>::<name>`. `None` when the name is not
+    /// a stdlib function (so ordinary resolution continues and then fails).
+    fn resolve_stdlib_builtin(&self, name: &str) -> Option<String> {
+        for import in &self.file_imports {
+            if let crate::project::ModuleImport::Selected { path, names } = import {
+                if names.iter().any(|candidate| candidate == name) {
+                    let normalized = crate::project::normalize_path(path);
+                    if let Some(module) = crate::stdlib::canonical_module(&normalized) {
+                        let qualified = format!("{module}::{name}");
+                        if crate::stdlib::builtin(&qualified).is_some() {
+                            return Some(qualified);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Lower a call to a runtime builtin by its (possibly qualified) name,
+    /// checking arity and stamping the declared return type.
+    fn lower_builtin_call(
+        &mut self,
+        callee: &str,
+        arguments: &[Expression],
+        span: Span,
+    ) -> Result<ValueId, Diagnostic> {
+        if let Some(Some(arity)) = builtin_arity(callee) {
+            if arguments.len() != arity {
+                return Err(Diagnostic::error(
+                    "NXL2002",
+                    format!(
+                        "built-in '{callee}' expects {arity} argument(s), got {}",
+                        arguments.len()
+                    ),
+                    span,
+                ));
+            }
+        }
+        let mut lowered_arguments = Vec::with_capacity(arguments.len());
+        for argument in arguments {
+            lowered_arguments.push(self.expression(argument)?);
+        }
+        let return_type = builtin_return_type(callee);
+        let result = self.allocate();
+        let instruction = Instruction::Call {
+            result,
+            callee: callee.to_owned(),
+            arguments: lowered_arguments,
+            return_type,
+            span,
+        };
+        self.record_value_type(&instruction);
+        self.instructions.push(instruction);
+        Ok(result)
+    }
+
     fn pop_scope(&mut self) {
         self.scope_stack.pop();
         self.mutability_stack.pop();
@@ -4599,6 +4661,15 @@ impl Lowerer {
                         span,
                     ));
                 }
+                // `import std.math;` / `import math;` expose stdlib builtins.
+                if let Some(module_name) =
+                    crate::stdlib::canonical_module(&crate::project::normalize_path(module))
+                {
+                    let builtin_name = format!("{module_name}::{name}");
+                    if crate::stdlib::builtin(&builtin_name).is_some() {
+                        return self.lower_builtin_call(&builtin_name, arguments, span);
+                    }
+                }
                 Err(Diagnostic::error(
                     "NXL2002",
                     format!("unknown function '{name}' in module '{module}'"),
@@ -5327,39 +5398,8 @@ impl Lowerer {
                 };
 
                 // Check for built-in functions the runtime provides directly.
-                if let Some(fixed_arity) = builtin_arity(name) {
-                    if let Some(arity) = fixed_arity {
-                        if arguments.len() != arity {
-                            return Err(Diagnostic::error(
-                                "NXL2002",
-                                format!(
-                                    "built-in '{name}' expects {arity} argument(s), got {}",
-                                    arguments.len()
-                                ),
-                                expression.span,
-                            ));
-                        }
-                    }
-                    let mut lowered_arguments = Vec::with_capacity(arguments.len());
-                    for argument in arguments {
-                        lowered_arguments.push(self.expression(argument)?);
-                    }
-                    let return_type = if name == "print" {
-                        Type::Void
-                    } else {
-                        Type::String
-                    };
-                    let result = self.allocate();
-                    let instruction = Instruction::Call {
-                        result,
-                        callee: name.clone(),
-                        arguments: lowered_arguments,
-                        return_type,
-                        span: expression.span,
-                    };
-                    self.record_value_type(&instruction);
-                    self.instructions.push(instruction);
-                    return Ok(result);
+                if builtin_arity(name).is_some() {
+                    return self.lower_builtin_call(name, arguments, expression.span);
                 }
 
                 // Class/actor construction: `Person("Ada")`.
@@ -5392,13 +5432,21 @@ impl Lowerer {
                 }
 
                 // Resolve bare names through selected imports + own module.
-                let resolved = self.resolve_function(name).ok_or_else(|| {
-                    Diagnostic::error(
-                        "NXL2002",
-                        format!("use of undeclared function '{name}'"),
-                        callee.span,
-                    )
-                })?;
+                let resolved = match self.resolve_function(name) {
+                    Some(resolved) => resolved,
+                    None => {
+                        // `from std.<module> import <name>` reaches a stdlib
+                        // builtin when no user function claims the name.
+                        if let Some(qualified) = self.resolve_stdlib_builtin(name) {
+                            return self.lower_builtin_call(&qualified, arguments, expression.span);
+                        }
+                        return Err(Diagnostic::error(
+                            "NXL2002",
+                            format!("use of undeclared function '{name}'"),
+                            callee.span,
+                        ));
+                    }
+                };
 
                 self.lower_direct_call(
                     &resolved,
@@ -5761,11 +5809,35 @@ impl std::fmt::Display for Module {
 ///
 /// `None` means the built-in takes any number of arguments, `Some(n)` that it
 /// takes exactly `n`. These must stay in step with the runtimes: the VM's
-/// `call_function`, and the prelude each backend emits.
+/// `call_function`, and the prelude each backend emits. Stdlib builtins
+/// (`std::math::sqrt`, …) carry their arity in the `stdlib` spec table.
 fn builtin_arity(name: &str) -> Option<Option<usize>> {
     match name {
         "print" => Some(None),
         "escape_html" | "strip_tags" => Some(Some(1)),
-        _ => None,
+        _ => crate::stdlib::builtin(name).map(|spec| Some(spec.arity())),
+    }
+}
+
+/// The declared result type of a builtin call.
+fn builtin_return_type(name: &str) -> Type {
+    match name {
+        "print" => Type::Void,
+        "escape_html" | "strip_tags" => Type::String,
+        _ => match crate::stdlib::builtin(name) {
+            Some(spec) => stdlib_type(spec.ret),
+            None => Type::Unknown,
+        },
+    }
+}
+
+/// Map a stdlib builtin type onto the NXL type it lowers to.
+fn stdlib_type(ty: crate::stdlib::BuiltinType) -> Type {
+    use crate::stdlib::BuiltinType;
+    match ty {
+        BuiltinType::Int => Type::Int,
+        BuiltinType::Float => Type::Float,
+        BuiltinType::Str => Type::String,
+        BuiltinType::Bool => Type::Bool,
     }
 }

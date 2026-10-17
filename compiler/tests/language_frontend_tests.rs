@@ -1723,3 +1723,117 @@ fn js_backend_emits_native_try_catch_finally() {
     );
     assert!(artifact.source.contains("finally"), "JS must keep finally");
 }
+
+// ── D4: standard library reachable from NXL ───────────────────────────────────
+
+#[test]
+fn stdlib_strings_and_math_run_identically_on_vm_and_js() {
+    // The standard library is wired through every layer: NIR resolves the
+    // qualified call, the VM executes it directly, and the JS backend routes it
+    // through its own dispatcher. If either runtime were stubbed the output
+    // would diverge, so parity here is the real proof of the feature.
+    assert_js_parity(
+        "import std.math;\n\
+         from std.strings import to_upper, len, reverse, parse_int;\n\
+         print(std.math.sqrt(9.0));\n\
+         print(std.math.floor(3.7));\n\
+         print(std.math.pow_float(2.0, 10.0));\n\
+         print(to_upper(\"nxl\"));\n\
+         print(len(\"naive\"));\n\
+         print(reverse(\"abc\"));\n\
+         print(parse_int(\"42\") + 1);\n\
+         print(std.math.is_finite(1.0));\n",
+        &["3", "3", "1024", "NXL", "5", "cba", "43", "true"],
+        "stdlib_parity.nxl",
+    );
+}
+
+#[test]
+fn stdlib_round_is_half_away_from_zero_on_both_runtimes() {
+    // Rust's f64::round rounds half away from zero; JavaScript's Math.round
+    // rounds half up. The dispatcher compensates, so both agree on -3.
+    assert_js_parity(
+        "import std.math;\nprint(std.math.round(-2.5));\nprint(std.math.round(2.5));\n",
+        &["-3", "3"],
+        "stdlib_round.nxl",
+    );
+}
+
+#[test]
+fn stdlib_len_counts_code_points_not_bytes() {
+    // "naïve" is 5 code points but 6 UTF-8 bytes; len must count characters so
+    // the VM and the JS (`[...s].length`) agree.
+    assert_js_parity(
+        "from std.strings import len;\nprint(len(\"naïve\"));\n",
+        &["5"],
+        "stdlib_len.nxl",
+    );
+}
+
+#[test]
+fn stdlib_int_arguments_promote_to_float() {
+    // Int arguments are promoted to Float for math functions, so `sqrt(9)` is
+    // accepted rather than rejected by the runtime.
+    assert_js_parity(
+        "import std.math;\nprint(std.math.sqrt(9));\n",
+        &["3"],
+        "stdlib_promote.nxl",
+    );
+}
+
+#[test]
+fn stdlib_wrong_arity_is_a_compile_error() {
+    let source = SourceFile::new(
+        "stdlib_arity.nxl",
+        "import std.math;\nprint(std.math.sqrt());\n",
+    );
+    let diagnostic = compile_to_nir(&source).expect_err("arity must be checked statically");
+    assert_eq!(diagnostic.code, "NXL2002");
+}
+
+#[test]
+fn stdlib_unknown_function_is_a_compile_error() {
+    let source = SourceFile::new(
+        "stdlib_unknown.nxl",
+        "import std.math;\nprint(std.math.nope(1.0));\n",
+    );
+    let diagnostic = compile_to_nir(&source).expect_err("unknown builtin must be rejected");
+    assert_eq!(diagnostic.code, "NXL2002");
+}
+
+#[test]
+fn stdlib_unimplemented_module_is_a_compile_error() {
+    // Modules that exist in the registry but are not wired as builtins must not
+    // silently resolve to nothing.
+    let source = SourceFile::new(
+        "stdlib_http.nxl",
+        "import std.http;\nprint(std.http.get(\"x\"));\n",
+    );
+    let diagnostic = compile_to_nir(&source).expect_err("unimplemented module must be rejected");
+    assert_eq!(diagnostic.code, "NXL2002");
+}
+
+#[test]
+fn stdlib_type_mismatch_is_a_catchable_runtime_error() {
+    // Argument types are not checked statically, so a mismatch is a catchable
+    // runtime error rather than a crash or a compile failure.
+    let source = SourceFile::new(
+        "stdlib_typemiss.nxl",
+        "import std.math;\ntry { print(std.math.sqrt(\"x\")); } catch e { print(\"caught\"); }\n",
+    );
+    let result = nxl_compiler::vm::run(&source).expect("type mismatch must be catchable");
+    assert_eq!(result.output, vec!["caught"]);
+}
+
+#[test]
+fn rust_backend_rejects_stdlib_calls() {
+    // The Rust backend cannot link `crate::stdlib` into generated code, so it
+    // must refuse stdlib calls clearly instead of emitting uncompilable Rust.
+    let source = SourceFile::new(
+        "stdlib_native.nxl",
+        "import std.math;\nprint(std.math.sqrt(9.0));\n",
+    );
+    let diagnostic = nxl_compiler::backend::compile_native(&source)
+        .expect_err("Rust backend must reject stdlib");
+    assert_eq!(diagnostic.code, "NXL2007");
+}

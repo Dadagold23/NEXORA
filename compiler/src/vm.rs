@@ -2093,6 +2093,20 @@ impl Vm {
             ));
         }
 
+        // Standard-library functions (`std::strings::*`, `std::math::*`).
+        // Arguments are converted to the dynamic stdlib value type, checked and
+        // evaluated there, and the result converted back. stdlib failures are
+        // catchable runtime errors, matching division by zero.
+        if crate::stdlib::builtin(name).is_some() {
+            let mut nxl_args = Vec::with_capacity(args.len());
+            for argument in &args {
+                nxl_args.push(value_to_nxl(argument)?);
+            }
+            let produced = crate::stdlib::call_builtin(name, &nxl_args)
+                .map_err(|error| VmFault::Throw(Value::String(error.message)))?;
+            return Ok((nxl_to_value(produced), Value::Unit));
+        }
+
         let chunk = self
             .program
             .chunk_by_name(name)
@@ -3074,5 +3088,44 @@ impl fmt::Display for CompiledProgram {
             }
         }
         Ok(())
+    }
+}
+
+/// Convert a VM value into the dynamic type the standard library speaks.
+/// Only the scalar types stdlib builtins accept are convertible; anything
+/// else is a catchable runtime error rather than a panic.
+fn value_to_nxl(value: &Value) -> Result<crate::stdlib::NxlValue, VmFault> {
+    use crate::stdlib::NxlValue;
+    Ok(match value {
+        Value::Integer(n) => NxlValue::Int(*n),
+        Value::Float(n) => NxlValue::Float(*n),
+        Value::String(s) => NxlValue::Str(s.clone()),
+        Value::Boolean(b) => NxlValue::Bool(*b),
+        Value::Unit => NxlValue::Null,
+        _ => {
+            return Err(VmFault::Throw(Value::String(
+                "standard-library functions accept only Int, Float, String, and Bool".to_owned(),
+            )))
+        }
+    })
+}
+
+/// Convert a stdlib result back into a VM value.
+fn nxl_to_value(value: crate::stdlib::NxlValue) -> Value {
+    use crate::stdlib::NxlValue;
+    match value {
+        NxlValue::Null => Value::Unit,
+        NxlValue::Bool(b) => Value::Boolean(b),
+        NxlValue::Int(n) => Value::Integer(n),
+        NxlValue::Float(n) => Value::Float(n),
+        NxlValue::Str(s) => Value::String(s),
+        NxlValue::List(items) => Value::Array(items.into_iter().map(nxl_to_value).collect()),
+        NxlValue::Map(pairs) => Value::Object {
+            type_name: "Map".to_owned(),
+            fields: pairs
+                .into_iter()
+                .map(|(key, value)| (key, nxl_to_value(value)))
+                .collect(),
+        },
     }
 }

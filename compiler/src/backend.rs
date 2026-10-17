@@ -289,6 +289,29 @@ impl<'m> JsBackend<'m> {
             "function __nxl_iter(v) {{ if (Array.isArray(v)) return v; if (typeof v === \"number\" && Number.isInteger(v)) {{ const n = []; for (let i = 0; i < v; i++) n.push(i); return n; }} throw new Error(__nxl_show(v) + \" is not iterable\"); }}\n"
         )
         .unwrap();
+        // Standard library (`std::strings`, `std::math`). These mirror
+        // `crate::stdlib::call_builtin` exactly, including which argument types
+        // are accepted and how failures surface, so the VM and Node agree.
+        writeln!(
+            self.out,
+            "function __nxl_num(v) {{ if (typeof v === \"number\") return v; throw new Error(\"expected a number\"); }}\n"
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "function __nxl_str(v) {{ if (typeof v === \"string\") return v; throw new Error(\"expected a String\"); }}\n"
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "function __nxl_int(v) {{ if (typeof v === \"number\" && Number.isInteger(v)) return v; throw new Error(\"expected an Int\"); }}\n"
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "function __nxl_std(name, a) {{\n  switch (name) {{\n    case \"std::strings::to_upper\": return __nxl_str(a[0]).toUpperCase();\n    case \"std::strings::to_lower\": return __nxl_str(a[0]).toLowerCase();\n    case \"std::strings::trim\": return __nxl_str(a[0]).trim();\n    case \"std::strings::trim_start\": return __nxl_str(a[0]).trimStart();\n    case \"std::strings::trim_end\": return __nxl_str(a[0]).trimEnd();\n    case \"std::strings::len\": return [...__nxl_str(a[0])].length;\n    case \"std::strings::is_empty\": return __nxl_str(a[0]) === \"\";\n    case \"std::strings::contains\": return __nxl_str(a[0]).includes(__nxl_str(a[1]));\n    case \"std::strings::starts_with\": return __nxl_str(a[0]).startsWith(__nxl_str(a[1]));\n    case \"std::strings::ends_with\": return __nxl_str(a[0]).endsWith(__nxl_str(a[1]));\n    case \"std::strings::replace\": return __nxl_str(a[0]).split(__nxl_str(a[1])).join(__nxl_str(a[2]));\n    case \"std::strings::repeat\": {{ const n = __nxl_int(a[1]); if (n < 0) throw new Error(\"repeat result is too large\"); return __nxl_str(a[0]).repeat(n); }}\n    case \"std::strings::reverse\": return [...__nxl_str(a[0])].reverse().join(\"\");\n    case \"std::strings::substring\": {{ const c = [...__nxl_str(a[0])]; const s = __nxl_int(a[1]); const e = __nxl_int(a[2]); if (s < 0 || e < 0 || s > e || e > c.length) throw new Error(\"substring [\" + s + \"..\" + e + \"] out of bounds (len=\" + c.length + \")\"); return c.slice(s, e).join(\"\"); }}\n    case \"std::strings::parse_int\": {{ const t = __nxl_str(a[0]).trim(); if (!/^[+-]?\\d+$/.test(t)) throw new Error(\"cannot parse '\" + t + \"' as Int\"); const n = Number(t); if (!Number.isSafeInteger(n)) throw new Error(\"cannot parse '\" + t + \"' as Int\"); return n; }}\n    case \"std::strings::parse_float\": {{ const t = __nxl_str(a[0]).trim(); const n = Number(t); if (t === \"\" || Number.isNaN(n)) throw new Error(\"cannot parse '\" + t + \"' as Float\"); return n; }}\n    case \"std::math::sqrt\": return Math.sqrt(__nxl_num(a[0]));\n    case \"std::math::cbrt\": return Math.cbrt(__nxl_num(a[0]));\n    case \"std::math::exp\": return Math.exp(__nxl_num(a[0]));\n    case \"std::math::ln\": return Math.log(__nxl_num(a[0]));\n    case \"std::math::log2\": return Math.log2(__nxl_num(a[0]));\n    case \"std::math::log10\": return Math.log10(__nxl_num(a[0]));\n    case \"std::math::floor\": return Math.floor(__nxl_num(a[0]));\n    case \"std::math::ceil\": return Math.ceil(__nxl_num(a[0]));\n    case \"std::math::round\": {{ const x = __nxl_num(a[0]); return Math.sign(x) * Math.round(Math.abs(x)); }}\n    case \"std::math::trunc\": return Math.trunc(__nxl_num(a[0]));\n    case \"std::math::sin\": return Math.sin(__nxl_num(a[0]));\n    case \"std::math::cos\": return Math.cos(__nxl_num(a[0]));\n    case \"std::math::tan\": return Math.tan(__nxl_num(a[0]));\n    case \"std::math::asin\": return Math.asin(__nxl_num(a[0]));\n    case \"std::math::acos\": return Math.acos(__nxl_num(a[0]));\n    case \"std::math::atan\": return Math.atan(__nxl_num(a[0]));\n    case \"std::math::atan2\": return Math.atan2(__nxl_num(a[0]), __nxl_num(a[1]));\n    case \"std::math::pow_float\": return Math.pow(__nxl_num(a[0]), __nxl_num(a[1]));\n    case \"std::math::to_radians\": return __nxl_num(a[0]) * Math.PI / 180;\n    case \"std::math::to_degrees\": return __nxl_num(a[0]) * 180 / Math.PI;\n    case \"std::math::is_nan\": return Number.isNaN(__nxl_num(a[0]));\n    case \"std::math::is_infinite\": return !Number.isFinite(__nxl_num(a[0])) && !Number.isNaN(__nxl_num(a[0]));\n    case \"std::math::is_finite\": return Number.isFinite(__nxl_num(a[0]));\n    default: throw new Error(\"unknown standard-library function '\" + name + \"'\");\n  }}\n}}\n"
+        )
+        .unwrap();
     }
 
     // ── Function ──────────────────────────────────────────────────────────────
@@ -622,7 +645,12 @@ impl<'m> JsBackend<'m> {
                 ..
             } => {
                 let args: Vec<String> = arguments.iter().map(|a| self.var(*a)).collect();
-                let call = format!("{}({})", js_safe(callee), args.join(", "));
+                let call = if crate::stdlib::builtin(callee).is_some() {
+                    // Stdlib functions route through the shared dispatcher.
+                    format!("__nxl_std(\"{callee}\", [{}])", args.join(", "))
+                } else {
+                    format!("{}({})", js_safe(callee), args.join(", "))
+                };
                 if matches!(return_type, Type::Void) {
                     self.line(&format!("{call};"));
                 } else {
@@ -1585,10 +1613,17 @@ impl<'m> RustBackend<'m> {
                 callee,
                 arguments,
                 return_type,
-                ..
+                span,
             } => {
                 let args: Vec<String> = arguments.iter().map(|a| self.var(*a)).collect();
                 let callee_name = rust_safe(callee);
+                if crate::stdlib::builtin(callee).is_some() {
+                    return Err(Diagnostic::error(
+                        "NXL2007",
+                        "the Rust backend does not support the standard library yet; run it with `nxl run` (VM) or the JavaScript backend",
+                        *span,
+                    ));
+                }
                 let call = if callee_name == "print" {
                     // Matches the VM: every argument rendered, space-separated.
                     let rendered: Vec<String> = args
