@@ -1627,6 +1627,69 @@ pub struct Advisory {
     pub description: String,
 }
 
+/// Load the local advisory set for a registry directory.
+///
+/// Reads `<registry>/advisories.json`, the registry's local vulnerability
+/// database. The document is either a top-level array of advisory objects or
+/// an object with an `"advisories"` array. Each entry needs `package` and
+/// `affected` (a version requirement); `severity` is one of
+/// low/medium/high/critical (default medium) and `description` is free text.
+/// A missing, unreadable, malformed or partially invalid file yields the
+/// entries that do parse (or none) rather than an error, so auditing an
+/// unconfigured registry still works.
+pub fn load_advisories(registry_dir: &Path) -> Vec<Advisory> {
+    let path = registry_dir.join("advisories.json");
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let entries = match document {
+        serde_json::Value::Array(items) => items,
+        serde_json::Value::Object(map) => map
+            .get("advisories")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    let mut advisories = Vec::new();
+    for entry in entries {
+        let Some(package) = entry.get("package").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(affected) = entry.get("affected").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Ok(affected_req) = VersionReq::parse(affected) else {
+            continue;
+        };
+        let severity = match entry
+            .get("severity")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("low") => AuditSeverity::Low,
+            Some("high") => AuditSeverity::High,
+            Some("critical") => AuditSeverity::Critical,
+            _ => AuditSeverity::Medium,
+        };
+        advisories.push(Advisory {
+            package: package.to_owned(),
+            affected_req,
+            severity,
+            description: entry
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        });
+    }
+    advisories
+}
+
 // ── Workspace ─────────────────────────────────────────────────────────────────
 
 /// A workspace groups multiple NXL packages under one root.

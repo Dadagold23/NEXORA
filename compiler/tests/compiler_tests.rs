@@ -2773,13 +2773,13 @@ mod cli_tests {
 #[cfg(test)]
 mod pkg_tests {
     use nxl_compiler::cli::{
-        cmd_pkg_add, cmd_pkg_audit, cmd_pkg_install, cmd_pkg_publish, cmd_pkg_remove, cmd_pkg_tree,
-        parse_args, AddRequest, Command,
+        cmd_pkg_add, cmd_pkg_audit, cmd_pkg_audit_with_advisories, cmd_pkg_install,
+        cmd_pkg_publish, cmd_pkg_remove, cmd_pkg_tree, parse_args, AddRequest, Command,
     };
     use nxl_compiler::pkg::{
-        audit, checksum, Advisory, AuditSeverity, DepSource, DependencyGraph, DependencyResolver,
-        LockFile, LockedPackage, Manifest, ManifestDep, PackageCache, PackageManager, Registry,
-        Version, VersionReq, WorkspaceConfig,
+        audit, checksum, load_advisories, Advisory, AuditSeverity, DepSource, DependencyGraph,
+        DependencyResolver, LockFile, LockedPackage, Manifest, ManifestDep, PackageCache,
+        PackageManager, Registry, Version, VersionReq, WorkspaceConfig,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -3335,6 +3335,104 @@ mod pkg_tests {
         }];
         let findings = audit(&lock, &advisories);
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn load_advisories_reads_the_local_database() {
+        // Object form with an `advisories` array, covering each severity and a
+        // missing description.
+        let dir = tmp_dir("advisories_object");
+        fs::write(
+            dir.join("advisories.json"),
+            r#"{
+                "advisories": [
+                    {"package": "a", "affected": "^1.0.0", "severity": "high", "description": "RCE"},
+                    {"package": "b", "affected": "1.2.3", "severity": "critical"},
+                    {"package": "c", "affected": ">=0.1.0", "severity": "low", "description": "x"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let advisories = load_advisories(&dir);
+        assert_eq!(advisories.len(), 3);
+        assert_eq!(advisories[0].severity, AuditSeverity::High);
+        assert_eq!(advisories[0].description, "RCE");
+        assert_eq!(advisories[1].severity, AuditSeverity::Critical);
+        assert_eq!(advisories[1].description, "");
+        assert_eq!(advisories[2].severity, AuditSeverity::Low);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_advisories_accepts_a_top_level_array() {
+        let dir = tmp_dir("advisories_array");
+        fs::write(
+            dir.join("advisories.json"),
+            r#"[{"package": "a", "affected": "^1.0.0", "severity": "medium"}]"#,
+        )
+        .unwrap();
+        let advisories = load_advisories(&dir);
+        assert_eq!(advisories.len(), 1);
+        assert_eq!(advisories[0].severity, AuditSeverity::Medium);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_advisories_tolerates_missing_and_malformed_files() {
+        // No file at all.
+        let dir = tmp_dir("advisories_missing");
+        assert!(load_advisories(&dir).is_empty());
+
+        // Malformed JSON.
+        fs::write(dir.join("advisories.json"), "{ not json").unwrap();
+        assert!(load_advisories(&dir).is_empty());
+
+        // Entries missing required fields or with an invalid requirement are
+        // skipped, not fatal.
+        fs::write(
+            dir.join("advisories.json"),
+            r#"[{"affected": "^1.0.0"}, {"package": "b"}, {"package": "c", "affected": "not-a-req"}]"#,
+        )
+        .unwrap();
+        assert!(load_advisories(&dir).is_empty());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn cli_audit_reports_findings_from_the_advisory_set() {
+        // The CLI previously always passed an empty advisory list, so it could
+        // never report a vulnerability even when one was known.
+        let dir = tmp_dir("cli_audit_findings");
+        fs::write(
+            dir.join("nxl.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let mut lock = LockFile::new();
+        lock.packages.push(LockedPackage {
+            name: "vuln-pkg".into(),
+            version: Version::new(1, 2, 0),
+            checksum: "x".into(),
+            source: DepSource::Registry,
+            dependencies: Vec::new(),
+        });
+        lock.save(&dir).unwrap();
+
+        let advisories = vec![Advisory {
+            package: "vuln-pkg".into(),
+            affected_req: VersionReq::parse("^1.0.0").unwrap(),
+            severity: AuditSeverity::High,
+            description: "Remote code execution".into(),
+        }];
+        let report = cmd_pkg_audit_with_advisories(&dir, &advisories).unwrap();
+        assert!(report.contains("1 vulnerabilities found"), "{report}");
+        assert!(report.contains("high vuln-pkg v1.2.0"), "{report}");
+        assert!(report.contains("Remote code execution"), "{report}");
+
+        // An empty set reports clean.
+        let clean = cmd_pkg_audit_with_advisories(&dir, &[]).unwrap();
+        assert!(clean.contains("0 vulnerabilities found"), "{clean}");
+        fs::remove_dir_all(&dir).ok();
     }
 
     // ── Workspace ─────────────────────────────────────────────────────────────

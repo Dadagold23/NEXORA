@@ -2055,14 +2055,31 @@ pub fn cmd_pkg_update(dir: &Path) -> CliResult<String> {
     ))
 }
 
+/// Audit the lock file against the registry's local advisory set
+/// (`<registry>/advisories.json`; see `pkg::load_advisories`).
 pub fn cmd_pkg_audit(dir: &Path) -> CliResult<String> {
+    let advisories = crate::pkg::load_advisories(&default_registry_dir());
+    cmd_pkg_audit_with_advisories(dir, &advisories)
+}
+
+/// Audit the lock file against an explicit advisory set and render the result.
+pub fn cmd_pkg_audit_with_advisories(
+    dir: &Path,
+    advisories: &[crate::pkg::Advisory],
+) -> CliResult<String> {
     let lock = crate::pkg::LockFile::load(dir).map_err(CliError::from)?;
-    let findings = crate::pkg::audit(&lock, &[]);
+    let findings = crate::pkg::audit(&lock, advisories);
     if findings.is_empty() {
-        Ok("0 vulnerabilities found".to_owned())
-    } else {
-        Ok(format!("{} vulnerabilities found", findings.len()))
+        return Ok("0 vulnerabilities found".to_owned());
     }
+    let mut out = format!("{} vulnerabilities found\n", findings.len());
+    for finding in &findings {
+        out.push_str(&format!(
+            "  {} {} v{}: {}\n",
+            finding.severity, finding.package, finding.version, finding.description
+        ));
+    }
+    Ok(out)
 }
 
 pub fn cmd_pkg_tree(dir: &Path) -> CliResult<String> {

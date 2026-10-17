@@ -25,6 +25,7 @@ a directory:
 
 ```text
 <registry>/index.json                       # name, version, description, checksum
+<registry>/advisories.json                  # local advisory set (see `nxl pkg audit`)
 <registry>/<name>/<version>/package.json    # manifest and metadata
 <registry>/<name>/<version>/src/*.nxl      # the sources
 <registry>/<name>/<version>/checksums.sha256
@@ -94,6 +95,10 @@ an integrity hash; it was replaced (verified against the FIPS 180-4 vectors).
 - Git dependencies are recorded but their source is a placeholder: nothing is
   cloned or fetched.
 - `nxl audit` matches a local advisory set only; there is no advisory feed.
+  The set is read from `<registry>/advisories.json` (a top-level array, or an
+  object with an `advisories` array); each entry needs `package` and `affected`
+  (a version requirement) and may carry `severity` (low/medium/high/critical)
+  and `description`. With no such file the audit reports nothing.
 - Registry installs copy the sources into the cache; there is no verification
   that a cached package still matches the checksum it was installed with.
 - No workspaces are materialised yet (`[workspace]` is parsed by
