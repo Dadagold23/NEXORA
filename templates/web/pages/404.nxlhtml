@@ -1,0 +1,17 @@
+<h1 class="page-title">404</h1>
+<p class="lede">
+  There is no page at this address.
+</p>
+
+<section class="panel">
+  <p>
+    This page is what the server returns for any path it does not recognise, and
+    it is returned with a real <code>404</code> status — not a styled
+    <code>200</code>, which would be worse for everyone, search engines included.
+  </p>
+  <ul class="list">
+    <li><a href="/">Home</a></li>
+    <li><a href="/about">About</a></li>
+    <li><a href="/contact">Contact</a></li>
+  </ul>
+</section>

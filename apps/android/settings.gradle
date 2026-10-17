@@ -1,0 +1,19 @@
+// Gradle 9.1.0 is required: Gradle 8.x does not support the JDK 25 that is the
+// only one installed here. Both this and AGP 9.1.0 are already in the Gradle
+// cache, so a first build needs no downloads.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "NEXORA"
+include ":app"

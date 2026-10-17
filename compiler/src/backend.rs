@@ -219,6 +219,19 @@ impl<'m> JsBackend<'m> {
             "function print(...args) {{ console.log(args.map(__nxl_show).join(\" \")); }}\n"
         )
         .unwrap();
+        // escape_html / strip_tags, matching the VM exactly. Template output
+        // goes through escape_html, so the escaping must be identical in every
+        // backend or a page would differ depending on how it was run.
+        writeln!(
+            self.out,
+            "function escape_html(text) {{ return String(text).replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\").replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\").replace(/'/g, \"&#39;\"); }}\n"
+        )
+        .unwrap();
+        writeln!(
+            self.out,
+            "function strip_tags(text) {{ return String(text).replace(/<[^>]*>/g, \"\"); }}\n"
+        )
+        .unwrap();
         // Runtime type names for annotated catch dispatch (phase 1 errors).
         writeln!(
             self.out,
@@ -1401,7 +1414,7 @@ impl<'m> RustBackend<'m> {
         // keeps the default handler from printing caught exceptions.
         writeln!(
             self.out,
-            "#[derive(Debug, Clone)]\npub struct NxlError(pub String);\n\nfn __nxl_throw(message: String) -> ! {{\n    std::panic::panic_any(NxlError(message));\n}}\n\nfn __nxl_message(payload: Box<dyn std::any::Any + Send>) -> String {{\n    match payload.downcast::<NxlError>() {{\n        Ok(error) => error.0.clone(),\n        Err(other) => if let Some(message) = other.downcast_ref::<String>() {{\n            message.clone()\n        }} else if let Some(message) = other.downcast_ref::<&str>() {{\n            message.to_string()\n        }} else {{\n            \"non-error panic\".to_owned()\n        }},\n    }}\n}}\n\nfn __nxl_install_hook() {{\n    let previous = std::panic::take_hook();\n    std::panic::set_hook(Box::new(move |info| {{\n        if info.payload().downcast_ref::<NxlError>().is_some() {{ return; }}\n        previous(info);\n    }}));\n}}\n\nfn print(args: &[String]) {{\n    println!(\"{{}}\", args.join(\" \"));\n}}\n"
+            "#[derive(Debug, Clone)]\npub struct NxlError(pub String);\n\nfn __nxl_throw(message: String) -> ! {{\n    std::panic::panic_any(NxlError(message));\n}}\n\nfn __nxl_message(payload: Box<dyn std::any::Any + Send>) -> String {{\n    match payload.downcast::<NxlError>() {{\n        Ok(error) => error.0.clone(),\n        Err(other) => if let Some(message) = other.downcast_ref::<String>() {{\n            message.clone()\n        }} else if let Some(message) = other.downcast_ref::<&str>() {{\n            message.to_string()\n        }} else {{\n            \"non-error panic\".to_owned()\n        }},\n    }}\n}}\n\nfn __nxl_install_hook() {{\n    let previous = std::panic::take_hook();\n    std::panic::set_hook(Box::new(move |info| {{\n        if info.payload().downcast_ref::<NxlError>().is_some() {{ return; }}\n        previous(info);\n    }}));\n}}\n\nfn print(args: &[String]) {{\n    println!(\"{{}}\", args.join(\" \"));\n}}\n\nfn escape_html(text: impl AsRef<str>) -> String {{\n    let text = text.as_ref();\n    text.replace('&', \"&amp;\").replace('<', \"&lt;\").replace('>', \"&gt;\").replace('\"', \"&quot;\").replace('\\'', \"&#39;\")\n}}\n\nfn strip_tags(text: impl AsRef<str>) -> String {{\n    let text = text.as_ref();\n    let mut out = String::new();\n    let mut inside = false;\n    for c in text.chars() {{\n        match c {{\n            '<' => inside = true,\n            '>' if inside => inside = false,\n            other if !inside => out.push(other),\n            _ => {{}}\n        }}\n    }}\n    out\n}}\n"
         )
         .unwrap();
     }

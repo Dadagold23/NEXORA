@@ -5326,18 +5326,35 @@ impl Lowerer {
                     ));
                 };
 
-                // Check for built-in print function
-                if name == "print" {
+                // Check for built-in functions the runtime provides directly.
+                if let Some(fixed_arity) = builtin_arity(name) {
+                    if let Some(arity) = fixed_arity {
+                        if arguments.len() != arity {
+                            return Err(Diagnostic::error(
+                                "NXL2002",
+                                format!(
+                                    "built-in '{name}' expects {arity} argument(s), got {}",
+                                    arguments.len()
+                                ),
+                                expression.span,
+                            ));
+                        }
+                    }
                     let mut lowered_arguments = Vec::with_capacity(arguments.len());
                     for argument in arguments {
                         lowered_arguments.push(self.expression(argument)?);
                     }
+                    let return_type = if name == "print" {
+                        Type::Void
+                    } else {
+                        Type::String
+                    };
                     let result = self.allocate();
                     let instruction = Instruction::Call {
                         result,
                         callee: name.clone(),
                         arguments: lowered_arguments,
-                        return_type: Type::Void,
+                        return_type,
                         span: expression.span,
                     };
                     self.record_value_type(&instruction);
@@ -5737,5 +5754,18 @@ impl std::fmt::Display for Module {
             writeln!(formatter, "  }}")?;
         }
         Ok(())
+    }
+}
+
+/// Functions the runtime provides without a declaration in the program.
+///
+/// `None` means the built-in takes any number of arguments, `Some(n)` that it
+/// takes exactly `n`. These must stay in step with the runtimes: the VM's
+/// `call_function`, and the prelude each backend emits.
+fn builtin_arity(name: &str) -> Option<Option<usize>> {
+    match name {
+        "print" => Some(None),
+        "escape_html" | "strip_tags" => Some(Some(1)),
+        _ => None,
     }
 }

@@ -1,0 +1,19 @@
+[package]
+name = "nxl-android"
+version = "0.1.1"
+edition = "2021"
+publish = false
+
+[lib]
+name = "nxl_android"
+# A C-compatible dynamic library is what an Android app loads through JNI.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

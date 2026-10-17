@@ -93,6 +93,20 @@ pub fn build(dir: &Path) -> Result<DevBundle, Diagnostic> {
 /// `None` means the project has no NXL page; the caller then looks for
 /// `public/index.html` and finally for its own generated host page.
 pub fn render_page(dir: &Path) -> Option<Result<String, String>> {
+    // A `.nxlhtml` template wins over `index.nxl`: asking for one is a
+    // deliberate choice, and mixing a template with a plain page would leave
+    // two competing definitions of the same route.
+    let template = dir.join("public").join("index.nxlhtml");
+    if template.is_file() {
+        let name = template.display().to_string();
+        return Some(match std::fs::read_to_string(&template) {
+            Ok(text) => match crate::html::render(&text, &name) {
+                Ok(page) => Ok(page),
+                Err(error) => Err(error.to_string()),
+            },
+            Err(error) => Err(format!("could not read index.nxlhtml: {error}")),
+        });
+    }
     let page = dir.join("public").join("index.nxl");
     if !page.is_file() {
         return None;
@@ -270,4 +284,78 @@ fn collect_sources(dir: &Path, files: &mut Vec<(PathBuf, String)>) {
 /// Poll interval used when watching.
 pub fn poll_interval(config: &DevConfig) -> Duration {
     Duration::from_secs(config.poll_interval.max(1))
+}
+
+#[cfg(test)]
+mod devserver_tests {
+    use super::*;
+    use std::fs;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nxl_html_dev_{name}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("public")).expect("should create the scratch project");
+        dir
+    }
+
+    #[test]
+    fn a_template_page_is_rendered_by_the_dev_server() {
+        let dir = scratch("template");
+        fs::write(
+            dir.join("public").join("index.nxlhtml"),
+            "<h1>Welcome</h1>\n<nxl>\nlet items = [\"one\", \"two\"];\nfor item in items {\n    print(\"<li>\" + escape_html(item) + \"</li>\");\n}\n</nxl>\n<p><nxl expr='\"v\" + \"0.1.1\"' /></p>",
+        )
+        .expect("should write the template");
+        let rendered = render_page(&dir).expect("a page should be found");
+        let page = rendered.expect("the template should render");
+        // Each printed piece is its own line, exactly as a plain `index.nxl`
+        // page already renders. Pinning the whole string documents that.
+        assert_eq!(
+            page,
+            "<h1>Welcome</h1>\n\n<li>one</li>\n<li>two</li>\n\n<p>\nv0.1.1\n</p>"
+        );
+    }
+
+    #[test]
+    fn template_values_cannot_inject_markup_through_the_dev_server() {
+        let dir = scratch("injection");
+        fs::write(
+            dir.join("public").join("index.nxlhtml"),
+            "<div><nxl expr='\"<b>bold</b>\"' /></div>",
+        )
+        .expect("should write the template");
+        let page = render_page(&dir)
+            .expect("a page should be found")
+            .expect("should render");
+        assert!(!page.contains("<b>"), "markup leaked through: {page}");
+        assert!(page.contains("&lt;b&gt;"), "{page}");
+    }
+
+    #[test]
+    fn a_broken_template_reports_why() {
+        let dir = scratch("broken");
+        fs::write(
+            dir.join("public").join("index.nxlhtml"),
+            "<nxl>let = ;</nxl>",
+        )
+        .expect("should write the template");
+        let message = render_page(&dir)
+            .expect("a page should be found")
+            .expect_err("a broken template must not render");
+        assert!(!message.is_empty());
+    }
+
+    #[test]
+    fn a_plain_nxl_page_still_works() {
+        let dir = scratch("plain");
+        fs::write(
+            dir.join("public").join("index.nxl"),
+            "print(\"<h1>plain</h1>\");",
+        )
+        .expect("should write the page");
+        let page = render_page(&dir)
+            .expect("a page should be found")
+            .expect("should render");
+        assert!(page.contains("<h1>plain</h1>"), "{page}");
+    }
 }

@@ -5,7 +5,9 @@
 - Unit/integration: `compiler/tests/*_tests.rs` (355+ passing)
 - Compiler acceptance: `compiler/tests/compiler_tests.rs` (266)
 - Frontend regression: `language_frontend_tests.rs` (13)
-- Subsystem suites: `ndb_tests` (11), `nuf_tests` (8), `nui_tests` (7), `nls_tests` (8), `ffi_tests` (6), `security_tests` (11), `platforms_tests` (5), `debugger_tests` (6), `ide_tests` (6), `fuzz_tests` (8), `perf_tests` (2)
+- Subsystem suites: `ndb_tests` (11), `nuf_tests` (8), `nui_tests` (7), `nls_tests` (8), `ffi_tests` (6), `security_tests` (11), `platforms_tests` (5), `debugger_tests` (6), `ide_tests` (6), `fuzz_tests` (8), `perf_tests` (2), `backend_wiring_tests` (13), `web_tests` (17)
+- `backend_wiring_tests` covers the CLI-to-subsystem seams: `serve` answering over a real socket, and every `db:*` command against a real SQLite file.
+- `web_tests` covers the `[[route]]` manifest and the pages it serves: layout wrapping, path parameters, form validation, the 404 page and escaping, again over a real socket.
 
 ## Fuzzing (P23)
 

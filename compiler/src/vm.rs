@@ -2065,6 +2065,34 @@ impl Vm {
             return Ok((Value::Unit, Value::Unit));
         }
 
+        // Built-in: escape_html. Any value is rendered the way the runtimes
+        // render it and then HTML-escaped, so building markup in NXL has a
+        // primitive that cannot emit a live tag by accident.
+        if name == "escape_html" {
+            let Some(argument) = args.first() else {
+                return Err(VmFault::Throw(Value::String(
+                    "escape_html expects 1 argument".to_owned(),
+                )));
+            };
+            return Ok((
+                Value::String(crate::html::escape_html(&argument.to_string())),
+                Value::Unit,
+            ));
+        }
+
+        // Built-in: strip_tags, the text-only counterpart.
+        if name == "strip_tags" {
+            let Some(argument) = args.first() else {
+                return Err(VmFault::Throw(Value::String(
+                    "strip_tags expects 1 argument".to_owned(),
+                )));
+            };
+            return Ok((
+                Value::String(crate::html::strip_tags(&argument.to_string())),
+                Value::Unit,
+            ));
+        }
+
         let chunk = self
             .program
             .chunk_by_name(name)

@@ -84,10 +84,13 @@ async fn asset(State(state): State<DevState>, uri: axum::http::Uri) -> Response 
         return not_found();
     }
     // Compiler source is not a web asset. `public/index.nxl` is a program the
-    // server renders for `/`; handing its text to the browser would show the
-    // page's source instead of the page, which looks like a broken site rather
-    // than a wrong URL.
-    if file.extension().and_then(|extension| extension.to_str()) == Some("nxl") {
+    // server renders for `/`, and `public/index.nxlhtml` is a template it
+    // renders the same way; handing either one's text to the browser would show
+    // the page's source instead of the page, which looks like a broken site
+    // rather than a wrong URL. Any other `.nxl*` file is withheld for the same
+    // reason.
+    let extension = file.extension().and_then(|extension| extension.to_str());
+    if extension == Some("nxl") || extension.is_some_and(|value| value.starts_with("nxl")) {
         return not_found();
     }
     let Ok(bytes) = std::fs::read(&file) else {

@@ -1,0 +1,13 @@
+# Rust build output. compiler/.gitignore covers compiler/target as well; this
+# catches the Android bridge crate and anything else added later.
+target/
+
+# Gradle and Android build output.
+.gradle/
+build/
+apps/android/local.properties
+
+# Editors.
+.idea/
+*.iml
+.vscode/

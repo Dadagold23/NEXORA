@@ -494,7 +494,7 @@ async fn main() -> ExitCode {
             println!("{}", cmd_platforms());
             ExitCode::SUCCESS
         }
-        Command::Serve => match cmd_serve(&cwd) {
+        Command::Serve => match cmd_serve(&cwd).await {
             Ok(msg) => {
                 if !msg.is_empty() {
                     println!("{msg}");

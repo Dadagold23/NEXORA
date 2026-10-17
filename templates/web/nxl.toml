@@ -6,4 +6,49 @@ description = "A NXL web application"
 entry = "src/main.nxl"
 target = "js"
 
+[web]
+host = "127.0.0.1"
+port = 8080
+# Every page is wrapped in this layout. Remove the line to serve bare pages.
+layout = "main.nxlhtml"
+# Served, with a real 404 status, for any path that matches no route.
+not_found = "404.nxlhtml"
+
+# The routes this project serves. `nexora serve` builds a real HTTP server from
+# these; there is no convention that invents routes behind your back.
+
+[[route]]
+method = "GET"
+path = "/"
+page = "home.nxlhtml"
+
+[[route]]
+method = "GET"
+path = "/about"
+page = "about.nxlhtml"
+
+[[route]]
+# `:id` becomes a variable named `id` in the page.
+method = "GET"
+path = "/posts/:id"
+page = "post.nxlhtml"
+
+[[route]]
+method = "GET"
+path = "/contact"
+page = "contact.nxlhtml"
+
+[[route]]
+# Fields listed here must be present. A submission missing one comes back as
+# 422 with the page redrawn and `error` set.
+method = "POST"
+path = "/contact"
+page = "contact.nxlhtml"
+validate = ["name", "email", "message"]
+
+[[route]]
+method = "GET"
+path = "/search"
+page = "search.nxlhtml"
+
 [dependencies]

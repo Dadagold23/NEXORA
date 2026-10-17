@@ -1,0 +1,30 @@
+<h1 class="page-title">Post <nxl expr="id" /></h1>
+<p class="lede">
+  The <code>:id</code> in the route path is bound as <code>id</code> before this
+  page runs, so it is used without any plumbing.
+</p>
+
+<section class="panel">
+  <h2>The values that were bound</h2>
+  <p>Path parameter <code>id</code>: <code><nxl expr="id" /></code></p>
+  <p>Query string <code>q</code>: <code><nxl expr='q' /></code></p>
+  <p>Request path <code>path</code>: <code><nxl expr='path' /></code></p>
+  <p>Method <code>method</code>: <code><nxl expr='method' /></code></p>
+</section>
+
+<section class="panel">
+  <h2>Try another</h2>
+  <ul class="list">
+    <li><a href="/posts/42">/posts/42</a></li>
+    <li><a href="/posts/hello-world">/posts/hello-world</a></li>
+    <li><a href="/posts/7?q=from+the+query+string">/posts/7?q=from...</a></li>
+  </ul>
+</section>
+
+<section class="panel">
+  <h2>Escaping a path parameter</h2>
+  <p>
+    A path segment arrives raw and is escaped when printed, so a segment
+    containing a tag is shown as text instead of becoming one.
+  </p>
+</section>

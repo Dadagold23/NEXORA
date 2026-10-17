@@ -1,0 +1,32 @@
+<h1 class="page-title">About</h1>
+<p class="lede">
+  A plain page with no bindings. It exists to show that a route can render a
+  page that needs nothing from the request.
+</p>
+
+<section class="panel">
+  <h2>What this starter is</h2>
+  <p>
+    Pages are NXL templates. Statements run where you put them, and values are
+    escaped when they are printed. The whole page compiles and runs on the
+    server for each request.
+  </p>
+  <p>
+    It is not a framework. There is no client-side bundler, no component model
+    and no virtual DOM — the browser receives finished HTML.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Where things live</h2>
+  <dl class="defs">
+    <dt><code>pages/</code></dt>
+    <dd>One file per route, named by the <code>page</code> key in <code>nxl.toml</code>.</dd>
+    <dt><code>layouts/</code></dt>
+    <dd>Wrapped around every page. <code>&lt;nxl raw="content" /&gt;</code> is where the page goes.</dd>
+    <dt><code>public/</code></dt>
+    <dd>Static assets, served as-is.</dd>
+    <dt><code>src/</code></dt>
+    <dd>The NXL program that <code>nexora dev</code> compiles for the browser.</dd>
+  </dl>
+</section>

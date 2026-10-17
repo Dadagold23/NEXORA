@@ -971,7 +971,7 @@ fn template_files(template: &str) -> Option<Vec<(String, String)>> {
 /// `include_str!` also keeps the embedded copy and `templates/web/` from
 /// drifting: the build fails if a file is missing, and a test compares the
 /// generated tree against the files on disk.
-pub const WEB_TEMPLATE: [(&str, &str); 12] = [
+pub const WEB_TEMPLATE: [(&str, &str); 19] = [
     ("nxl.toml", include_str!("../../templates/web/nxl.toml")),
     ("README.md", include_str!("../../templates/web/README.md")),
     (".gitignore", include_str!("../../templates/web/.gitignore")),
@@ -994,6 +994,34 @@ pub const WEB_TEMPLATE: [(&str, &str); 12] = [
     (
         "public/index.nxl",
         include_str!("../../templates/web/public/index.nxl"),
+    ),
+    (
+        "layouts/main.nxlhtml",
+        include_str!("../../templates/web/layouts/main.nxlhtml"),
+    ),
+    (
+        "pages/home.nxlhtml",
+        include_str!("../../templates/web/pages/home.nxlhtml"),
+    ),
+    (
+        "pages/about.nxlhtml",
+        include_str!("../../templates/web/pages/about.nxlhtml"),
+    ),
+    (
+        "pages/post.nxlhtml",
+        include_str!("../../templates/web/pages/post.nxlhtml"),
+    ),
+    (
+        "pages/contact.nxlhtml",
+        include_str!("../../templates/web/pages/contact.nxlhtml"),
+    ),
+    (
+        "pages/search.nxlhtml",
+        include_str!("../../templates/web/pages/search.nxlhtml"),
+    ),
+    (
+        "pages/404.nxlhtml",
+        include_str!("../../templates/web/pages/404.nxlhtml"),
     ),
     (
         "public/styles.css",
@@ -1435,16 +1463,127 @@ pub fn cmd_lsp() -> CliResult<()> {
     crate::nls::serve_stdio().map_err(|e| err("NXL12004", e.to_string()))
 }
 
-pub fn cmd_serve(_dir: &Path) -> CliResult<String> {
-    // Say plainly that this is a stub. The old message ended with "run `nxl
-    // serve` to listen" after someone had just run serve, which reads as if the
-    // tool were telling them to repeat the command they had already typed.
-    Ok(
-        "NUF is a specification, not a server: nothing is listening. \
-        `nexora dev` is the web development server and it is real; it serves a \
-        project and live-reloads. See docs/repl-and-dev.md."
-            .to_owned(),
-    )
+/// Build the NUF demonstration application that `serve` runs.
+///
+/// This is the server `docs/07-nuf.md` describes: a real axum server built from
+/// `App`, exposing its routes and an OpenAPI document. It is deliberately not
+/// the development server — `dev` is that, and it live-reloads a project page.
+///
+/// Handlers here are Rust closures, because NXL has no HTTP types yet. That gap
+/// is stated rather than papered over: there is no NXL `route` block, and none
+/// is faked.
+/// Build the application `serve` runs for a project.
+///
+/// A project that declares `[[route]]` entries is served those. A project that
+/// declares none gets the NUF demonstration routes, so `serve` always has
+/// something real to answer with.
+pub fn nuf_demo_app(dir: &Path) -> crate::nuf::App {
+    match crate::web::Site::load(dir) {
+        Ok(Some(site)) => crate::web::build_app(std::sync::Arc::new(crate::web::SiteContext::new(
+            dir.to_path_buf(),
+            site,
+        ))),
+        Ok(None) => nuf_fallback_app(dir),
+        Err(error) => {
+            eprintln!("nxl.toml: {error}");
+            nuf_fallback_app(dir)
+        }
+    }
+}
+
+fn nuf_fallback_app(dir: &Path) -> crate::nuf::App {
+    use crate::nuf::{json_response, App};
+    use axum::extract::State;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    let name = crate::cli::ProjectConfig::load(dir)
+        .map(|config| config.name.clone())
+        .unwrap_or_else(|_| "nxl".to_owned());
+    let version = env!("CARGO_PKG_VERSION").to_owned();
+    let project = dir.to_path_buf();
+
+    let mut app = App::new();
+    app.describe("get", "/api/health", "Liveness probe", false);
+    let health_version = version.clone();
+    app.get(
+        "/api/health",
+        move |State(_): State<Arc<crate::nuf::AppState>>| {
+            let version = health_version.clone();
+            async move { json_response(&json!({ "status": "ok", "version": version })) }
+        },
+    );
+
+    // Prove the project on disk is visible to the server, so this is more than
+    // a canned response.
+    app.describe("get", "/api/project", "Describe the served project", false);
+    let project_name = name.clone();
+    app.get("/api/project", move |State(_)| {
+        let name = project_name.clone();
+        let project = project.clone();
+        async move {
+            let root = project
+                .join("public")
+                .read_dir()
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .filter_map(|entry| entry.file_name().into_string().ok())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            json_response(
+                &json!({ "name": name, "root": project.display().to_string(), "public": root }),
+            )
+        }
+    });
+
+    // The route is registered before the document is generated so that
+    // `/openapi.json` appears in its own description; the handler reads the
+    // finished document lazily, when a request arrives.
+    let slot = std::sync::Arc::new(std::sync::OnceLock::<String>::new());
+    app.describe("get", "/openapi.json", "OpenAPI 3.0 description", false);
+    {
+        let slot = slot.clone();
+        app.get("/openapi.json", move |State(_)| {
+            let slot = slot.clone();
+            async move {
+                let document = slot.get().cloned().unwrap_or_default();
+                crate::nuf::json_response(&serde_json::from_str(&document).unwrap_or_default())
+            }
+        });
+    }
+    let _ = slot.set(app.openapi_json(&name, &version));
+
+    app
+}
+
+/// Start the NUF demonstration server. Blocks until the process is stopped.
+///
+/// Async because the CLI already runs on a tokio runtime; calling the blocking
+/// `App::serve` from here would try to nest one runtime inside another.
+pub async fn cmd_serve(dir: &Path) -> CliResult<String> {
+    use crate::nuf::WebConfig;
+
+    let config = WebConfig::load(dir);
+    let app = nuf_demo_app(dir);
+
+    // Announce the address before blocking, so the server is not silent while
+    // it waits. `serve` returns only if binding fails or the process stops.
+    println!(
+        "NUF server listening on http://{}:{}",
+        config.host, config.port
+    );
+    for operation in app.operations() {
+        println!("  {} {}", operation.method.to_uppercase(), operation.path);
+    }
+    println!("  GET /openapi.json");
+    println!("  press Ctrl+C to stop");
+
+    app.serve_async(&config)
+        .await
+        .map_err(|e| err("NXL12004", e.to_string()))?;
+    Ok(String::new())
 }
 
 // ── Package manager commands ──────────────────────────────────────────────────
@@ -1949,48 +2088,133 @@ fn registry_packages(registry_dir: &Path) -> Vec<String> {
 
 // ── NDB commands (P14) ────────────────────────────────────────────────────────
 
-fn db_stub(action: &str, _dir: &Path) -> CliResult<String> {
-    Ok(format!("db:{action} ok"))
-}
-
-pub fn cmd_db_create(dir: &Path) -> CliResult<String> {
-    db_stub("create", dir)
-}
-
-pub fn cmd_db_drop(dir: &Path) -> CliResult<String> {
-    db_stub("drop", dir)
-}
-
-pub fn cmd_db_migrate(dir: &Path) -> CliResult<String> {
-    db_stub("migrate", dir)
-}
-
-pub fn cmd_db_rollback(dir: &Path) -> CliResult<String> {
-    db_stub("rollback", dir)
-}
-
-pub fn cmd_db_refresh(dir: &Path) -> CliResult<String> {
-    db_stub("refresh", dir)
-}
-
-pub fn cmd_db_fresh(dir: &Path, seed: bool) -> CliResult<String> {
-    if seed {
-        db_stub("fresh --seed", dir)
-    } else {
-        db_stub("fresh", dir)
+/// Carry an `NdbError` into the CLI, keeping the NDB code it already carries.
+///
+/// The database layer prefixes its messages with `error[NDB…]:`, so the code is
+/// stripped back out here rather than double-reported by `CliError`'s Display.
+fn db_err(error: crate::ndb::NdbError) -> CliError {
+    let text = error.to_string();
+    match text.split_once(']') {
+        Some((prefix, rest)) if prefix.starts_with("error[NDB") => {
+            let code = prefix.trim_start_matches("error[").to_owned();
+            CliError::new(code, rest.trim_start_matches(": ").trim().to_owned())
+        }
+        _ => CliError::new("NDB14000", text),
     }
 }
 
+/// Report a list of migration names, saying plainly when nothing ran.
+///
+/// `done` is the past tense used in the summary and `verb` the one used when
+/// there is nothing to do, so the message reads as English either way.
+fn report_applied(done: &str, verb: &str, ran: Vec<String>) -> CliResult<String> {
+    if ran.is_empty() {
+        return Ok(format!("nothing to {verb}"));
+    }
+    let mut out = vec![format!("{done} {} migration(s):", ran.len())];
+    out.extend(ran.into_iter().map(|name| format!("  {name}")));
+    Ok(out.join("\n"))
+}
+
+pub fn cmd_db_create(dir: &Path) -> CliResult<String> {
+    crate::ndb::db_create(dir).map_err(db_err)
+}
+
+pub fn cmd_db_drop(dir: &Path) -> CliResult<String> {
+    crate::ndb::db_drop(dir).map_err(db_err)
+}
+
+pub fn cmd_db_migrate(dir: &Path) -> CliResult<String> {
+    report_applied(
+        "migrated",
+        "migrate",
+        crate::ndb::migrate(dir).map_err(db_err)?,
+    )
+}
+
+pub fn cmd_db_rollback(dir: &Path) -> CliResult<String> {
+    report_applied(
+        "rolled back",
+        "roll back",
+        crate::ndb::rollback(dir).map_err(db_err)?,
+    )
+}
+
+pub fn cmd_db_refresh(dir: &Path) -> CliResult<String> {
+    let (rolled, ran) = crate::ndb::refresh(dir).map_err(db_err)?;
+    let mut out = Vec::new();
+    out.push(if rolled.is_empty() {
+        "refresh: nothing to roll back".to_owned()
+    } else {
+        format!("refresh: rolled back {}", rolled.join(", "))
+    });
+    out.push(if ran.is_empty() {
+        "refresh: nothing to migrate".to_owned()
+    } else {
+        format!("refresh: migrated {}", ran.join(", "))
+    });
+    Ok(out.join("\n"))
+}
+
+pub fn cmd_db_fresh(dir: &Path, seed: bool) -> CliResult<String> {
+    let ran = crate::ndb::fresh(dir, seed).map_err(db_err)?;
+    let mut out = vec![format!(
+        "fresh: dropped and recreated the database ({} migration(s))",
+        ran.len()
+    )];
+    for name in ran {
+        out.push(format!("  {name}"));
+    }
+    if seed {
+        out.push(format!(
+            "seeded: {}",
+            crate::ndb::run_seeders(dir).map_err(db_err)?.len()
+        ));
+    }
+    Ok(out.join("\n"))
+}
+
 pub fn cmd_db_seed(dir: &Path) -> CliResult<String> {
-    db_stub("seed", dir)
+    let ran = crate::ndb::run_seeders(dir).map_err(db_err)?;
+    if ran.is_empty() {
+        return Ok("nothing to seed".to_owned());
+    }
+    let mut out = vec![format!("seeded {} seeder(s):", ran.len())];
+    out.extend(ran.into_iter().map(|name| format!("  {name}")));
+    Ok(out.join("\n"))
 }
 
 pub fn cmd_db_status(dir: &Path) -> CliResult<String> {
-    db_stub("status: no pending migrations", dir)
+    let status = crate::ndb::migration_status(dir).map_err(db_err)?;
+    if status.is_empty() {
+        return Ok("no migrations found".to_owned());
+    }
+    let mut out = vec![format!("{:<40} {}", "migration", "batch")];
+    for (name, batch) in status {
+        match batch {
+            Some(batch) => out.push(format!("{name:<40} applied in batch {batch}")),
+            None => out.push(format!("{name:<40} pending")),
+        }
+    }
+    Ok(out.join("\n"))
 }
 
 pub fn cmd_db_audit(dir: &Path) -> CliResult<String> {
-    db_stub("audit: 0 events", dir)
+    let entries = crate::ndb::migration_audit(dir).map_err(db_err)?;
+    if entries.is_empty() {
+        return Ok("no migration events recorded".to_owned());
+    }
+    let mut out = vec![format!(
+        "{:<40} {:<6} {:<6} {:>8} {:<7} {}",
+        "migration", "dir", "batch", "ms", "result", ""
+    )];
+    for entry in entries {
+        out.push(format!(
+            "{:<40} {:<6} {:<6} {:>8} {:<7}",
+            entry.name, entry.direction, entry.batch, entry.duration_ms, entry.outcome
+        ));
+    }
+    Ok(out.join("\n"))
 }
 
 // ── Generators ────────────────────────────────────────────────────────────────

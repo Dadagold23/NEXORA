@@ -1,0 +1,32 @@
+// The welcome screen, written in NXL.
+//
+// This file is not decoration: MainActivity hands this exact text to the NXL
+// engine, and the engine compiles and runs it on the device. The lines it
+// prints are what appears on screen.
+//
+// Each printed line starts with a marker the activity understands:
+//
+//   #   a heading
+//   -   a bullet
+//   anything else  body text
+//
+// A blank line is a paragraph break.
+
+let features = ["Compiler", "Virtual machine", "Language server", "Templates", "Database"];
+let screens = ["Welcome", "Features", "About"];
+
+print("# Welcome to NEXORA");
+print("");
+print("Every word on this screen was produced by NXL running on this device, through the NXL interpreter itself.");
+print("");
+print("# The engine that drew it");
+for feature in features {
+    print("- " + feature);
+}
+print("");
+print("# Try the navigation");
+for screen in screens {
+    print("- " + screen);
+}
+print("");
+print("Nothing here was drawn by hand. Change this file, rebuild, and the screen changes.");

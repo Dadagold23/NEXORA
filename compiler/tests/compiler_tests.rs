@@ -3668,7 +3668,7 @@ fn commands_outside_a_project_say_so_and_say_what_to_run() {
 }
 
 #[test]
-fn serve_says_it_is_not_a_server() {
+fn serve_builds_a_real_nuf_application() {
     let dir = std::env::temp_dir().join(format!(
         "nxl_serve_{}",
         std::time::SystemTime::now()
@@ -3677,11 +3677,17 @@ fn serve_says_it_is_not_a_server() {
             .subsec_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let message = nxl_compiler::cli::cmd_serve(&dir).expect("serve answers");
-    // It used to end with "run `nxl serve` to listen", i.e. telling someone to
-    // repeat the command they had just run.
-    assert!(message.contains("not a server"), "{message}");
-    assert!(!message.contains("to listen"), "{message}");
-    assert!(message.contains("nexora dev"), "{message}");
+    std::fs::write(dir.join("nxl.toml"), "[package]\nname = \"served\"\n").unwrap();
+    // `serve` itself blocks for as long as the server runs, so this checks the
+    // application it would serve. The routes are exercised over a real socket
+    // in `backend_wiring_tests`.
+    let app = nxl_compiler::cli::nuf_demo_app(&dir);
+    let paths: Vec<&str> = app.operations().iter().map(|op| op.path.as_str()).collect();
+    assert!(paths.contains(&"/api/health"), "{paths:?}");
+    assert!(paths.contains(&"/api/project"), "{paths:?}");
+    assert!(paths.contains(&"/openapi.json"), "{paths:?}");
+    let openapi = app.openapi_json("served", "0.0.0");
+    assert!(openapi.contains("\"openapi\":\"3.0.3\""), "{openapi}");
+    assert!(openapi.contains("/api/health"), "{openapi}");
     std::fs::remove_dir_all(&dir).ok();
 }

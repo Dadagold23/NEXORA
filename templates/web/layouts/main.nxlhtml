@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><nxl expr='"Nexora app"' /></title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<!--
+  The layout wraps every page. `content` is the already-rendered page, put in
+  raw because it is markup this project wrote; values inside the page were
+  escaped when that page rendered.
+-->
+<a class="skip" href="#main">Skip to content</a>
+
+<nav class="nav" aria-label="Main">
+  <a class="brand" href="/">
+    <img src="/favicon.svg" width="28" height="28" alt="">
+    <span>NEXORA</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="/">Home</a></li>
+    <li><a href="/about">About</a></li>
+    <li><a href="/posts/1">Posts</a></li>
+    <li><a href="/contact">Contact</a></li>
+  </ul>
+</nav>
+
+<main id="main" class="main">
+<nxl raw="content" />
+</main>
+
+<footer class="footer">
+  <p>Built with NXL. Pages are <code>.nxlhtml</code> templates served by <code>nexora serve</code>.</p>
+</footer>
+</body>
+</html>

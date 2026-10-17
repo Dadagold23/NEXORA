@@ -1,0 +1,6 @@
+// The Android Gradle Plugin is the only plugin this app needs. The UI is built
+// from platform views and the JNI layer is a hand-written native method, so
+// there is no Kotlin plugin, no AndroidX and nothing else to resolve.
+plugins {
+    id "com.android.application" version "9.1.0" apply false
+}

@@ -1,0 +1,43 @@
+<h1 class="page-title">Contact</h1>
+<p class="lede">
+  A form with declared validation. <code>validate</code> on the route lists the
+  required fields; a submission missing any of them comes back as
+  <code>422</code> with the page redrawn and the message shown.
+</p>
+
+<nxl>
+if has_error == "true" {
+    print("<p class=\"alert\" role=\"alert\">");
+    print(escape_html(error));
+    print("</p>");
+}
+</nxl>
+
+<form class="form" method="post" action="/contact">
+  <div class="field">
+    <label for="name">Name</label>
+    <input id="name" name="name" type="text" required value="<nxl expr="name" />">
+  </div>
+
+  <div class="field">
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" required value="<nxl expr="email" />">
+  </div>
+
+  <div class="field">
+    <label for="message">Message</label>
+    <textarea id="message" name="message" rows="5"><nxl expr="message" /></textarea>
+  </div>
+
+  <button type="submit">Send</button>
+</form>
+
+<section class="panel">
+  <h2>What happens</h2>
+  <ol class="list">
+    <li>The browser posts the form to <code>/contact</code>.</li>
+    <li>The server checks the fields the route declared in <code>validate</code>.</li>
+    <li>Missing fields come back as <code>422</code>, the page is redrawn with what you typed still in it, and <code>error</code> holds the message.</li>
+  </ol>
+  <p><a href="/contact">Submit the form empty</a> to see it.</p>
+</section>

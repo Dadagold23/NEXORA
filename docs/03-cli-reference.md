@@ -56,7 +56,7 @@ Short forms work too: `install`, `add`, `remove`, `update`, `audit`, `tree`,
 
 | Command | Status |
 | --- | --- |
-| `serve` | NUF demonstration server: exposes `/openapi.json`. Not a development server with hot reload. |
+| `serve` | NUF server. Serves the routes the project declares in `nxl.toml` (`[[route]]`), with `/openapi.json` describing them. A project with no routes gets the demonstration routes. Not a development server with hot reload — that is `dev`. |
 | `lsp` | Language server (NLS). The CLI entry point validates initialisation. |
 | `ide` | Print the IDE capability sources. |
 | `bridge` | Print FFI bridge status. |

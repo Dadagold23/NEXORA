@@ -1,0 +1,29 @@
+<h1 class="page-title">Welcome</h1>
+<p class="lede">
+  This page is an <code>.nxlhtml</code> template. The layout supplied the nav and
+  the footer; this file supplied the content.
+</p>
+
+<section class="panel">
+  <h2>How routing works here</h2>
+  <p>
+    <code>nxl.toml</code> declares the routes. Each one names a page under
+    <code>pages/</code>, and <code>nexora serve</code> renders it.
+  </p>
+  <ul class="list">
+    <li><a href="/about">A static page</a></li>
+    <li><a href="/posts/1">A path parameter</a></li>
+    <li><a href="/contact">A form with validation</a></li>
+    <li><a href="/does-not-exist">A real 404</a></li>
+  </ul>
+</section>
+
+<section class="panel">
+  <h2>Escaping</h2>
+  <p>
+    <nxl expr='"<b>this is escaped</b>"' /> renders as
+    <code><nxl expr='"&lt;b&gt;this is escaped&lt;/b&gt;"' /></code>, because
+    <code>expr</code> escapes its output. A value can never become markup
+    through it.
+  </p>
+</section>

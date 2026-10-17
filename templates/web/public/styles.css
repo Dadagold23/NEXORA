@@ -267,3 +267,150 @@ h1 {
   font-size: 0.85rem;
   text-align: center;
 }
+
+/* Layout, nav, forms and states added with the multi-page starter. The rules
+   above it belong to the single-page landing page. */
+
+.skip {
+  position: absolute;
+  left: -9999px;
+}
+.skip:focus {
+  left: 1rem;
+  top: 1rem;
+  z-index: 10;
+  background: #fff;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.9rem 1.25rem;
+  border-bottom: 1px solid #1e2430;
+  background: #0d1117;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #e6edf3;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+}
+.nav-links {
+  display: flex;
+  gap: 1rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex-wrap: wrap;
+}
+.nav-links a {
+  color: #9fb0c3;
+  text-decoration: none;
+}
+.nav-links a:hover,
+.nav-links a:focus {
+  color: #e6edf3;
+  text-decoration: underline;
+}
+
+.main {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 3rem;
+}
+
+.page-title {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 1.9rem;
+}
+
+.list {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+}
+.list li {
+  margin: 0.2rem 0;
+}
+.list a {
+  color: #58a6ff;
+}
+
+.defs dt {
+  margin-top: 0.6rem;
+  font-weight: 600;
+}
+.defs dd {
+  margin: 0.1rem 0 0 1rem;
+  color: #9fb0c3;
+}
+
+.form {
+  display: grid;
+  gap: 0.9rem;
+  max-width: 34rem;
+  margin: 1rem 0 0;
+}
+.field {
+  display: grid;
+  gap: 0.3rem;
+}
+.field label {
+  font-size: 0.85rem;
+  color: #9fb0c3;
+}
+.field input,
+.field textarea {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #e6edf3;
+  font: inherit;
+  padding: 0.5rem 0.6rem;
+  width: 100%;
+}
+.field input:focus,
+.field textarea:focus {
+  outline: 2px solid #1f6feb;
+  outline-offset: 1px;
+}
+.form button {
+  justify-self: start;
+  background: #1f6feb;
+  border: 0;
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.5rem 1.1rem;
+}
+
+.alert {
+  background: #3d1418;
+  border: 1px solid #8b2c35;
+  border-radius: 6px;
+  color: #ffb4b4;
+  margin: 1rem 0 0;
+  max-width: 34rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.muted {
+  color: #7d8da0;
+}
+
+@media (max-width: 40rem) {
+  .nav {
+    justify-content: center;
+  }
+  .main {
+    padding: 1rem 0.9rem 2.5rem;
+  }
+}

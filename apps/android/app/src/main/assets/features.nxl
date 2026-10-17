@@ -1,0 +1,24 @@
+// The features screen, written in NXL.
+
+let features = [
+    "Compiler: lexer, parser, analyser and lowering, shared with the desktop compiler.",
+    "Virtual machine: runs NXL on the device. Loops and branching work here.",
+    "Language server: diagnostics, completion and hover over the same front end.",
+    "Templates: pages, layouts and escaping for the web server.",
+    "Database: migrations, seeders and an audit log. SQLite is the live driver."
+];
+
+print("# Features");
+print("");
+
+for feature in features {
+    print("- " + feature);
+}
+
+print("");
+// A note on the language, because it is the kind of thing worth being honest
+// about on a screen that claims the words came from NXL: there is no way to
+// turn an Int into a String yet, so this program cannot print how many items
+// it just looped over. It would have to count in JavaScript or Rust instead,
+// which is exactly the kind of pretense this app is trying not to do.
+print("NXL cannot convert a number to a string yet, so this page cannot say how many items it listed. That is a real gap, not a rendering trick.");

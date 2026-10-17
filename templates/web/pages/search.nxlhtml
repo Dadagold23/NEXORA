@@ -1,0 +1,54 @@
+<h1 class="page-title">Search</h1>
+<p class="lede">
+  The four states of one result &mdash; nothing entered, a match, no match, and
+  the value echoed back &mdash; as one page rather than four.
+</p>
+
+<form class="form" method="get" action="/search">
+  <div class="field">
+    <label for="q">Search</label>
+    <input id="q" name="q" type="search" value="<nxl expr='q' />">
+  </div>
+  <button type="submit">Search</button>
+</form>
+
+<nxl>
+// There is no database behind this starter, so the corpus is the site's own
+// navigation. `q` is always bound, which is why an empty search is a page
+// rather than an error.
+//
+// The results are printed as they are found rather than collected into an
+// array: NXL arrays cannot be appended to yet (`+`, `push` and `len` are all
+// absent), and pretending otherwise would make this page look simpler than it
+// is.
+let terms = ["about", "posts", "contact"];
+let query = q;
+let mut found = false;
+
+if query == "" {
+    print("<p class=\"muted\">Enter something to search for.</p>");
+} else {
+    for term in terms {
+        if term == query {
+            if found == false {
+                print("<h2>Matches</h2><ul class=\"list\">");
+                found = true;
+            }
+            print("<li><a href=\"/" + term + "\">" + escape_html(term) + "</a></li>");
+        }
+    }
+
+    if found == false {
+        print("<p class=\"alert\" role=\"alert\">No page matches ");
+        print(escape_html(query));
+        print(".</p>");
+        print("<p>Try one of these instead:</p><ul class=\"list\">");
+        for term in terms {
+            print("<li><a href=\"/" + term + "\">" + escape_html(term) + "</a></li>");
+        }
+        print("</ul>");
+    } else {
+        print("</ul>");
+    }
+}
+</nxl>

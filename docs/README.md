@@ -13,6 +13,7 @@
 | [Compiler & VM](05-compiler-and-vm.md) | P03-P06, P09, P21 |
 | [NDB Database](06-ndb.md) | P14 |
 | [NUF Web Framework](07-nuf.md) | P15 |
+| [Web Applications](20-web-applications.md) | Routes in `nxl.toml`, `.nxlhtml` pages, layouts, forms |
 | [NUI Universal UI](08-nui.md) | P18 |
 | [NXP Package Manager](09-nxp.md) | P13, path dependencies, local registry, honesty rules |
 | [REPL and dev server](repl-and-dev.md) | `nxl repl`, `nxl dev`, and their limits |

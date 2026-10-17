@@ -1,0 +1,23 @@
+// The about screen, written in NXL.
+
+let name = "NXL";
+let version = "0.1.1";
+
+print("# About");
+print("");
+print("This app is the NEXORA starter for Android.");
+print("");
+print("# What is really NXL here");
+print("");
+print("- The compiler: one implementation, used by the desktop tool and this app.");
+print("- The interpreter: it compiles and runs each program as you open it.");
+print("- This text: assembled by string concatenation and a loop, not by a layout engine.");
+print("");
+print("# What is Android");
+print("");
+print("- The activity, the views, and the taps.");
+print("- Deciding which program to run for a tab.");
+print("");
+print("Splitting it that way is deliberate. The drawing is the platform's job; the words are the language's.");
+print("");
+print(name + " " + version + ", running in-process.");

@@ -8,6 +8,7 @@ pub mod devserver;
 pub mod diagnostic;
 pub mod ffi;
 pub mod hir;
+pub mod html;
 pub mod ide;
 pub mod lexer;
 pub mod ndb;
@@ -26,6 +27,7 @@ pub mod security;
 pub mod source;
 pub mod stdlib;
 pub mod vm;
+pub mod web;
 
 use diagnostic::Diagnostic;
 use nir::Module;

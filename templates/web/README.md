@@ -5,28 +5,48 @@ A NXL web application, served by the NXL development server.
 ## Run it
 
 ```bash
-nexora dev
+nexora serve     # the routes declared in nxl.toml
+nexora dev       # the browser program, with live reload
 ```
 
-Then open <http://127.0.0.1:3000>. Edit any `.nxl` file and the page reloads
-itself; there is no build step to run by hand.
+`serve` builds a real HTTP server from the `[[route]]` table in `nxl.toml` and
+listens on `127.0.0.1:8080`. `dev` serves `public/index.nxl`, compiles `src/` to
+JavaScript and reloads the page on <http://127.0.0.1:3000> when you edit a file.
 
 ## What is here
 
 ```
-nxl.toml              manifest; the entry point is src/main.nxl
-src/main.nxl          boot sequence; prints the log the page is built from
+nxl.toml              manifest; routes, layout and 404 page
+pages/                one .nxlhtml template per route
+layouts/main.nxlhtml  wrapped around every page
+public/               static assets, plus the dev-server landing page
+src/main.nxl          boot sequence; prints the log the landing page uses
 src/app/config.nxl    name, tagline and features
 src/app/routes.nxl    the routes the dev server exposes
 src/app/state.nxl     AppState, the boot state machine
-public/index.nxl      the page, written in NXL
-public/styles.css     styling for the page and the splash screen
-public/bootstrap.js   turns the program's print() output into the page
-public/favicon.svg    the mark used by the page and the tab
 tests/basic.nxl       checks run by `nexora test`
 ```
 
-## The page is NXL
+## Pages
+
+Pages are templates. `<nxl> … </nxl>` runs statements where you put them, and
+`<nxl expr="…" />` prints one value **escaped**, always. Path parameters and
+submitted form fields are bound as variables before the page runs, so a
+`/posts/:id` route can write:
+
+```html
+<h1>Post <nxl expr="id" /></h1>
+```
+
+A form posting to a route with `validate = ["name", "email"]` comes back as
+`422` with the page redrawn, the submitted values still in place, and `error`
+holding the message.
+
+See `docs/20-web-applications.md` in the NEXORA repository for the full
+reference, including the limits — short version: NXL has no HTTP types yet, so
+a page is a template and not a handler.
+
+## The dev-server landing page
 
 `public/index.nxl` is a program. `nexora dev` compiles it, runs it, and serves
 what it prints as HTML — so the page is built from the same modules as the app
@@ -60,8 +80,9 @@ That last one matters: the splash screen is cleared when the program says it is
 ready, not after a timer. If the program throws, the splash stays up and the
 reason is printed instead of the app pretending to be healthy.
 
-The page is assembled with string concatenation, which is honest about where
-NXL is today: there is no template or string-builder type yet.
+The landing page is assembled with string concatenation, which is honest about
+where NXL is today: it has no template type, so `pages/` uses the `.nxlhtml`
+template format instead.
 
 ## Checks
 

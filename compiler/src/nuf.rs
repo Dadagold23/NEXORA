@@ -488,6 +488,8 @@ pub struct App {
     pub state: Arc<AppState>,
     router: Router<Arc<AppState>>,
     operations: Vec<Operation>,
+    /// Used for requests that match no route.
+    fallback: Option<MethodRouter<Arc<AppState>>>,
 }
 
 impl App {
@@ -496,6 +498,7 @@ impl App {
             state: Arc::new(AppState::default()),
             router: Router::new(),
             operations: Vec::new(),
+            fallback: None,
         }
     }
 
@@ -504,6 +507,22 @@ impl App {
             state,
             router: Router::new(),
             operations: Vec::new(),
+            fallback: None,
+        }
+    }
+
+    /// Answer requests that match no route with `handler`.
+    ///
+    /// Without this, an unmatched path gets axum's bare empty 404, which tells
+    /// a visitor nothing. A project sets this to its own "not found" page.
+    pub fn set_fallback(&mut self, handler: MethodRouter<Arc<AppState>>) {
+        self.fallback = Some(handler);
+    }
+
+    fn composed(&self) -> Router<Arc<AppState>> {
+        match &self.fallback {
+            None => self.router.clone(),
+            Some(handler) => self.router.clone().fallback(handler.clone()),
         }
     }
 
@@ -611,28 +630,35 @@ impl App {
     }
 
     pub fn raw_router(&self) -> Router<Arc<AppState>> {
-        self.router.clone()
+        self.composed()
     }
 
     /// Build a Router with CORS + logging middleware applied.
     pub fn into_router(self) -> Router {
         let state = self.state.clone();
-        self.router
+        self.composed()
             .with_state(state)
             .layer(axum::middleware::from_fn(cors_headers))
             .layer(axum::middleware::from_fn(request_logger))
     }
 
     /// Start the HTTP server. Blocks the current thread.
+    ///
+    /// Call this from a synchronous context. Inside an existing tokio runtime — the
+    /// CLI's `main` is `#[tokio::main]` — use [`App::serve_async`] instead, or
+    /// building a runtime here will panic.
     pub fn serve(self, config: &WebConfig) -> std::io::Result<()> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?;
-        rt.block_on(async {
-            let addr = format!("{}:{}", config.host, config.port);
-            let listener = tokio::net::TcpListener::bind(&addr).await?;
-            axum::serve(listener, self.into_router()).await
-        })
+        rt.block_on(self.serve_async(config))
+    }
+
+    /// Start the HTTP server on the current runtime.
+    pub async fn serve_async(self, config: &WebConfig) -> std::io::Result<()> {
+        let addr = format!("{}:{}", config.host, config.port);
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        axum::serve(listener, self.into_router()).await
     }
 
     /// Bind the TCP listener without serving; used by tests.
