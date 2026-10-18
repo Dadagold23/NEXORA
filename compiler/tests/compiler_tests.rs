@@ -1256,6 +1256,74 @@ fn vm_chunk_emits_and_patches_jump() {
     assert_eq!(chunk.code[site as usize], Opcode::Jump(99));
 }
 
+// ── Closure tests ─────────────────────────────────────────────────────────────
+
+#[test]
+fn vm_executes_closure_with_argument() {
+    let source = SourceFile::new(
+        "closure_arg.nxl",
+        "fn main() { let f = fn(x: Int) -> Int { return x + 1 }; print(f(10)); }",
+    );
+    let result = vm_run(&source).expect("closure call should execute");
+    assert_eq!(result.output, vec!["11"]);
+}
+
+#[test]
+fn vm_closure_captures_enclosing_variable() {
+    let source = SourceFile::new(
+        "closure_capture.nxl",
+        "fn main() { let a = 10; let f = fn(x: Int) -> Int { return x + a }; print(f(5)); }",
+    );
+    let result = vm_run(&source).expect("capturing closure should execute");
+    assert_eq!(result.output, vec!["15"]);
+}
+
+#[test]
+fn vm_closure_without_parameters() {
+    let source = SourceFile::new(
+        "closure_noargs.nxl",
+        "fn main() { let f = fn() -> Int { return 42 }; print(f()); }",
+    );
+    let result = vm_run(&source).expect("zero-arg closure should execute");
+    assert_eq!(result.output, vec!["42"]);
+}
+
+#[test]
+fn vm_two_closures_are_independent() {
+    let source = SourceFile::new(
+        "closure_two.nxl",
+        "fn main() { let f = fn(x: Int) -> Int { return x + 1 }; let g = fn(y: Int) -> Int { return y + 2 }; print(f(1) + g(1)); }",
+    );
+    let result = vm_run(&source).expect("two closures should execute");
+    assert_eq!(result.output, vec!["5"]);
+}
+
+#[test]
+fn vm_closure_result_can_be_bound_and_reused() {
+    let source = SourceFile::new(
+        "closure_reuse.nxl",
+        "fn main() { let f = fn(x: Int) -> Int { return x * 3 }; let r = f(4); print(r); }",
+    );
+    let result = vm_run(&source).expect("closure result binding should execute");
+    assert_eq!(result.output, vec!["12"]);
+}
+
+#[test]
+fn calling_a_non_callable_value_is_a_catchable_runtime_error() {
+    // `let n = 5; n(1)` must be a runtime error, not a crash/panic.
+    let source = SourceFile::new(
+        "not_callable.nxl",
+        "fn main() { let n = 5; print(n(1)); }",
+    );
+    let result = vm_run(&source);
+    match result {
+        Ok(_) => panic!("calling an Int must not succeed"),
+        Err(diagnostic) => {
+            assert_eq!(diagnostic.code, "NXL9001");
+        }
+    }
+}
+
 // ── P10 Async / Concurrency tests ─────────────────────────────────────────────
 
 use nxl_compiler::concurrency::{
@@ -2012,9 +2080,10 @@ mod stdlib_tests {
 #[cfg(test)]
 mod cli_tests {
     use nxl_compiler::cli::{
-        cmd_build, cmd_check, cmd_clean, cmd_debug, cmd_docs, cmd_fmt, cmd_new, cmd_repl, cmd_run,
-        cmd_test, format_doctor_report, help_text, parse_args, run_doctor, version_text,
-        BuildProfile, BuildTarget, Command, Dependency, ProjectConfig,
+        cmd_bench, cmd_bridge, cmd_build, cmd_check, cmd_clean, cmd_debug, cmd_docs, cmd_fmt,
+        cmd_new, cmd_platforms, cmd_repl, cmd_run, cmd_test, format_doctor_report, help_text,
+        parse_args, run_doctor, version_text, BuildProfile, BuildTarget, Command, Dependency,
+        ProjectConfig,
     };
     use std::fs;
 
@@ -2745,6 +2814,49 @@ mod cli_tests {
     fn cli_docs_lists_bundled_guides() {
         let msg = cmd_docs();
         assert!(msg.contains("docs/01-getting-started.md"), "{msg}");
+    }
+
+    #[test]
+    fn cli_bridge_reports_the_real_ffi_table() {
+        // Previously a hardcoded string; must reflect ffi::bridge_table.
+        let msg = cmd_bridge();
+        assert!(
+            msg.contains("python: subprocess JSON-RPC (IMPLEMENTED)"),
+            "{msg}"
+        );
+        assert!(msg.contains("go: BLOCKED"), "{msg}");
+        assert!(msg.contains("wasm: BLOCKED"), "{msg}");
+    }
+
+    #[test]
+    fn cli_platforms_reports_the_evidence_matrix() {
+        // Previously advertised "Linux x64 READY" with no evidence; must be the
+        // honest, tier-derived matrix.
+        let msg = cmd_platforms();
+        assert!(msg.contains("NEXORA platform support matrix"), "{msg}");
+        assert!(msg.contains("Windows x86_64"), "{msg}");
+        assert!(msg.contains("Tier 3 — Experimental"), "{msg}");
+        assert!(msg.contains("Tier 4 — Planned"), "{msg}");
+        assert!(
+            !msg.contains("READY"),
+            "must not advertise readiness: {msg}"
+        );
+    }
+
+    #[test]
+    fn cli_bench_runs_the_real_benchmarks() {
+        // Previously a hardcoded "ok" string; must contain measured rows.
+        let msg = cmd_bench();
+        for row in &[
+            "lexer",
+            "parser",
+            "compile_to_nir",
+            "vm_run",
+            "migrate_fresh",
+        ] {
+            assert!(msg.contains(row), "bench must measure '{row}': {msg}");
+        }
+        assert!(msg.contains("µs/iter"), "{msg}");
     }
 
     // ── help / version text ───────────────────────────────────────────────────

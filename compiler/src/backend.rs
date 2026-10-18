@@ -658,6 +658,30 @@ impl<'m> JsBackend<'m> {
                     self.line(&format!("let {v} = {call};"));
                 }
             }
+            Instruction::MakeClosure { result, callee, captures, .. } => {
+                let v = self.var(*result);
+                if captures.is_empty() {
+                    self.line(&format!("let {v} = {callee};"));
+                } else {
+                    let caps: Vec<String> = captures.iter().map(|c| self.var(*c)).collect();
+                    self.line(&format!(
+                        "let {v} = (({args}) => (...a) => {callee}({args}, ...a))([{caps}]);",
+                        args = caps.join(", "),
+                        caps = caps.join(", ")
+                    ));
+                }
+            }
+            Instruction::CallIndirect { result, callee, arguments, return_type, .. } => {
+                let args: Vec<String> = arguments.iter().map(|a| self.var(*a)).collect();
+                let c = self.var(*callee);
+                let call = format!("{c}({})", args.join(", "));
+                if matches!(return_type, Type::Void) {
+                    self.line(&format!("{call};"));
+                } else {
+                    let v = self.var(*result);
+                    self.line(&format!("let {v} = {call};"));
+                }
+            }
 
             Instruction::IteratorNext {
                 has_next,
@@ -927,7 +951,6 @@ impl<'m> JsBackend<'m> {
                     args.join(", ")
                 ));
             }
-
             Instruction::SpawnCall { span, .. }
             | Instruction::SpawnMethod { span, .. }
             | Instruction::AwaitTask { span, .. }
@@ -2080,6 +2103,8 @@ fn instruction_results(instruction: &Instruction) -> Vec<ValueId> {
         | Instruction::Unary { result, .. }
         | Instruction::Binary { result, .. }
         | Instruction::Call { result, .. }
+        | Instruction::CallIndirect { result, .. }
+        | Instruction::MakeClosure { result, .. }
         | Instruction::Allocate { result, .. }
         | Instruction::LoadMemory { result, .. }
         | Instruction::Borrow { result, .. }

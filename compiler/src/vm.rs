@@ -100,6 +100,10 @@ pub enum Opcode {
     JumpIfFalse(u32),
     /// Call a function by name with `argc` arguments popped from the stack.
     Call { name: String, argc: u32 },
+    /// Create a closure value.
+    MakeClosure { name: String, capture_count: u32 },
+    /// Call a function value on the stack with `argc` arguments.
+    CallIndirect { argc: u32 },
     /// Return the top-of-stack value (or unit if stack is empty).
     Return,
     /// Pop and discard the top of stack.
@@ -571,6 +575,15 @@ fn serialize_opcode(buf: &mut Vec<u8>, op: &Opcode) {
             write_str(buf, method);
             buf.extend_from_slice(&argc.to_le_bytes());
         }
+        Opcode::MakeClosure { name, capture_count } => {
+            buf.push(0x27);
+            write_str(buf, name);
+            buf.extend_from_slice(&capture_count.to_le_bytes());
+        }
+        Opcode::CallIndirect { argc } => {
+            buf.push(0x28);
+            buf.extend_from_slice(&argc.to_le_bytes());
+        }
         Opcode::AwaitTask => buf.push(0x24),
         Opcode::CompleteTask => buf.push(0x25),
         Opcode::ChannelNew => buf.push(0x26),
@@ -668,6 +681,15 @@ fn deserialize_opcode(data: &[u8], cursor: &mut usize) -> Result<Opcode, String>
         0x24 => Ok(Opcode::AwaitTask),
         0x25 => Ok(Opcode::CompleteTask),
         0x26 => Ok(Opcode::ChannelNew),
+        0x27 => {
+            let name = read_str(data, cursor)?;
+            let capture_count = read_u32(data, cursor)?;
+            Ok(Opcode::MakeClosure { name, capture_count })
+        }
+        0x28 => {
+            let argc = read_u32(data, cursor)?;
+            Ok(Opcode::CallIndirect { argc })
+        }
         0x21 => {
             let method = read_str(data, cursor)?;
             let argc = read_u32(data, cursor)?;
@@ -973,6 +995,37 @@ fn compile_instruction(
             }
             chunk.emit(Opcode::Call {
                 name: callee.clone(),
+                argc: arguments.len() as u32,
+            });
+            if !matches!(return_type, Type::Void) {
+                let slot = ensure_slot(result, value_slots, next_slot);
+                chunk.emit(Opcode::StoreLocal(slot));
+            } else {
+                chunk.emit(Opcode::Pop);
+            }
+        }
+
+        nir::Instruction::MakeClosure { result, callee, captures, .. } => {
+            for cap in captures {
+                let s = *value_slots.get(cap).unwrap_or(&0);
+                chunk.emit(Opcode::LoadLocal(s));
+            }
+            chunk.emit(Opcode::MakeClosure {
+                name: callee.clone(),
+                capture_count: captures.len() as u32,
+            });
+            let slot = ensure_slot(result, value_slots, next_slot);
+            chunk.emit(Opcode::StoreLocal(slot));
+        }
+
+        nir::Instruction::CallIndirect { result, callee, arguments, return_type, .. } => {
+            for arg in arguments {
+                let s = *value_slots.get(arg).unwrap_or(&0);
+                chunk.emit(Opcode::LoadLocal(s));
+            }
+            let callee_slot = *value_slots.get(callee).unwrap_or(&0);
+            chunk.emit(Opcode::LoadLocal(callee_slot));
+            chunk.emit(Opcode::CallIndirect {
                 argc: arguments.len() as u32,
             });
             if !matches!(return_type, Type::Void) {
@@ -1573,6 +1626,8 @@ fn nir_results(instr: &nir::Instruction) -> Vec<nir::ValueId> {
         | nir::Instruction::Unary { result, .. }
         | nir::Instruction::Binary { result, .. }
         | nir::Instruction::Call { result, .. }
+        | nir::Instruction::CallIndirect { result, .. }
+        | nir::Instruction::MakeClosure { result, .. }
         | nir::Instruction::Allocate { result, .. }
         | nir::Instruction::LoadMemory { result, .. }
         | nir::Instruction::Borrow { result, .. }
@@ -1701,6 +1756,10 @@ pub enum Value {
     },
     Task(TaskShared),
     Channel(ChannelShared),
+    Closure {
+        name: String,
+        captures: Vec<Value>,
+    },
     Unit,
 }
 
@@ -1737,6 +1796,16 @@ impl PartialEq for Value {
             ) => a_type == b_type && a_variant == b_variant && a_args == b_args,
             (Value::Task(a), Value::Task(b)) => Arc::ptr_eq(&a.0, &b.0),
             (Value::Channel(a), Value::Channel(b)) => Arc::ptr_eq(&a.0, &b.0),
+            (
+                Value::Closure {
+                    name: a_name,
+                    captures: a_captures,
+                },
+                Value::Closure {
+                    name: b_name,
+                    captures: b_captures,
+                },
+            ) => a_name == b_name && a_captures == b_captures,
             (Value::Unit, Value::Unit) => true,
             _ => false,
         }
@@ -1928,6 +1997,7 @@ impl fmt::Display for Value {
             }
             Value::Task(shared) => write!(f, "task#{}", shared.0.id),
             Value::Channel(shared) => write!(f, "channel#{}", shared.0.id),
+            Value::Closure { name, .. } => write!(f, "<closure {name}>"),
             Value::Unit => write!(f, "()"),
         }
     }
@@ -2327,6 +2397,46 @@ impl Vm {
                         args[i] = self.stack.pop().unwrap_or(Value::Unit);
                     }
                     match self.call_function(&name, args) {
+                        Ok((ret, _)) => self.stack.push(ret),
+                        Err(VmFault::Throw(value)) => match self.handle_throw(depth, value) {
+                            Ok(()) => {}
+                            Err(value) => return Err(VmFault::Throw(value)),
+                        },
+                        Err(fatal) => return Err(fatal),
+                    }
+                }
+
+                Opcode::MakeClosure { name, capture_count } => {
+                    let mut captures = Vec::with_capacity(capture_count as usize);
+                    for _ in 0..capture_count {
+                        captures.push(self.stack.pop().unwrap_or(Value::Unit));
+                    }
+                    captures.reverse();
+                    self.stack
+                        .push(Value::Closure { name: name.clone(), captures });
+                }
+
+                Opcode::CallIndirect { argc } => {
+                    // The callee was pushed last (on top), so pop it first,
+                    // then the arguments in reverse.
+                    let callee = self.stack.pop().unwrap_or(Value::Unit);
+                    let mut args = vec![Value::Unit; argc as usize];
+                    for i in (0..argc as usize).rev() {
+                        args[i] = self.stack.pop().unwrap_or(Value::Unit);
+                    }
+                    let (name, captures) = match callee {
+                        Value::Closure { name, captures } => (name.clone(), captures.clone()),
+                        _ => {
+                            let value = Value::String("callable expected".to_owned());
+                            match self.handle_throw(depth, value) {
+                                Ok(()) => continue,
+                                Err(value) => return Err(VmFault::Throw(value)),
+                            }
+                        }
+                    };
+                    let mut call_args = captures.clone();
+                    call_args.extend(args);
+                    match self.call_function(&name, call_args) {
                         Ok((ret, _)) => self.stack.push(ret),
                         Err(VmFault::Throw(value)) => match self.handle_throw(depth, value) {
                             Ok(()) => {}
@@ -2809,6 +2919,7 @@ fn type_name_of(value: &Value) -> &str {
         Value::Enum { type_name, .. } => type_name,
         Value::Task(_) => "Task",
         Value::Channel(_) => "Channel",
+        Value::Closure { .. } => "Function",
         Value::Unit => "Void",
     }
 }

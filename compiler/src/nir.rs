@@ -377,6 +377,21 @@ pub enum Instruction {
         arguments: Vec<ValueId>,
         span: Span,
     },
+    /// Create a closure value capturing variables.
+    MakeClosure {
+        result: ValueId,
+        callee: String,
+        captures: Vec<ValueId>,
+        span: Span,
+    },
+    /// Call a function value (closure or function reference) indirectly.
+    CallIndirect {
+        result: ValueId,
+        callee: ValueId,
+        arguments: Vec<ValueId>,
+        return_type: Type,
+        span: Span,
+    },
     /// Spawn a thread running a function; `result` is the task handle.
     SpawnCall {
         result: ValueId,
@@ -573,6 +588,8 @@ impl Instruction {
             Instruction::Unary { span, .. } => *span,
             Instruction::Binary { span, .. } => *span,
             Instruction::Call { span, .. } => *span,
+            Instruction::CallIndirect { span, .. } => *span,
+            Instruction::MakeClosure { span, .. } => *span,
             Instruction::IteratorNext { span, .. } => *span,
             Instruction::ArrayNew { span, .. } => *span,
             Instruction::IndexGet { span, .. } => *span,
@@ -683,6 +700,7 @@ pub fn lower_project_files(files: &[ProjectFile]) -> Result<Module, Diagnostic> 
         file_imports: Vec::new(),
         type_aliases: HashMap::new(),
         async_counter: 0,
+        closure_counter: 0,
     };
 
     for file in files {
@@ -2111,6 +2129,7 @@ fn instruction_results(instruction: &Instruction) -> Vec<ValueId> {
             receiver_out,
             ..
         } => vec![*result, *receiver_out],
+        Instruction::MakeClosure { result, .. } | Instruction::CallIndirect { result, .. } => vec![*result],
         Instruction::SpawnCall { result, .. }
         | Instruction::SpawnMethod { result, .. }
         | Instruction::CompleteTask { result, .. }
@@ -2148,6 +2167,12 @@ fn instruction_value_types(instruction: &Instruction) -> Vec<(ValueId, Type)> {
             return_type,
             ..
         } => vec![(*result, *return_type)],
+        Instruction::CallIndirect {
+            result,
+            return_type,
+            ..
+        } => vec![(*result, *return_type)],
+        Instruction::MakeClosure { result, .. } => vec![(*result, Type::Function(0))],
         Instruction::IteratorNext { has_next, item, .. } => {
             vec![(*has_next, Type::Bool), (*item, Type::Unknown)]
         }
@@ -2190,6 +2215,12 @@ fn instruction_operands(instruction: &Instruction) -> Vec<ValueId> {
         Instruction::Unary { operand, .. } => vec![*operand],
         Instruction::Binary { left, right, .. } => vec![*left, *right],
         Instruction::Call { arguments, .. } => arguments.clone(),
+        Instruction::CallIndirect { callee, arguments, .. } => {
+            let mut operands = vec![*callee];
+            operands.extend(arguments.iter().copied());
+            operands
+        }
+        Instruction::MakeClosure { captures, .. } => captures.clone(),
         Instruction::IteratorNext {
             iterable, index, ..
         } => vec![*iterable, *index],
@@ -2295,6 +2326,8 @@ fn instruction_span(instruction: &Instruction) -> Span {
         | Instruction::PatternIndex { span, .. }
         | Instruction::PatternField { span, .. }
         | Instruction::MethodCall { span, .. }
+        | Instruction::MakeClosure { span, .. }
+        | Instruction::CallIndirect { span, .. }
         | Instruction::SpawnCall { span, .. }
         | Instruction::SpawnMethod { span, .. }
         | Instruction::CompleteTask { span, .. }
@@ -2346,6 +2379,8 @@ struct Lowerer {
     current_module: String,
     /// Monotonic counter for synthesized async-worker names.
     async_counter: u32,
+    /// Monotonic counter for synthesized closure names.
+    closure_counter: u32,
     /// Import statements of the file currently being lowered.
     file_imports: Vec<crate::project::ModuleImport>,
     /// Bare-to-qualified type names for the current file (own types plus
@@ -5389,12 +5424,26 @@ impl Lowerer {
                     self.instructions.push(instruction);
                     return Ok(result);
                 }
+                // A callee that is not a bare name is a value-producing
+                // expression (closure literal, call result, index, field).
+                // Lower it, then call through the resulting value.
                 let ExpressionKind::Name(name) = &callee.kind else {
-                    return Err(Diagnostic::error(
-                        "NXL2003",
-                        "only named functions are supported in calls by this compiler stage",
-                        callee.span,
-                    ));
+                    let callee_id = self.expression(callee)?;
+                    let mut lowered_arguments = Vec::with_capacity(arguments.len());
+                    for arg in arguments {
+                        lowered_arguments.push(self.expression(arg)?);
+                    }
+                    let result = self.allocate();
+                    let instruction = Instruction::CallIndirect {
+                        result,
+                        callee: callee_id,
+                        arguments: lowered_arguments,
+                        return_type: Type::Unknown,
+                        span: expression.span,
+                    };
+                    self.record_value_type(&instruction);
+                    self.instructions.push(instruction);
+                    return Ok(result);
                 };
 
                 // Check for built-in functions the runtime provides directly.
@@ -5435,6 +5484,23 @@ impl Lowerer {
                 let resolved = match self.resolve_function(name) {
                     Some(resolved) => resolved,
                     None => {
+                        if let Some(value) = self.lookup_value(name) {
+                            let mut lowered_arguments = Vec::with_capacity(arguments.len());
+                            for arg in arguments {
+                                lowered_arguments.push(self.expression(arg)?);
+                            }
+                            let result = self.allocate();
+                            let instruction = Instruction::CallIndirect {
+                                result,
+                                callee: value,
+                                arguments: lowered_arguments,
+                                return_type: Type::Unknown,
+                                span: expression.span,
+                            };
+                            self.record_value_type(&instruction);
+                            self.instructions.push(instruction);
+                            return Ok(result);
+                        }
                         // `from std.<module> import <name>` reaches a stdlib
                         // builtin when no user function claims the name.
                         if let Some(qualified) = self.resolve_stdlib_builtin(name) {
@@ -5585,6 +5651,80 @@ impl Lowerer {
                 };
                 self.instructions.push(assign_instruction);
                 Ok(assigned_value)
+            }
+            ExpressionKind::Function(function) => {
+                if function.name.is_some() {
+                    return Err(Diagnostic::error(
+                        "NXL2007",
+                        "named function expressions are not yet supported",
+                        function.span,
+                    ));
+                }
+                let closure_name = format!("__nxl_closure_{}", self.closure_counter);
+                self.closure_counter += 1;
+
+                let mut captured: Vec<String> = self
+                    .values
+                    .iter()
+                    .filter(|(_, id)| **id != u32::MAX)
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                captured.sort();
+                captured.dedup();
+
+                let mut capture_ids = Vec::with_capacity(captured.len());
+                for name in &captured {
+                    let value = self.lookup_value(name).ok_or_else(|| {
+                        Diagnostic::error("NXL2002", format!("use of undeclared name '{name}'"), function.span)
+                    })?;
+                    let result = self.allocate();
+                    let ty = self.value_type(value);
+                    let instruction = Instruction::Load {
+                        result,
+                        name: name.clone(),
+                        ty,
+                        span: function.span,
+                    };
+                    self.record_value_type(&instruction);
+                    self.instructions.push(instruction);
+                    capture_ids.push(result);
+                }
+
+                let mut params: Vec<(String, Type)> = captured
+                    .iter()
+                    .map(|name| (name.clone(), Type::Unknown))
+                    .collect();
+                for param in &function.parameters {
+                    params.push((param.name.clone(), Type::Unknown));
+                }
+                self.signatures.push(FunctionSignature {
+                    name: closure_name.clone(),
+                    parameters: params.clone(),
+                    return_type: Type::Unknown,
+                });
+
+                let owned = crate::ast::Function {
+                    name: Some(closure_name.clone()),
+                    type_parameters: function.type_parameters.clone(),
+                    constraints: function.constraints.clone(),
+                    parameters: function.parameters.clone(),
+                    return_type: function.return_type.clone(),
+                    body: function.body.clone(),
+                    is_async: function.is_async,
+                    span: function.span,
+                };
+                self.lower_statement(&Statement::Function(owned))?;
+
+                let result = self.allocate();
+                let instruction = Instruction::MakeClosure {
+                    result,
+                    callee: closure_name,
+                    captures: capture_ids,
+                    span: function.span,
+                };
+                self.record_value_type(&instruction);
+                self.instructions.push(instruction);
+                Ok(result)
             }
             _ => Err(Diagnostic::error(
                 "NXL2007",
