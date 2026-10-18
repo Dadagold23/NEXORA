@@ -8,6 +8,18 @@ pub enum Severity {
     Hint,
 }
 
+impl Severity {
+    /// The lower-case name used in rendered and machine-readable output.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Note => "note",
+            Severity::Hint => "hint",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     pub code: String,
@@ -44,12 +56,7 @@ impl Diagnostic {
             .text
             .get(self.span.start..self.span.end)
             .map_or(1, |text| text.chars().count().max(1));
-        let label = match self.severity {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-            Severity::Note => "note",
-            Severity::Hint => "hint",
-        };
+        let label = self.severity.as_str();
         let mut rendered = format!(
             "{label}[{}]: {}\n  --> {}:{line}:{column}\n   |\n{line:>3} | {source_line}\n   | {}{}",
             self.code,

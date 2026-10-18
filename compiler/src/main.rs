@@ -16,7 +16,17 @@ use nxl_compiler::cli::{
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let args: Vec<String> = env::args().skip(1).collect();
+    let raw_args: Vec<String> = env::args().skip(1).collect();
+    // `--json` selects machine-readable diagnostics for check/run/build. It is
+    // stripped before parsing so it is never mistaken for a file argument,
+    // which also makes `check --json file.nxl` and `check file.nxl --json`
+    // behave identically.
+    let json = raw_args.iter().any(|a| a == "--json");
+    let args: Vec<String> = raw_args
+        .iter()
+        .filter(|a| a.as_str() != "--json")
+        .cloned()
+        .collect();
     // dev may bind a host:port, optionally overridden with --port.
 
     let mut dev_config = dev::DevConfig::default();
@@ -123,7 +133,13 @@ async fn main() -> ExitCode {
                 }
             }
             Err(e) => {
-                eprintln!("{e}");
+                if json {
+                    // The program owns stdout, so run's diagnostics go to
+                    // stderr: a pipeline can parse either stream alone.
+                    eprintln!("{}", cli::json_diagnostics(&[e]));
+                } else {
+                    eprintln!("{e}");
+                }
                 ExitCode::FAILURE
             }
         },
@@ -134,24 +150,50 @@ async fn main() -> ExitCode {
                     .artifact_path
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
-                println!("build ({}) → {path}", result.profile);
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "status": "ok",
+                            "profile": result.profile.to_string(),
+                            "artifact": path,
+                        })
+                    );
+                } else {
+                    println!("build ({}) → {path}", result.profile);
+                }
                 ExitCode::SUCCESS
             }
             Err(e) => {
-                eprintln!("{e}");
+                if json {
+                    eprintln!("{}", cli::json_diagnostics(&[e]));
+                } else {
+                    eprintln!("{e}");
+                }
                 ExitCode::FAILURE
             }
         },
 
         Command::Check { file } => match cmd_check(&cwd, file.as_deref()) {
             Ok(msgs) => {
-                for m in msgs {
-                    println!("{m}");
+                if json {
+                    // A clean check has nothing to report: an empty array.
+                    println!("{}", cli::json_diagnostics(&[]));
+                } else {
+                    for m in msgs {
+                        println!("{m}");
+                    }
                 }
                 ExitCode::SUCCESS
             }
             Err(e) => {
-                eprintln!("{e}");
+                if json {
+                    // check exists to report diagnostics, so they are its
+                    // primary output and go to stdout — success or failure.
+                    println!("{}", cli::json_diagnostics(&[e]));
+                } else {
+                    eprintln!("{e}");
+                }
                 ExitCode::FAILURE
             }
         },

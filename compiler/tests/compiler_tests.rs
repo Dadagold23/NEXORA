@@ -2082,9 +2082,11 @@ mod cli_tests {
     use nxl_compiler::cli::{
         cmd_bench, cmd_bridge, cmd_build, cmd_check, cmd_clean, cmd_debug, cmd_docs, cmd_fmt,
         cmd_new, cmd_platforms, cmd_repl, cmd_run, cmd_test, format_doctor_report, help_text,
-        parse_args, run_doctor, version_text, BuildProfile, BuildTarget, Command, Dependency,
-        ProjectConfig,
+        json_diagnostics, parse_args, run_doctor, version_text, BuildProfile, BuildTarget,
+        CliError, Command, Dependency, ProjectConfig,
     };
+    use nxl_compiler::diagnostic::Diagnostic;
+    use nxl_compiler::source::{SourceFile, Span};
     use std::fs;
 
     static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -2483,6 +2485,107 @@ mod cli_tests {
         let result = cmd_check(&tmp, Some(file.to_str().unwrap()));
         fs::remove_dir_all(&tmp).ok();
         assert!(result.is_err());
+    }
+
+    // ── --json machine-readable diagnostics ───────────────────────────────────
+
+    /// A clean check must still emit a parseable array, never blank output:
+    /// `nxlc check --json` on a valid file prints `[]`.
+    #[test]
+    fn cli_json_diagnostics_clean_is_empty_array() {
+        let rendered = json_diagnostics(&[]);
+        let parsed: serde_json::Value = serde_json::from_str(&rendered)
+            .expect("a clean check must still be valid JSON");
+        assert!(parsed.as_array().expect("an array").is_empty());
+    }
+
+    /// Every documented field — code, severity, message, file, line, column,
+    /// help — must be present and correct once a span is resolved.
+    #[test]
+    fn cli_json_diagnostic_populates_fields() {
+        // Byte 15 is the `y` of the second line: "let x = 1;\nlet y = 2;\n".
+        let source = SourceFile::new("main.nxl", "let x = 1;\nlet y = 2;\n");
+        let diagnostic = Diagnostic::error("NXL2001", "example failure", Span::new(15, 16))
+            .with_help("try this instead");
+        let error = CliError::from_diagnostic_at(diagnostic, &source);
+        assert_eq!(error.line, Some(2));
+        assert_eq!(error.column, Some(5));
+
+        let rendered = json_diagnostics(&[error]);
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("valid JSON");
+        let items = parsed.as_array().expect("diagnostics are an array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["code"], "NXL2001");
+        assert_eq!(items[0]["severity"], "error");
+        assert_eq!(items[0]["message"], "example failure");
+        assert_eq!(items[0]["file"], "main.nxl");
+        assert_eq!(items[0]["line"], 2);
+        assert_eq!(items[0]["column"], 5);
+        assert_eq!(items[0]["help"], "try this instead");
+    }
+
+    /// A diagnostic with no resolvable position (a missing file, say) must
+    /// keep the keys as `null` rather than dropping them, so a consumer never
+    /// has to probe for field existence.
+    #[test]
+    fn cli_json_diagnostic_keeps_unknown_location_as_null() {
+        let error = CliError::new("NXL12006", "cannot read 'x.nxl'");
+        let rendered = json_diagnostics(&[error]);
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("valid JSON");
+        assert!(parsed[0]["file"].is_null());
+        assert!(parsed[0]["line"].is_null());
+        assert!(parsed[0]["column"].is_null());
+        assert!(parsed[0]["help"].is_null());
+        assert_eq!(parsed[0]["severity"], "error");
+    }
+
+    /// End to end: a real compile failure must reach the CLI error with a
+    /// resolved 1-based position against the file that was checked, and that
+    /// error must survive a JSON round trip.
+    #[test]
+    fn cli_check_error_resolves_file_line_column() {
+        let tmp = std::env::temp_dir().join(format!(
+            "nxl_test_check_json_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("bad.nxl");
+        fs::write(&file, "let x = 1;\nlet y: Imaginary = 2;\n").unwrap();
+        let result = cmd_check(&tmp, Some(file.to_str().unwrap()));
+        fs::remove_dir_all(&tmp).ok();
+
+        let error = result.err().expect("the bad file must fail to compile");
+        assert_eq!(error.code, "NXL2004");
+        assert_eq!(error.severity, "error");
+        assert_eq!(error.file.as_deref(), Some(file.to_str().unwrap()));
+        assert_eq!(error.line, Some(2), "the unknown type is on line 2");
+        assert_eq!(error.column, Some(1));
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json_diagnostics(&[error])).expect("valid JSON");
+        assert_eq!(parsed[0]["code"], "NXL2004");
+        assert_eq!(parsed[0]["line"], 2);
+    }
+
+    /// The human-readable form is a fixed contract: without `--json` nothing
+    /// about this line may change, no matter what the JSON shape carries.
+    #[test]
+    fn cli_human_error_output_is_unchanged() {
+        let error = CliError::new("NXL12006", "cannot read 'x.nxl'");
+        assert_eq!(error.to_string(), "error[NXL12006]: cannot read 'x.nxl'");
+
+        let source = SourceFile::new("main.nxl", "let x = 1;\n");
+        let located = CliError::from_diagnostic_at(
+            Diagnostic::error("NXL2004", "unknown type 'Imaginary'", Span::new(0, 3)),
+            &source,
+        );
+        assert_eq!(
+            located.to_string(),
+            "error[NXL2004]: unknown type 'Imaginary'"
+        );
     }
 
     #[test]

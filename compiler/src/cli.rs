@@ -9,12 +9,30 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::diagnostic::Diagnostic;
+use crate::source::SourceFile;
+
 // ── Error ─────────────────────────────────────────────────────────────────────
 
+/// A command failure, carrying an optional source position so `--json`
+/// consumers get `file`/`line`/`column` alongside `code`/`message`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CliError {
     pub code: String,
     pub message: String,
+    /// Machine-readable severity: "error", "warning", "note", or "hint".
+    ///
+    /// Every error a command produces today is an error; the field exists so
+    /// the JSON shape never has to change when warnings start surfacing here.
+    pub severity: String,
+    /// Source file the `line`/`column` refer to, when a span was resolved.
+    pub file: Option<String>,
+    /// 1-based line, present together with `column` when a span was resolved.
+    pub line: Option<usize>,
+    /// 1-based column.
+    pub column: Option<usize>,
+    /// Optional extra guidance shown alongside the error.
+    pub help: Option<String>,
 }
 
 impl CliError {
@@ -22,10 +40,53 @@ impl CliError {
         Self {
             code: code.into(),
             message: message.into(),
+            severity: "error".to_owned(),
+            file: None,
+            line: None,
+            column: None,
+            help: None,
         }
+    }
+
+    /// A CLI error from a compiler diagnostic, with its span resolved to a
+    /// 1-based line and column against `source`.
+    ///
+    /// The compiler reports a span but not which module raised it, so callers
+    /// pass the source the span belongs to. The position is exact for the file
+    /// it was resolved against.
+    pub fn from_diagnostic_at(diagnostic: Diagnostic, source: &SourceFile) -> Self {
+        let (line, column) = source.line_column(diagnostic.span.start);
+        Self {
+            code: diagnostic.code,
+            message: diagnostic.message,
+            severity: diagnostic.severity.as_str().to_owned(),
+            file: Some(source.name.clone()),
+            line: Some(line),
+            column: Some(column),
+            help: diagnostic.help,
+        }
+    }
+
+    /// This error as a machine-readable diagnostic object.
+    ///
+    /// The keys are always present — an unknown position is `null`, never a
+    /// missing key — so a consumer can parse `check --json` output without
+    /// probing for field existence.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "code": self.code,
+            "severity": self.severity,
+            "message": self.message,
+            "file": self.file,
+            "line": self.line,
+            "column": self.column,
+            "help": self.help,
+        })
     }
 }
 
+/// The human-readable form. Kept byte-for-byte stable for callers that render
+/// errors without `--json`.
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "error[{}]: {}", self.code, self.message)
@@ -39,6 +100,11 @@ impl From<crate::diagnostic::Diagnostic> for CliError {
         Self {
             code: d.code,
             message: d.message,
+            severity: d.severity.as_str().to_owned(),
+            file: None,
+            line: None,
+            column: None,
+            help: d.help,
         }
     }
 }
@@ -48,6 +114,11 @@ impl From<crate::pkg::PkgError> for CliError {
         Self {
             code: e.code.to_string(),
             message: e.message,
+            severity: "error".to_owned(),
+            file: None,
+            line: None,
+            column: None,
+            help: None,
         }
     }
 }
@@ -56,6 +127,29 @@ pub type CliResult<T> = Result<T, CliError>;
 
 fn err(code: &str, msg: impl Into<String>) -> CliError {
     CliError::new(code, msg)
+}
+
+/// Resolve a compile-time diagnostic against the file it was compiled from.
+///
+/// The compiler reports a span without the module that raised it, so the
+/// position is resolved against `path`, the file named for the command. For an
+/// error in that file — the common case — it is exact. A diagnostic raised
+/// inside an imported module carries a span into that module; the numbers then
+/// describe the same byte offset in `path` instead, which is the same
+/// single-buffer approximation the LSP layer (`nls.rs`) already makes.
+/// Threading module identity through diagnostics is a follow-up.
+fn located(diagnostic: Diagnostic, path: &Path, text: &str) -> CliError {
+    CliError::from_diagnostic_at(diagnostic, &SourceFile::new(path.display().to_string(), text))
+}
+
+/// Machine-readable diagnostics for `--json`: a JSON array of diagnostic
+/// objects, `[]` when there is nothing to report.
+///
+/// An array even for a single diagnostic leaves room for the multi-diagnostic
+/// reports a later phase will produce, so consumers only ever need one parser.
+pub fn json_diagnostics(errors: &[CliError]) -> String {
+    let items: Vec<serde_json::Value> = errors.iter().map(CliError::to_json).collect();
+    serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_owned())
 }
 
 // ── Command ───────────────────────────────────────────────────────────────────
@@ -1276,11 +1370,10 @@ fn require_project(dir: &Path, file: Option<&str>, command: &str) -> CliResult<P
 pub fn cmd_check(dir: &Path, file: Option<&str>) -> CliResult<Vec<String>> {
     let cfg = require_project(dir, file, "check")?;
     let path = resolve_file(dir, file, &cfg);
-    if fs::read_to_string(&path).is_err() {
-        return Err(err("NXL12006", format!("cannot read '{}'", path.display())));
-    }
+    let text = fs::read_to_string(&path)
+        .map_err(|_| err("NXL12006", format!("cannot read '{}'", path.display())))?;
     // Project-aware: resolves imports next to the entry file when present.
-    compile_in_project(dir, &path).map_err(CliError::from)?;
+    compile_in_project(dir, &path).map_err(|d| located(d, &path, &text))?;
     Ok(vec![format!("ok: {}", path.display())])
 }
 
@@ -1314,13 +1407,10 @@ pub fn cmd_lint(dir: &Path, file: Option<&str>) -> CliResult<Vec<String>> {
 pub fn cmd_build(dir: &Path, release: bool) -> CliResult<BuildResult> {
     let cfg = require_project(dir, None, "build")?;
     let entry = dir.join(&cfg.entry);
-    if fs::read_to_string(&entry).is_err() {
-        return Err(err(
-            "NXL12006",
-            format!("cannot read '{}'", entry.display()),
-        ));
-    }
-    let module = crate::project::compile_project(&entry).map_err(CliError::from)?;
+    let text = fs::read_to_string(&entry)
+        .map_err(|_| err("NXL12006", format!("cannot read '{}'", entry.display())))?;
+    let module =
+        crate::project::compile_project(&entry).map_err(|d| located(d, &entry, &text))?;
     let artifact = crate::backend::compile_js_module(&module).map_err(CliError::from)?;
     let profile = if release {
         BuildProfile::Release
@@ -1385,10 +1475,13 @@ pub fn cmd_run(dir: &Path, file: Option<&str>) -> CliResult<crate::runtime::Exec
 /// is consulted only when the VM cannot *compile* the module at all, so `run`
 /// still works without Node.js for the constructs the VM does not implement.
 fn execute_entry(dir: &Path, path: &Path) -> CliResult<crate::runtime::ExecutionResult> {
-    let module = compile_in_project(dir, path).map_err(CliError::from)?;
+    let text = fs::read_to_string(path).unwrap_or_default();
+    let module = compile_in_project(dir, path).map_err(|d| located(d, path, &text))?;
     match crate::vm::try_execute(&module) {
         Ok(vm_result) => Ok(runtime_result_from_vm(&vm_result)),
-        Err(crate::vm::VmFailure::Runtime(diagnostic)) => Err(CliError::from(diagnostic)),
+        Err(crate::vm::VmFailure::Runtime(diagnostic)) => {
+            Err(located(diagnostic, path, &text))
+        }
         Err(crate::vm::VmFailure::Unsupported(_)) => {
             crate::runtime::run_module(&module).map_err(CliError::from)
         }
