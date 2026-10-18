@@ -2129,7 +2129,9 @@ fn instruction_results(instruction: &Instruction) -> Vec<ValueId> {
             receiver_out,
             ..
         } => vec![*result, *receiver_out],
-        Instruction::MakeClosure { result, .. } | Instruction::CallIndirect { result, .. } => vec![*result],
+        Instruction::MakeClosure { result, .. } | Instruction::CallIndirect { result, .. } => {
+            vec![*result]
+        }
         Instruction::SpawnCall { result, .. }
         | Instruction::SpawnMethod { result, .. }
         | Instruction::CompleteTask { result, .. }
@@ -2215,7 +2217,9 @@ fn instruction_operands(instruction: &Instruction) -> Vec<ValueId> {
         Instruction::Unary { operand, .. } => vec![*operand],
         Instruction::Binary { left, right, .. } => vec![*left, *right],
         Instruction::Call { arguments, .. } => arguments.clone(),
-        Instruction::CallIndirect { callee, arguments, .. } => {
+        Instruction::CallIndirect {
+            callee, arguments, ..
+        } => {
             let mut operands = vec![*callee];
             operands.extend(arguments.iter().copied());
             operands
@@ -5675,7 +5679,11 @@ impl Lowerer {
                 let mut capture_ids = Vec::with_capacity(captured.len());
                 for name in &captured {
                     let value = self.lookup_value(name).ok_or_else(|| {
-                        Diagnostic::error("NXL2002", format!("use of undeclared name '{name}'"), function.span)
+                        Diagnostic::error(
+                            "NXL2002",
+                            format!("use of undeclared name '{name}'"),
+                            function.span,
+                        )
                     })?;
                     let result = self.allocate();
                     let ty = self.value_type(value);

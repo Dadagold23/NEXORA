@@ -130,8 +130,14 @@ fn session_locals_hold_values_before_the_print() {
         }
     };
     let locals = locals_of(&stop);
-    assert!(locals.contains(&("x".to_owned(), "1".to_owned())), "{locals:?}");
-    assert!(locals.contains(&("y".to_owned(), "2".to_owned())), "{locals:?}");
+    assert!(
+        locals.contains(&("x".to_owned(), "1".to_owned())),
+        "{locals:?}"
+    );
+    assert!(
+        locals.contains(&("y".to_owned(), "2".to_owned())),
+        "{locals:?}"
+    );
     // The pause is *before* the statement runs, so nothing is printed yet.
     assert!(stop.output.is_empty(), "{:?}", stop.output);
     assert_eq!(session.last().unwrap().statement, stop.statement);
@@ -195,7 +201,10 @@ fn session_step_over_stays_out_of_callees() {
     }
     // By the time line 6's print is about to run, the call has completed.
     let locals = locals_of(session.last().unwrap());
-    assert!(locals.contains(&("r".to_owned(), "3".to_owned())), "{locals:?}");
+    assert!(
+        locals.contains(&("r".to_owned(), "3".to_owned())),
+        "{locals:?}"
+    );
 }
 
 #[test]
@@ -217,8 +226,14 @@ fn session_step_into_shows_callee_locals_and_step_out_returns() {
     );
     assert_eq!(stop.frames.len(), 2, "main -> add: {stop:?}");
     let locals = locals_of(&stop);
-    assert!(locals.contains(&("a".to_owned(), "1".to_owned())), "{locals:?}");
-    assert!(locals.contains(&("b".to_owned(), "2".to_owned())), "{locals:?}");
+    assert!(
+        locals.contains(&("a".to_owned(), "1".to_owned())),
+        "{locals:?}"
+    );
+    assert!(
+        locals.contains(&("b".to_owned(), "2".to_owned())),
+        "{locals:?}"
+    );
     // Stepping out returns to the caller's frame.
     let out = session.step_out().unwrap();
     assert_eq!(out.frames.last().unwrap().function, "main");
@@ -272,7 +287,6 @@ fn local_names_survive_bytecode_roundtrip() {
     let sf = nxl_compiler::source::SourceFile::new("rt_names.nxl", SAMPLE);
     let module = nxl_compiler::compile_to_nir(&sf).unwrap();
     let program = nxl_compiler::vm::compile(&module).unwrap();
-    let restored =
-        nxl_compiler::vm::CompiledProgram::deserialize(&program.serialize()).unwrap();
+    let restored = nxl_compiler::vm::CompiledProgram::deserialize(&program.serialize()).unwrap();
     assert_eq!(restored, program, "debug info must survive serialization");
 }

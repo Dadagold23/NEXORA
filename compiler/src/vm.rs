@@ -598,7 +598,10 @@ fn serialize_opcode(buf: &mut Vec<u8>, op: &Opcode) {
             write_str(buf, method);
             buf.extend_from_slice(&argc.to_le_bytes());
         }
-        Opcode::MakeClosure { name, capture_count } => {
+        Opcode::MakeClosure {
+            name,
+            capture_count,
+        } => {
             buf.push(0x27);
             write_str(buf, name);
             buf.extend_from_slice(&capture_count.to_le_bytes());
@@ -707,7 +710,10 @@ fn deserialize_opcode(data: &[u8], cursor: &mut usize) -> Result<Opcode, String>
         0x27 => {
             let name = read_str(data, cursor)?;
             let capture_count = read_u32(data, cursor)?;
-            Ok(Opcode::MakeClosure { name, capture_count })
+            Ok(Opcode::MakeClosure {
+                name,
+                capture_count,
+            })
         }
         0x28 => {
             let argc = read_u32(data, cursor)?;
@@ -1038,7 +1044,12 @@ fn compile_instruction(
             }
         }
 
-        nir::Instruction::MakeClosure { result, callee, captures, .. } => {
+        nir::Instruction::MakeClosure {
+            result,
+            callee,
+            captures,
+            ..
+        } => {
             for cap in captures {
                 let s = *value_slots.get(cap).unwrap_or(&0);
                 chunk.emit(Opcode::LoadLocal(s));
@@ -1051,7 +1062,13 @@ fn compile_instruction(
             chunk.emit(Opcode::StoreLocal(slot));
         }
 
-        nir::Instruction::CallIndirect { result, callee, arguments, return_type, .. } => {
+        nir::Instruction::CallIndirect {
+            result,
+            callee,
+            arguments,
+            return_type,
+            ..
+        } => {
             for arg in arguments {
                 let s = *value_slots.get(arg).unwrap_or(&0);
                 chunk.emit(Opcode::LoadLocal(s));
@@ -2474,14 +2491,19 @@ impl Vm {
                     }
                 }
 
-                Opcode::MakeClosure { name, capture_count } => {
+                Opcode::MakeClosure {
+                    name,
+                    capture_count,
+                } => {
                     let mut captures = Vec::with_capacity(capture_count as usize);
                     for _ in 0..capture_count {
                         captures.push(self.stack.pop().unwrap_or(Value::Unit));
                     }
                     captures.reverse();
-                    self.stack
-                        .push(Value::Closure { name: name.clone(), captures });
+                    self.stack.push(Value::Closure {
+                        name: name.clone(),
+                        captures,
+                    });
                 }
 
                 Opcode::CallIndirect { argc } => {
@@ -2966,8 +2988,7 @@ impl Vm {
                                 || breakpoint_hit);
                         self.statements += 1;
                         if stop {
-                            let snapshot =
-                                self.capture_stop(statement, line, breakpoint_hit);
+                            let snapshot = self.capture_stop(statement, line, breakpoint_hit);
                             self.stop = Some(snapshot);
                             return Err(VmFault::DebugStop);
                         }

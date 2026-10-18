@@ -265,7 +265,9 @@ impl DebugSession {
     /// First statement ordinal the next command may stop at: everything
     /// below it has already been visited (breakpoint hits included).
     fn boundary(&self) -> u64 {
-        self.position.map(|(statement, _)| statement + 1).unwrap_or(0)
+        self.position
+            .map(|(statement, _)| statement + 1)
+            .unwrap_or(0)
     }
 
     fn base_policy(&self, skip_before_statement: u64) -> vm::StepPolicy {

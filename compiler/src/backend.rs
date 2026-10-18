@@ -684,7 +684,12 @@ impl<'m> JsBackend<'m> {
                     self.line(&format!("let {v} = {call};"));
                 }
             }
-            Instruction::MakeClosure { result, callee, captures, .. } => {
+            Instruction::MakeClosure {
+                result,
+                callee,
+                captures,
+                ..
+            } => {
                 let v = self.var(*result);
                 if captures.is_empty() {
                     self.line(&format!("let {v} = {callee};"));
@@ -697,7 +702,13 @@ impl<'m> JsBackend<'m> {
                     ));
                 }
             }
-            Instruction::CallIndirect { result, callee, arguments, return_type, .. } => {
+            Instruction::CallIndirect {
+                result,
+                callee,
+                arguments,
+                return_type,
+                ..
+            } => {
                 let args: Vec<String> = arguments.iter().map(|a| self.var(*a)).collect();
                 let c = self.var(*callee);
                 let call = format!("{c}({})", args.join(", "));

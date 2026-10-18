@@ -1313,10 +1313,7 @@ fn vm_closure_result_can_be_bound_and_reused() {
 #[test]
 fn calling_a_non_callable_value_is_a_catchable_runtime_error() {
     // `let n = 5; n(1)` must be a runtime error, not a crash/panic.
-    let source = SourceFile::new(
-        "not_callable.nxl",
-        "fn main() { let n = 5; print(n(1)); }",
-    );
+    let source = SourceFile::new("not_callable.nxl", "fn main() { let n = 5; print(n(1)); }");
     let result = vm_run(&source);
     match result {
         Ok(_) => panic!("calling an Int must not succeed"),
@@ -2365,8 +2362,14 @@ mod cli_tests {
             }
         );
         assert_eq!(
-            parse_args(&args(&["debug", "main.nxl", "--inspect", "--steps=4", "--break=2"]))
-                .unwrap(),
+            parse_args(&args(&[
+                "debug",
+                "main.nxl",
+                "--inspect",
+                "--steps=4",
+                "--break=2"
+            ]))
+            .unwrap(),
             Command::Debug {
                 file: "main.nxl".into(),
                 breakpoints: vec![2],
@@ -2617,8 +2620,8 @@ mod cli_tests {
     #[test]
     fn cli_json_diagnostics_clean_is_empty_array() {
         let rendered = json_diagnostics(&[]);
-        let parsed: serde_json::Value = serde_json::from_str(&rendered)
-            .expect("a clean check must still be valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&rendered).expect("a clean check must still be valid JSON");
         assert!(parsed.as_array().expect("an array").is_empty());
     }
 

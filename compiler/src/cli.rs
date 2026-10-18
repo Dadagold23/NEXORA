@@ -139,7 +139,10 @@ fn err(code: &str, msg: impl Into<String>) -> CliError {
 /// single-buffer approximation the LSP layer (`nls.rs`) already makes.
 /// Threading module identity through diagnostics is a follow-up.
 fn located(diagnostic: Diagnostic, path: &Path, text: &str) -> CliError {
-    CliError::from_diagnostic_at(diagnostic, &SourceFile::new(path.display().to_string(), text))
+    CliError::from_diagnostic_at(
+        diagnostic,
+        &SourceFile::new(path.display().to_string(), text),
+    )
 }
 
 /// Machine-readable diagnostics for `--json`: a JSON array of diagnostic
@@ -1445,8 +1448,7 @@ pub fn cmd_build(dir: &Path, release: bool) -> CliResult<BuildResult> {
     let entry = dir.join(&cfg.entry);
     let text = fs::read_to_string(&entry)
         .map_err(|_| err("NXL12006", format!("cannot read '{}'", entry.display())))?;
-    let module =
-        crate::project::compile_project(&entry).map_err(|d| located(d, &entry, &text))?;
+    let module = crate::project::compile_project(&entry).map_err(|d| located(d, &entry, &text))?;
     let artifact = crate::backend::compile_js_module(&module).map_err(CliError::from)?;
     let profile = if release {
         BuildProfile::Release
@@ -1515,9 +1517,7 @@ fn execute_entry(dir: &Path, path: &Path) -> CliResult<crate::runtime::Execution
     let module = compile_in_project(dir, path).map_err(|d| located(d, path, &text))?;
     match crate::vm::try_execute(&module) {
         Ok(vm_result) => Ok(runtime_result_from_vm(&vm_result)),
-        Err(crate::vm::VmFailure::Runtime(diagnostic)) => {
-            Err(located(diagnostic, path, &text))
-        }
+        Err(crate::vm::VmFailure::Runtime(diagnostic)) => Err(located(diagnostic, path, &text)),
         Err(crate::vm::VmFailure::Unsupported(_)) => {
             crate::runtime::run_module(&module).map_err(CliError::from)
         }
@@ -1626,7 +1626,10 @@ pub fn cmd_debug(file: &str, breakpoints: &[usize], inspect: bool, steps: Option
     let mut session = match crate::debugger::DebugSession::new(&text, breakpoints) {
         Ok(session) => session,
         Err(diagnostic) => {
-            return format!("nxl debug --inspect\n  compile error: {}\n", diagnostic.message);
+            return format!(
+                "nxl debug --inspect\n  compile error: {}\n",
+                diagnostic.message
+            );
         }
     };
     let mut out = String::from("nxl debug --inspect\n");
