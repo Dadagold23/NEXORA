@@ -1749,8 +1749,8 @@ fn concurrency_error_converts_to_diagnostic() {
 #[cfg(test)]
 mod stdlib_tests {
     use nxl_compiler::stdlib::{
-        all_modules, json, math, strings, testing, time, NxlList, NxlMap, NxlValue, Rng,
-        StdlibModule,
+        all_modules, call_builtin, crypto, json, math, strings, testing, time, NxlList, NxlMap,
+        NxlValue, Rng, StdlibModule,
     };
 
     // ── NxlList ───────────────────────────────────────────────────────────────
@@ -2043,14 +2043,93 @@ mod stdlib_tests {
     fn stdlib_module_implemented_flag() {
         assert!(StdlibModule::Math.is_implemented());
         assert!(!StdlibModule::Http.is_implemented());
-        assert!(!StdlibModule::Crypto.is_implemented());
+        assert!(StdlibModule::Crypto.is_implemented());
+        assert!(!StdlibModule::Networking.is_implemented());
     }
 
     #[test]
     fn stdlib_all_modules_count() {
         let modules = all_modules();
-        assert_eq!(modules.len(), 12);
+        assert_eq!(modules.len(), 13);
         assert!(modules.iter().all(|m| m.is_implemented()));
+    }
+
+    // ── crypto ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn stdlib_crypto_sha256_known_vectors() {
+        // NIST/FIPS-180 known SHA-256 digests.
+        assert_eq!(
+            crypto::sha256_hex(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            crypto::sha256_hex("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            crypto::sha256_hex("The quick brown fox jumps over the lazy dog"),
+            "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592"
+        );
+    }
+
+    #[test]
+    fn stdlib_crypto_hex_roundtrip_and_multibyte() {
+        assert_eq!(crypto::hex_encode("abc"), "616263");
+        assert_eq!(crypto::hex_decode("616263").unwrap(), "abc");
+        // Hex operates on UTF-8 bytes, so multi-byte characters survive.
+        assert_eq!(crypto::hex_encode("héllo"), "68c3a96c6c6f");
+        assert_eq!(crypto::hex_decode("68c3a96c6c6f").unwrap(), "héllo");
+    }
+
+    #[test]
+    fn stdlib_crypto_hex_decode_errors() {
+        assert!(crypto::hex_decode("abc").is_err()); // odd length
+        assert!(crypto::hex_decode("zz").is_err()); // invalid character
+    }
+
+    #[test]
+    fn stdlib_crypto_base64_known_vectors() {
+        assert_eq!(crypto::base64_encode(""), "");
+        assert_eq!(crypto::base64_encode("f"), "Zg==");
+        assert_eq!(crypto::base64_encode("fo"), "Zm8=");
+        assert_eq!(crypto::base64_encode("foo"), "Zm9v");
+        assert_eq!(crypto::base64_encode("foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn stdlib_crypto_base64_roundtrip_and_multibyte() {
+        for sample in ["", "a", "ab", "abc", "héllo wörld", " nx "] {
+            let encoded = crypto::base64_encode(sample);
+            assert_eq!(crypto::base64_decode(&encoded).unwrap(), sample);
+        }
+    }
+
+    #[test]
+    fn stdlib_crypto_base64_decode_errors() {
+        assert!(crypto::base64_decode("abc").is_err()); // bad length
+        assert!(crypto::base64_decode("a===").is_err()); // padding in first two
+        assert!(crypto::base64_decode("ab=c").is_err()); // interior pad
+    }
+
+    #[test]
+    fn stdlib_crypto_dispatch_through_call_builtin() {
+        let out = call_builtin(
+            "std::crypto::sha256_hex",
+            &[NxlValue::Str("abc".to_owned())],
+        )
+        .expect("sha256 dispatch");
+        assert_eq!(
+            out,
+            NxlValue::Str(
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_owned()
+            )
+        );
+        let bad = call_builtin(
+            "std::crypto::hex_decode",
+            &[NxlValue::Str("abc".to_owned())],
+        );
+        assert!(bad.is_err(), "decode failure must surface as an error");
     }
 
     // ── testing helpers ───────────────────────────────────────────────────────

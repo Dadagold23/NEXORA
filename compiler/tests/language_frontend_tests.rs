@@ -1782,6 +1782,65 @@ fn stdlib_int_arguments_promote_to_float() {
 }
 
 #[test]
+fn stdlib_crypto_runs_identically_on_vm_and_js() {
+    // Every crypto function is mirrored in the JS dispatcher. If the pure-JS
+    // SHA-256/hex/base64 differed from the VM's Rust implementation by a single
+    // byte, the digests below would diverge and this parity test would fail.
+    assert_js_parity(
+        "import std.crypto;\n\
+         print(std.crypto.sha256_hex(\"\"));\n\
+         print(std.crypto.sha256_hex(\"abc\"));\n\
+         print(std.crypto.hex_encode(\"nxl\"));\n\
+         print(std.crypto.hex_decode(\"6e786c\"));\n\
+         print(std.crypto.base64_encode(\"foobar\"));\n\
+         print(std.crypto.base64_decode(\"Zm9vYmFy\"));\n",
+        &[
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "6e786c",
+            "nxl",
+            "Zm9vYmFy",
+            "foobar",
+        ],
+        "stdlib_crypto_parity.nxl",
+    );
+}
+
+#[test]
+fn stdlib_crypto_multibyte_operates_on_utf8_bytes() {
+    // Multi-byte characters are hashed/encoded as their UTF-8 bytes on both
+    // runtimes, so a string with an accent round-trips identically.
+    assert_js_parity(
+        "import std.crypto;\n\
+         print(std.crypto.hex_encode(\"héllo\"));\n\
+         print(std.crypto.hex_decode(\"68c3a96c6c6f\"));\n\
+         print(std.crypto.sha256_hex(\"héllo\"));\n",
+        &[
+            "68c3a96c6c6f",
+            "héllo",
+            "3c48591d8d098a4538f5e013dfcf406e948eac4d3277b10bf614e295d6068179",
+        ],
+        "stdlib_crypto_utf8.nxl",
+    );
+}
+
+#[test]
+fn stdlib_crypto_selected_import_and_from_std() {
+    // Crypto is importable both as a whole module and via selected imports,
+    // exactly like strings/math.
+    assert_js_parity(
+        "from std.crypto import sha256_hex, base64_encode;\n\
+         print(sha256_hex(\"abc\"));\n\
+         print(base64_encode(\"foo\"));\n",
+        &[
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "Zm9v",
+        ],
+        "stdlib_crypto_import.nxl",
+    );
+}
+
+#[test]
 fn stdlib_wrong_arity_is_a_compile_error() {
     let source = SourceFile::new(
         "stdlib_arity.nxl",

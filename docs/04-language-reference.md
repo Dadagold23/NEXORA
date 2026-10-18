@@ -133,7 +133,7 @@ The VM stays authoritative; the JavaScript backend now emits real control flow, 
 
 Rust target (`compile_native`): `throw` becomes a panic carrying the rendered message, and `try`/`catch`/`finally` emit `catch_unwind` with a `finally` block that runs on both paths (an uncaught error still propagates). Generated Rust is compiled and executed by the test suite when `rustc` is available. Everything else - branching, loops, `for ... in`, composites, methods, match patterns, concurrency, `catch e: Type`, and standard-library calls - is refused with NXL2007 and a pointer to a working target instead of silently dropping code.
 
-## Standard library (`std.strings`, `std.math`)
+## Standard library (`std.strings`, `std.math`, `std.crypto`)
 
 Implemented in `stdlib.rs`, resolved by `nir.rs` (`lower_builtin_call`),
 executed by `vm.rs`, and mirrored by the JavaScript backend; tested in
@@ -151,6 +151,13 @@ VM and on emitted Node.js and require identical output).
   `log2`, `log10`, `floor`, `ceil`, `round` (half away from zero), `trunc`,
   `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `pow_float`,
   `to_radians`, `to_degrees`, `is_nan`, `is_infinite`, `is_finite`.
+- `std.crypto` (5 functions, all `Str` -> `Str`): `sha256_hex`,
+  `hex_encode`, `hex_decode`, `base64_encode`, `base64_decode`. Every
+  function operates on the UTF-8 *bytes* of its input, so multi-byte
+  characters hash and encode identically on both runtimes. `sha256_hex`
+  uses the vetted `sha2` crate; hex and base64 are plain encodings. The
+  `*_decode` functions return a catchable error on malformed input or
+  bytes that are not valid UTF-8.
 - Calling convention: arity is checked at compile time (a wrong count is
   NXL2002); argument *types* are checked at run time, so a mismatch is a
   catchable error rather than a compile failure. `Int` promotes to `Float`
@@ -159,6 +166,7 @@ VM and on emitted Node.js and require identical output).
   away from zero, `substring` uses character indices, and `replace` replaces
   every occurrence.
 - Not yet available (importing them fails loudly with NXL2002 rather than
-  resolving to a stub): the other `std` modules - `json`, `collections`,
-  `env`, `process`, `fs`, `time`, `random`, `testing`, and so on. The Rust
+  resolving to a stub): `http` and `networking`. The other `std` modules -
+  `json`, `collections`, `env`, `process`, `fs`, `time`, `random`, `testing`,
+  and so on - are internal Rust APIs not yet exposed as builtins. The Rust
   target rejects standard-library calls with NXL2007.

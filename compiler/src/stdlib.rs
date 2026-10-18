@@ -17,7 +17,7 @@
 /// | testing       | IMPLEMENTED   |
 /// | fs            | IMPLEMENTED   |
 /// | http          | NOT IMPLEMENTED (P15+) |
-/// | crypto        | NOT IMPLEMENTED (P16+) |
+/// | crypto        | IMPLEMENTED   |
 /// | networking    | NOT IMPLEMENTED (P15+) |
 use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1078,6 +1078,171 @@ pub mod testing {
     }
 }
 
+// ── crypto ────────────────────────────────────────────────────────────────────
+
+/// Cryptographic hashing and byte-level encodings.
+///
+/// SHA-256 uses the vetted `sha2` crate rather than a hand-written
+/// implementation. Hex and base64 are plain encodings, not cryptographic
+/// primitives, so they are implemented directly. Every function operates on
+/// the UTF-8 bytes of its input and is mirrored byte-for-byte by the
+/// JavaScript backend so the VM and Node agree.
+pub mod crypto {
+    use super::{StdResult, StdlibError};
+    use sha2::{Digest, Sha256};
+
+    const B64_ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    /// Lowercase hex encoding of the UTF-8 bytes of `s`.
+    pub fn hex_encode(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() * 2);
+        for byte in s.as_bytes() {
+            out.push_str(&format!("{byte:02x}"));
+        }
+        out
+    }
+
+    /// Decode a hex string back into the UTF-8 text it encodes. Errors on an
+    /// odd length, a non-hex character, or bytes that are not valid UTF-8.
+    pub fn hex_decode(s: &str) -> StdResult<String> {
+        if s.len() % 2 != 0 {
+            return Err(StdlibError::new(
+                "NXL11009",
+                "hex string has an odd length".to_owned(),
+            ));
+        }
+        let bytes = s.as_bytes();
+        let mut out = Vec::with_capacity(s.len() / 2);
+        for pair in bytes.chunks(2) {
+            let hi = hex_val(pair[0]).ok_or_else(|| {
+                StdlibError::new(
+                    "NXL11009",
+                    format!("invalid hex character '{}'", pair[0] as char),
+                )
+            })?;
+            let lo = hex_val(pair[1]).ok_or_else(|| {
+                StdlibError::new(
+                    "NXL11009",
+                    format!("invalid hex character '{}'", pair[1] as char),
+                )
+            })?;
+            out.push((hi << 4) | lo);
+        }
+        String::from_utf8(out).map_err(|_| {
+            StdlibError::new(
+                "NXL11009",
+                "hex string does not decode to valid UTF-8".to_owned(),
+            )
+        })
+    }
+
+    fn hex_val(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    /// Standard base64 (with padding) of the UTF-8 bytes of `s`.
+    pub fn base64_encode(s: &str) -> String {
+        let bytes = s.as_bytes();
+        let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+        for chunk in bytes.chunks(3) {
+            let b0 = chunk[0] as u32;
+            let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+            let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+            let triple = (b0 << 16) | (b1 << 8) | b2;
+            out.push(B64_ALPHABET[(triple >> 18 & 0x3F) as usize] as char);
+            out.push(B64_ALPHABET[(triple >> 12 & 0x3F) as usize] as char);
+            out.push(if chunk.len() > 1 {
+                B64_ALPHABET[(triple >> 6 & 0x3F) as usize] as char
+            } else {
+                '='
+            });
+            out.push(if chunk.len() > 2 {
+                B64_ALPHABET[(triple & 0x3F) as usize] as char
+            } else {
+                '='
+            });
+        }
+        out
+    }
+
+    /// Decode standard base64 back into the UTF-8 text it encodes. Errors on
+    /// invalid base64 or bytes that are not valid UTF-8.
+    pub fn base64_decode(s: &str) -> StdResult<String> {
+        if s.len() % 4 != 0 {
+            return Err(StdlibError::new(
+                "NXL11009",
+                "base64 string length must be a multiple of 4".to_owned(),
+            ));
+        }
+        let mut out = Vec::with_capacity(s.len() / 4 * 3);
+        for chunk in s.as_bytes().chunks(4) {
+            // '=' may only appear as one or two trailing characters, never in
+            // the first two positions of a block.
+            let first_pad = chunk.iter().position(|&b| b == b'=');
+            let pad = first_pad.map_or(0, |i| 4 - i);
+            if pad > 2 {
+                return Err(StdlibError::new(
+                    "NXL11009",
+                    "invalid base64 padding".to_owned(),
+                ));
+            }
+            if let Some(i) = first_pad {
+                if chunk[i..].iter().any(|&b| b != b'=') {
+                    return Err(StdlibError::new(
+                        "NXL11009",
+                        "invalid base64 padding".to_owned(),
+                    ));
+                }
+            }
+            let mut acc: u32 = 0;
+            for &b in chunk.iter() {
+                let val = if b == b'=' {
+                    0
+                } else {
+                    B64_ALPHABET.iter().position(|&c| c == b).ok_or_else(|| {
+                        StdlibError::new(
+                            "NXL11009",
+                            format!("invalid base64 character '{}'", b as char),
+                        )
+                    })? as u32
+                };
+                acc = (acc << 6) | val;
+            }
+            out.push((acc >> 16) as u8);
+            if pad < 2 {
+                out.push((acc >> 8) as u8);
+            }
+            if pad < 1 {
+                out.push(acc as u8);
+            }
+        }
+        String::from_utf8(out).map_err(|_| {
+            StdlibError::new(
+                "NXL11009",
+                "base64 string does not decode to valid UTF-8".to_owned(),
+            )
+        })
+    }
+
+    /// Lowercase hex SHA-256 digest of the UTF-8 bytes of `s`.
+    pub fn sha256_hex(s: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(s.as_bytes());
+        let digest = hasher.finalize();
+        let mut out = String::with_capacity(64);
+        for byte in digest {
+            out.push_str(&format!("{byte:02x}"));
+        }
+        out
+    }
+}
+
 // ── StdlibModule registry ─────────────────────────────────────────────────────
 
 /// Registry of all available stdlib modules.
@@ -1099,7 +1264,8 @@ pub enum StdlibModule {
     Testing,
     /// Planned — not yet implemented.
     Http,
-    /// Planned — not yet implemented.
+    /// Cryptographic hashing and byte encodings (`sha256_hex`, `hex_*`,
+    /// `base64_*`).
     Crypto,
     /// Planned — not yet implemented.
     Networking,
@@ -1130,7 +1296,7 @@ impl StdlibModule {
 
     /// Returns true if this module is fully implemented in this phase.
     pub fn is_implemented(&self) -> bool {
-        !matches!(self, Self::Http | Self::Crypto | Self::Networking)
+        !matches!(self, Self::Http | Self::Networking)
     }
 
     pub fn name(&self) -> &'static str {
@@ -1169,6 +1335,7 @@ pub fn all_modules() -> Vec<StdlibModule> {
         StdlibModule::Time,
         StdlibModule::Fs,
         StdlibModule::Testing,
+        StdlibModule::Crypto,
     ]
 }
 
@@ -1422,6 +1589,32 @@ static STDLIB_BUILTINS: &[BuiltinSpec] = &[
         params: &[F],
         ret: B,
     },
+    // std::crypto — UTF-8 byte hashing and encodings, all Str -> Str.
+    BuiltinSpec {
+        name: "std::crypto::sha256_hex",
+        params: &[S],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::crypto::hex_encode",
+        params: &[S],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::crypto::hex_decode",
+        params: &[S],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::crypto::base64_encode",
+        params: &[S],
+        ret: S,
+    },
+    BuiltinSpec {
+        name: "std::crypto::base64_decode",
+        params: &[S],
+        ret: S,
+    },
 ];
 
 /// Look up a stdlib builtin by its fully qualified name.
@@ -1431,7 +1624,7 @@ pub fn builtin(name: &str) -> Option<&'static BuiltinSpec> {
 
 /// The canonical `std::<module>` prefix for a module name, accepting both the
 /// qualified (`std::math`) and short (`math`) spellings. `None` for modules
-/// that are not implemented yet (http/crypto/networking) or unknown.
+/// that are not implemented yet (http/networking) or unknown.
 pub fn canonical_module(name: &str) -> Option<&'static str> {
     StdlibModule::from_name(name)
         .filter(|module| module.is_implemented())
@@ -1591,6 +1784,12 @@ pub fn call_builtin(name: &str, args: &[NxlValue]) -> StdResult<NxlValue> {
         "std::math::is_nan" => Ok(NxlValue::Bool(math::is_nan(as_float(&args[0])?))),
         "std::math::is_infinite" => Ok(NxlValue::Bool(math::is_infinite(as_float(&args[0])?))),
         "std::math::is_finite" => Ok(NxlValue::Bool(math::is_finite(as_float(&args[0])?))),
+
+        "std::crypto::sha256_hex" => Ok(NxlValue::Str(crypto::sha256_hex(as_str(&args[0])?))),
+        "std::crypto::hex_encode" => Ok(NxlValue::Str(crypto::hex_encode(as_str(&args[0])?))),
+        "std::crypto::hex_decode" => crypto::hex_decode(as_str(&args[0])?).map(NxlValue::Str),
+        "std::crypto::base64_encode" => Ok(NxlValue::Str(crypto::base64_encode(as_str(&args[0])?))),
+        "std::crypto::base64_decode" => crypto::base64_decode(as_str(&args[0])?).map(NxlValue::Str),
 
         _ => Err(StdlibError::new(
             "NXL11010",
