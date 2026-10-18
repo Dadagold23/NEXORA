@@ -559,8 +559,13 @@ async fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Debug { file, breakpoints } => {
-            println!("{}", cmd_debug(&file, &breakpoints));
+        Command::Debug {
+            file,
+            breakpoints,
+            inspect,
+            steps,
+        } => {
+            println!("{}", cmd_debug(&file, &breakpoints, inspect, steps));
             ExitCode::SUCCESS
         }
         Command::Docs => {

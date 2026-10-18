@@ -15,7 +15,7 @@
 /// | Debug information   | IMPLEMENTED               |
 /// | Serialization       | IMPLEMENTED               |
 /// | VM execution        | IMPLEMENTED               |
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -29,7 +29,8 @@ use crate::source::{SourceFile, Span};
 // ── Bytecode format version ───────────────────────────────────────────────────
 
 pub const BYTECODE_MAGIC: u32 = 0x4E584C42; // "NXLB"
-pub const BYTECODE_VERSION: u16 = 1;
+/// v2 adds the per-chunk local-name debug table (P21 debugger variables).
+pub const BYTECODE_VERSION: u16 = 2;
 
 // ── Constant pool ─────────────────────────────────────────────────────────────
 
@@ -183,6 +184,9 @@ enum VmFault {
     Throw(Value),
     /// Corrupt bytecode or a violated VM invariant; never caught.
     Fatal(String),
+    /// A stepping session's stop condition fired; never catchable by
+    /// user code. The VM captures a `StepStop` snapshot before raising it.
+    DebugStop,
 }
 
 impl From<String> for VmFault {
@@ -249,6 +253,10 @@ pub struct Chunk {
     pub pool: ConstantPool,
     /// Source name for debug info.
     pub source_name: String,
+    /// Debug info for the debugger: local slot → source-level name
+    /// (parameters, `let` bindings, catch bindings). Compiler temporaries
+    /// are intentionally unnamed and absent.
+    pub local_names: Vec<(u32, String)>,
 }
 
 impl Chunk {
@@ -260,6 +268,7 @@ impl Chunk {
             code: Vec::new(),
             pool: ConstantPool::new(),
             source_name,
+            local_names: Vec::new(),
         }
     }
 
@@ -393,6 +402,12 @@ fn serialize_chunk(buf: &mut Vec<u8>, chunk: &Chunk) {
     for op in &chunk.code {
         serialize_opcode(buf, op);
     }
+    // Local-name debug table (v2): slot → name pairs.
+    buf.extend_from_slice(&(chunk.local_names.len() as u32).to_le_bytes());
+    for (slot, name) in &chunk.local_names {
+        buf.extend_from_slice(&slot.to_le_bytes());
+        write_str(buf, name);
+    }
 }
 
 fn deserialize_chunk(data: &[u8], cursor: &mut usize) -> Result<Chunk, String> {
@@ -410,6 +425,13 @@ fn deserialize_chunk(data: &[u8], cursor: &mut usize) -> Result<Chunk, String> {
     for _ in 0..code_len {
         code.push(deserialize_opcode(data, cursor)?);
     }
+    let local_names_len = read_u32(data, cursor)? as usize;
+    let mut local_names = Vec::with_capacity(local_names_len);
+    for _ in 0..local_names_len {
+        let slot = read_u32(data, cursor)?;
+        let name = read_str(data, cursor)?;
+        local_names.push((slot, name));
+    }
     Ok(Chunk {
         name,
         arity,
@@ -417,6 +439,7 @@ fn deserialize_chunk(data: &[u8], cursor: &mut usize) -> Result<Chunk, String> {
         code,
         pool,
         source_name,
+        local_names,
     })
 }
 
@@ -873,6 +896,16 @@ fn compile_function(
     }
     // Nested regions may have allocated extra slots after the pre-pass.
     chunk.local_count = chunk.local_count.max(next_slot);
+
+    // Debug info for the debugger: invert the name→slot map into a
+    // slot→name table, sorted by slot so compiled output stays
+    // byte-for-byte deterministic regardless of hash-map iteration order.
+    let mut local_names: Vec<(u32, String)> = name_slots
+        .into_iter()
+        .map(|(name, slot)| (slot, name))
+        .collect();
+    local_names.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    chunk.local_names = local_names;
 
     Ok(chunk)
 }
@@ -2006,12 +2039,16 @@ impl fmt::Display for Value {
 // ── Call frame ────────────────────────────────────────────────────────────────
 
 struct Frame {
-    /// Name of the function being executed (for diagnostics).
-    _name: String,
+    /// Name of the function being executed (diagnostics + debugger).
+    name: String,
     /// Instruction pointer within the chunk's code.
     ip: usize,
     /// Local variable slots.
     locals: Vec<Value>,
+    /// Span of the last statement entered in this frame (debugger).
+    last_span: Option<Span>,
+    /// Slot → name debug table for this frame's chunk (debugger).
+    local_names: Vec<(u32, String)>,
 }
 
 impl Frame {
@@ -2023,10 +2060,26 @@ impl Frame {
             }
         }
         Self {
-            _name: name.to_owned(),
+            name,
             ip: 0,
             locals,
+            last_span: None,
+            local_names: Vec::new(),
         }
+    }
+
+    /// This frame's locals with a source-level name, in slot order — what
+    /// the debugger's variables view shows. Compiler temporaries (slots
+    /// without a name in the chunk's debug table) are excluded.
+    fn named_locals(&self) -> Vec<(&str, &Value)> {
+        self.local_names
+            .iter()
+            .filter_map(|(slot, name)| {
+                self.locals
+                    .get(*slot as usize)
+                    .map(|value| (name.as_str(), value))
+            })
+            .collect()
     }
 }
 
@@ -2071,6 +2124,13 @@ pub struct Vm {
     /// Tasks spawned by this VM (plus descendants it reaps), joined when
     /// the entry point returns so no work is silently lost.
     spawned: Vec<TaskShared>,
+    /// Stepping policy for a debugging session; `None` runs to completion.
+    step: Option<StepPolicy>,
+    /// Set when a stepping stop fired, before `VmFault::DebugStop`
+    /// propagates out of `run_stepping`.
+    stop: Option<StepStop>,
+    /// Statements executed this run (stepping sessions only).
+    statements: u64,
 }
 
 impl Vm {
@@ -2083,6 +2143,9 @@ impl Vm {
             output,
             debug_spans: Vec::new(),
             spawned: Vec::new(),
+            step: None,
+            stop: None,
+            statements: 0,
         }
     }
 
@@ -2191,7 +2254,8 @@ impl Vm {
             ))));
         }
 
-        let frame = Frame::new(name.to_owned(), chunk.local_count, args);
+        let mut frame = Frame::new(name.to_owned(), chunk.local_count, args);
+        frame.local_names = chunk.local_names.clone();
         self.frames.push(frame);
 
         let result = self.execute_chunk(&chunk);
@@ -2286,6 +2350,10 @@ impl Vm {
                     .map_err(|fault| match fault {
                         VmFault::Throw(value) => format!("task failed: {value}"),
                         VmFault::Fatal(message) => message,
+                        // Worker VMs never carry a stepping policy.
+                        VmFault::DebugStop => {
+                            "internal error: debugger stop in task worker".to_owned()
+                        }
                     });
                 worker.complete(outcome);
             });
@@ -2872,6 +2940,38 @@ impl Vm {
                 }
 
                 Opcode::DebugSpan(s) => {
+                    // A stepping session stops *before* the statement at
+                    // this span executes, so the snapshot shows the state
+                    // that is about to run it (locals, call stack, output).
+                    if self.step.is_some() {
+                        if let Some(frame) = self.frames.get_mut(frame_idx) {
+                            frame.last_span = Some(s);
+                        }
+                        let policy = self.step.as_ref().unwrap();
+                        let line = policy.line_of(s.start);
+                        let statement = self.statements;
+                        let depth = self.frames.len();
+                        let breakpoint_hit = policy.breakpoints.contains(&line);
+                        // Statements below the skip bound were already
+                        // visited by this session; replaying past them
+                        // must not stop again (breakpoint hits included).
+                        let visited = policy
+                            .skip_before_statement
+                            .is_some_and(|boundary| statement < boundary);
+                        let stop = !visited
+                            && (policy.stop_at_statement == Some(statement)
+                                || policy
+                                    .max_frame_depth
+                                    .is_some_and(|max_depth| depth <= max_depth)
+                                || breakpoint_hit);
+                        self.statements += 1;
+                        if stop {
+                            let snapshot =
+                                self.capture_stop(statement, line, breakpoint_hit);
+                            self.stop = Some(snapshot);
+                            return Err(VmFault::DebugStop);
+                        }
+                    }
                     self.debug_spans.push(s);
                 }
             }
@@ -3165,11 +3265,171 @@ pub fn execute_program(program: &CompiledProgram) -> Result<VmResult, Diagnostic
             Span::default(),
         ),
         VmFault::Fatal(message) => Diagnostic::error("NXL9001", message, Span::default()),
+        // Only `run_stepping` arms a policy; a normal run cannot stop.
+        VmFault::DebugStop => Diagnostic::error(
+            "NXL9001",
+            "internal error: debugger stop outside a stepping session",
+            Span::default(),
+        ),
     })?;
     // Joined tasks are done writing (leaked threads on error paths may
     // still hold the Arc, so clone under the lock instead of unwrapping).
     let output = output.lock().map(|guard| guard.clone()).unwrap_or_default();
     Ok(VmResult::with_spans(output, return_value, vm.debug_spans))
+}
+
+/// Execute a pre-compiled program under a stepping policy until the next
+/// stop or the end of the program. A fresh VM is created per call: stepping
+/// sessions replay the program from the start on every command.
+pub fn execute_program_step(program: &CompiledProgram, policy: StepPolicy) -> StepOutcome {
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let mut vm = Vm::with_output(Arc::new(program.clone()), Arc::clone(&output));
+    vm.run_stepping(policy)
+}
+
+// ── Stepping (P21 debugger sessions) ──────────────────────────────────────────
+
+/// Where a stepping session should stop next.
+///
+/// The session re-runs the compiled program from the start on each command
+/// (deterministic replay), so a policy refers to absolute positions: the
+/// statement ordinal counts `DebugSpan` events from the beginning of the
+/// run, and `skip_before_statement` marks the prefix the session has
+/// already visited so replays cannot stop there twice.
+#[derive(Clone, Debug, Default)]
+pub struct StepPolicy {
+    /// Entry-file text; spans are resolved against it (the same
+    /// single-buffer approximation the LSP layer and CLI diagnostics make).
+    pub text: String,
+    /// 1-based source lines that stop the run when reached.
+    pub breakpoints: BTreeSet<usize>,
+    /// Statement ordinals strictly below this bound are re-executed
+    /// without ever stopping: the session has already visited them (this
+    /// includes any breakpoint hits along the way, so a "continue" after a
+    /// stop on a breakpoint cannot stop on the same hit twice).
+    pub skip_before_statement: Option<u64>,
+    /// Stop before executing the statement with this 0-based ordinal.
+    /// `None` never stops on statement count.
+    pub stop_at_statement: Option<u64>,
+    /// Stop when the innermost frame is at this depth or shallower
+    /// (1-based frame count), for step-over/step-out. `None` never stops
+    /// on depth.
+    pub max_frame_depth: Option<usize>,
+}
+
+/// A named local variable captured at a stop.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StepLocal {
+    pub name: String,
+    pub value: Value,
+}
+
+/// One call frame in a `StepStop` snapshot, outermost first.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StepFrame {
+    /// Function name (`main`, `app#User#save`, ...).
+    pub function: String,
+    /// 1-based source line of the statement this frame last entered, if known.
+    pub line: Option<usize>,
+    /// This frame's locals that have a source-level name, in slot order.
+    pub locals: Vec<StepLocal>,
+}
+
+/// A paused execution snapshot: everything a variables view needs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StepStop {
+    /// 0-based ordinal of the statement being stopped before.
+    pub statement: u64,
+    /// 1-based source line of that statement (entry-file resolution).
+    pub line: usize,
+    /// Whether the stopped statement sits on a breakpoint line.
+    pub breakpoint_hit: bool,
+    /// Call stack at the stop, outermost frame first.
+    pub frames: Vec<StepFrame>,
+    /// Program output produced up to the stop.
+    pub output: Vec<String>,
+}
+
+/// The result of one stepping run.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StepOutcome {
+    /// A stop condition fired; the program can be inspected here.
+    Stopped(StepStop),
+    /// The program ran to completion.
+    Completed {
+        output: Vec<String>,
+        return_value: Value,
+    },
+    /// The program raised an uncaught error before any stop fired.
+    Failed(String),
+}
+
+impl StepPolicy {
+    /// The 1-based source line containing `offset` (entry-file text).
+    fn line_of(&self, offset: usize) -> usize {
+        self.text[..offset.min(self.text.len())]
+            .bytes()
+            .filter(|b| *b == b'\n')
+            .count()
+            + 1
+    }
+}
+
+impl Vm {
+    /// Execute under a stepping policy until the next stop or the end of
+    /// the program. Line resolution uses the policy's copy of the entry
+    /// file; an error raised before any stop fires becomes
+    /// `StepOutcome::Failed`.
+    pub fn run_stepping(&mut self, policy: StepPolicy) -> StepOutcome {
+        self.step = Some(policy);
+        match self.run() {
+            Ok(value) => {
+                let output = self.output.lock().map(|g| g.clone()).unwrap_or_default();
+                StepOutcome::Completed {
+                    output,
+                    return_value: value,
+                }
+            }
+            Err(VmFault::DebugStop) => StepOutcome::Stopped(
+                self.stop
+                    .take()
+                    .expect("DebugStop is only raised after capturing a stop"),
+            ),
+            Err(VmFault::Throw(value)) => StepOutcome::Failed(value.to_string()),
+            Err(VmFault::Fatal(message)) => StepOutcome::Failed(message),
+        }
+    }
+
+    /// Capture the paused state before a statement executes: every live
+    /// frame (outermost first) with its named locals, plus output so far.
+    fn capture_stop(&self, statement: u64, line: usize, breakpoint_hit: bool) -> StepStop {
+        let frames = self
+            .frames
+            .iter()
+            .map(|frame| StepFrame {
+                function: frame.name.clone(),
+                line: frame
+                    .last_span
+                    .and_then(|s| self.step.as_ref().map(|p| p.line_of(s.start))),
+                locals: frame
+                    .named_locals()
+                    .into_iter()
+                    .map(|(name, value)| StepLocal {
+                        name: name.to_owned(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        let output = self.output.lock().map(|g| g.clone()).unwrap_or_default();
+        StepStop {
+            statement,
+            line,
+            breakpoint_hit,
+            frames,
+            output,
+        }
+    }
 }
 
 /// Compile a NXL source file and execute it in the VM.

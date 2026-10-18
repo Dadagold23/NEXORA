@@ -1020,7 +1020,9 @@ use nxl_compiler::vm::{
 #[test]
 fn vm_bytecode_magic_and_version_are_stable() {
     assert_eq!(BYTECODE_MAGIC, 0x4E584C42);
-    assert_eq!(BYTECODE_VERSION, 1);
+    // v2 added the per-chunk local-name debug table (P21 debugger
+    // variables view); bump this only with a deliberate format change.
+    assert_eq!(BYTECODE_VERSION, 2);
 }
 
 #[test]
@@ -2240,6 +2242,8 @@ mod cli_tests {
             Command::Debug {
                 file: "main.nxl".into(),
                 breakpoints: vec![],
+                inspect: false,
+                steps: None,
             }
         );
     }
@@ -2252,6 +2256,8 @@ mod cli_tests {
             Command::Debug {
                 file: "main.nxl".into(),
                 breakpoints: vec![3, 7],
+                inspect: false,
+                steps: None,
             }
         );
         // The flag may also precede the file.
@@ -2260,8 +2266,46 @@ mod cli_tests {
             Command::Debug {
                 file: "main.nxl".into(),
                 breakpoints: vec![5],
+                inspect: false,
+                steps: None,
             }
         );
+    }
+
+    #[test]
+    fn cli_parse_debug_inspect_and_steps() {
+        // `--inspect` is boolean and may precede the file without eating it;
+        // `--steps` takes a value in both spellings.
+        assert_eq!(
+            parse_args(&args(&["debug", "--inspect", "main.nxl"])).unwrap(),
+            Command::Debug {
+                file: "main.nxl".into(),
+                breakpoints: vec![],
+                inspect: true,
+                steps: None,
+            }
+        );
+        assert_eq!(
+            parse_args(&args(&["debug", "main.nxl", "--inspect", "--steps=4", "--break=2"]))
+                .unwrap(),
+            Command::Debug {
+                file: "main.nxl".into(),
+                breakpoints: vec![2],
+                inspect: true,
+                steps: Some(4),
+            }
+        );
+        assert_eq!(
+            parse_args(&args(&["debug", "main.nxl", "--steps", "9"])).unwrap(),
+            Command::Debug {
+                file: "main.nxl".into(),
+                breakpoints: vec![],
+                inspect: false,
+                steps: Some(9),
+            }
+        );
+        // A non-numeric step count is rejected.
+        assert!(parse_args(&args(&["debug", "main.nxl", "--steps=x"])).is_err());
     }
 
     #[test]
@@ -2890,14 +2934,14 @@ mod cli_tests {
         .unwrap();
 
         // Without breakpoints: a trace summary and no hits.
-        let plain = cmd_debug(file.to_str().unwrap(), &[]);
+        let plain = cmd_debug(file.to_str().unwrap(), &[], false, None);
         assert!(plain.contains("statement trace lines"), "{plain}");
         assert!(plain.contains("no breakpoints hit"), "{plain}");
         assert!(plain.contains("| 0"), "output should be shown: {plain}");
 
         // Line 3 runs each iteration; the span stream can emit more than one
         // span per iteration, so require at least one hit per iteration.
-        let traced = cmd_debug(file.to_str().unwrap(), &[3]);
+        let traced = cmd_debug(file.to_str().unwrap(), &[3], false, None);
         assert!(traced.contains("breakpoint hits"), "{traced}");
         assert!(
             traced.matches("-> line 3").count() >= 2,
@@ -2909,8 +2953,50 @@ mod cli_tests {
 
     #[test]
     fn cli_debug_missing_file_is_reported() {
-        let msg = cmd_debug("definitely_missing.nxl", &[]);
+        let msg = cmd_debug("definitely_missing.nxl", &[], false, None);
         assert!(msg.contains("cannot read"), "{msg}");
+    }
+
+    #[test]
+    fn cli_debug_inspect_reports_variables_and_steps() {
+        let tmp = std::env::temp_dir().join(format!(
+            "nxl_dbg_inspect_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("prog.nxl");
+        fs::write(&file, "let x = 1;\nlet y = 2;\nprint(x + y);\n").unwrap();
+        let path = file.to_str().unwrap();
+
+        // No breakpoints: the first pause is at the program start, then
+        // --steps performs that many steps with one line per stop and a
+        // final variables view.
+        let view = cmd_debug(path, &[], true, Some(3));
+        assert!(view.contains("nxl debug --inspect"), "{view}");
+        assert!(view.contains("paused at line 1 (statement 0)"), "{view}");
+        assert!(view.contains("call stack (innermost first)"), "{view}");
+        assert!(view.contains("main at line 1"), "{view}");
+        assert!(view.contains("-> line"), "step lines missing: {view}");
+        assert!(view.contains("final stop"), "{view}");
+        assert!(view.contains("x = 1"), "locals view missing: {view}");
+
+        // With a breakpoint: the first pause is the hit, marked as such.
+        let hit = cmd_debug(path, &[3], true, None);
+        assert!(hit.contains("paused at line 3"), "{hit}");
+        assert!(hit.contains("[breakpoint]"), "{hit}");
+        // Both locals are visible at the line-3 pause, before the print.
+        assert!(hit.contains("x = 1"), "{hit}");
+        assert!(hit.contains("y = 2"), "{hit}");
+        assert!(hit.contains("output so far: 0"), "{hit}");
+
+        // Trace mode (no --inspect) is unchanged.
+        let trace = cmd_debug(path, &[], false, None);
+        assert!(trace.contains("statement trace lines"), "{trace}");
+
+        fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

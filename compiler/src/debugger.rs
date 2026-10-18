@@ -10,15 +10,26 @@
 //! | --- | --- |
 //! | Breakpoints by source line | IMPLEMENTED |
 //! | Statement trace (step trace from DebugSpan stream) | IMPLEMENTED |
-//! | Stack frames | PARTIAL (frame names not exposed yet) |
-//! | Variables view | NOT IMPLEMENTED (locals lack names post-lowering) |
+//! | Stack frames | IMPLEMENTED (named frames with per-frame lines in session snapshots) |
+//! | Variables view | IMPLEMENTED (named locals per frame at a paused stop) |
 //! | Watch expressions | NOT IMPLEMENTED |
-//! | Runtime inspection | PARTIAL (output/return value available) |
-//! | True step over/into/out at VM-ip level | NOT IMPLEMENTED |
-//! | `nxl debug <file>` CLI | IMPLEMENTED (breakpoint hit-count + trace lines) |
+//! | Runtime inspection | IMPLEMENTED (output at the pause point, output/return on completion) |
+//! | Step into / over / out | IMPLEMENTED at session level via deterministic replay (see `DebugSession`); resumable ip-level execution is NOT IMPLEMENTED |
+//! | `nxl debug <file>` CLI | IMPLEMENTED (trace report; `--inspect`/`--steps` session view) |
+//!
+//! # Stepping model
+//!
+//! `DebugSession` re-runs the compiled program from the start on every
+//! command, under a `vm::StepPolicy` that names the exact statement to stop
+//! at next and marks everything the session has already visited as
+//! un-stoppable. Programs are deterministic, so every replay reaches the
+//! same stop with exact locals and output; the cost is one re-execution per
+//! command. The VM's recursive interpreter is left untouched — no
+//! continuation capture, no ip-level suspension.
 
 use std::collections::BTreeSet;
 
+use crate::diagnostic::Diagnostic;
 use crate::source::SourceFile;
 use crate::vm::{self, VmResult};
 
@@ -135,4 +146,232 @@ pub fn format_report(report: &DebugReport) -> String {
             .join(", ")
     ));
     out
+}
+
+// ── Stepping sessions (variables + step) ──────────────────────────────────────
+
+/// Why a session ended without pausing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionEnd {
+    /// The program ran to completion from the current position.
+    Completed {
+        /// Output produced by the run that completed.
+        output: Vec<String>,
+        /// Final return value (string form).
+        return_value: String,
+    },
+    /// The program raised an uncaught error.
+    Failed(String),
+}
+
+/// An interactive stepping session over a compiled program.
+///
+/// Each command replays the program from the start under a policy that
+/// stops at the requested position (see the module docs for the model).
+/// Sessions track the last stop's statement ordinal and frame depth so the
+/// next command can name its target exactly; once the program completes or
+/// fails, the session stays ended and repeats that outcome.
+pub struct DebugSession {
+    /// Compiled once at session construction; every replay runs this.
+    program: vm::CompiledProgram,
+    source_text: String,
+    breakpoints: BTreeSet<usize>,
+    /// Statement ordinal and frame depth of the last stop.
+    position: Option<(u64, usize)>,
+    /// Set once the program has completed or failed.
+    ended: Option<SessionEnd>,
+    /// Snapshot of the last stop (for a final variables view).
+    last: Option<vm::StepStop>,
+}
+
+impl DebugSession {
+    /// Compile `source_text` and open a session with the given 1-based
+    /// breakpoint lines. Compile errors are returned as diagnostics.
+    pub fn new(source_text: &str, breakpoints: &[usize]) -> Result<Self, Diagnostic> {
+        let sf = SourceFile::new("debug_target.nxl", source_text);
+        let module = crate::compile_to_nir(&sf)?;
+        let program = vm::compile(&module)?;
+        Ok(Self {
+            program,
+            source_text: source_text.to_owned(),
+            breakpoints: breakpoints.iter().copied().collect(),
+            position: None,
+            ended: None,
+            last: None,
+        })
+    }
+
+    /// Run to the first stop: the first breakpoint hit, or the program's
+    /// first statement when no breakpoints are set.
+    pub fn start(&mut self) -> Result<vm::StepStop, SessionEnd> {
+        if self.breakpoints.is_empty() {
+            self.step()
+        } else {
+            self.continue_run()
+        }
+    }
+
+    /// Step into: stop before the next statement, wherever it lives
+    /// (descending into a called function if that is the next statement).
+    pub fn step(&mut self) -> Result<vm::StepStop, SessionEnd> {
+        let boundary = self.boundary();
+        self.run_to(vm::StepPolicy {
+            text: self.source_text.clone(),
+            breakpoints: self.breakpoints.clone(),
+            skip_before_statement: Some(boundary),
+            stop_at_statement: Some(boundary),
+            max_frame_depth: None,
+        })
+    }
+
+    /// Step over: stop before the next statement in this frame or a
+    /// shallower one, skipping the bodies of called functions.
+    pub fn step_over(&mut self) -> Result<vm::StepStop, SessionEnd> {
+        match self.position {
+            Some((statement, depth)) => {
+                let mut policy = self.base_policy(statement + 1);
+                policy.max_frame_depth = Some(depth);
+                self.run_to(policy)
+            }
+            None => self.step(),
+        }
+    }
+
+    /// Step out: stop before the next statement in a shallower frame
+    /// (running to completion when already in the entry frame).
+    pub fn step_out(&mut self) -> Result<vm::StepStop, SessionEnd> {
+        match self.position {
+            Some((statement, depth)) => {
+                let mut policy = self.base_policy(statement + 1);
+                policy.max_frame_depth = Some(depth.saturating_sub(1));
+                self.run_to(policy)
+            }
+            None => self.step(),
+        }
+    }
+
+    /// Continue to the next breakpoint hit after the current position;
+    /// runs to completion when no further hit occurs.
+    pub fn continue_run(&mut self) -> Result<vm::StepStop, SessionEnd> {
+        let boundary = self.boundary();
+        self.run_to(self.base_policy(boundary))
+    }
+
+    /// The most recent paused snapshot, if the session has stopped.
+    pub fn last(&self) -> Option<&vm::StepStop> {
+        self.last.as_ref()
+    }
+
+    /// First statement ordinal the next command may stop at: everything
+    /// below it has already been visited (breakpoint hits included).
+    fn boundary(&self) -> u64 {
+        self.position.map(|(statement, _)| statement + 1).unwrap_or(0)
+    }
+
+    fn base_policy(&self, skip_before_statement: u64) -> vm::StepPolicy {
+        vm::StepPolicy {
+            text: self.source_text.clone(),
+            breakpoints: self.breakpoints.clone(),
+            skip_before_statement: Some(skip_before_statement),
+            stop_at_statement: None,
+            max_frame_depth: None,
+        }
+    }
+
+    fn run_to(&mut self, policy: vm::StepPolicy) -> Result<vm::StepStop, SessionEnd> {
+        if let Some(end) = &self.ended {
+            return Err(end.clone());
+        }
+        match vm::execute_program_step(&self.program, policy) {
+            vm::StepOutcome::Stopped(stop) => {
+                self.position = Some((stop.statement, stop.frames.len()));
+                self.last = Some(stop.clone());
+                Ok(stop)
+            }
+            vm::StepOutcome::Completed {
+                output,
+                return_value,
+            } => {
+                let end = SessionEnd::Completed {
+                    output,
+                    return_value: return_value.to_string(),
+                };
+                self.position = None;
+                self.ended = Some(end.clone());
+                Err(end)
+            }
+            vm::StepOutcome::Failed(message) => {
+                let end = SessionEnd::Failed(message);
+                self.position = None;
+                self.ended = Some(end.clone());
+                Err(end)
+            }
+        }
+    }
+}
+
+/// Format a paused snapshot: stop position, call stack (innermost first)
+/// with each frame's named locals, and the output produced so far.
+pub fn format_snapshot(stop: &vm::StepStop) -> String {
+    let mut out = format!(
+        "  paused at line {} (statement {})",
+        stop.line, stop.statement
+    );
+    if stop.breakpoint_hit {
+        out.push_str(" [breakpoint]");
+    }
+    out.push('\n');
+    out.push_str("  call stack (innermost first):\n");
+    for frame in stop.frames.iter().rev() {
+        match frame.line {
+            Some(line) => out.push_str(&format!("    {} at line {}\n", frame.function, line)),
+            None => out.push_str(&format!("    {}\n", frame.function)),
+        }
+        for local in &frame.locals {
+            out.push_str(&format!("      {} = {}\n", local.name, local.value));
+        }
+    }
+    out.push_str(&format!("  output so far: {}\n", stop.output.len()));
+    for line in &stop.output {
+        out.push_str(&format!("    | {line}\n"));
+    }
+    out
+}
+
+/// Format one compact per-step line for the CLI.
+pub fn format_step(stop: &vm::StepStop) -> String {
+    let frame = stop.frames.last();
+    let function = frame.map(|f| f.function.as_str()).unwrap_or("?");
+    let locals = frame
+        .map(|f| {
+            f.locals
+                .iter()
+                .map(|l| format!("{} = {}", l.name, l.value))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    if locals.is_empty() {
+        format!("  -> line {}, {function}\n", stop.line)
+    } else {
+        format!("  -> line {}, {function}: {locals}\n", stop.line)
+    }
+}
+
+/// Format why a session ended without pausing.
+pub fn format_end(end: &SessionEnd) -> String {
+    match end {
+        SessionEnd::Completed {
+            output,
+            return_value,
+        } => {
+            let mut out = format!("  program completed, return: {return_value}\n");
+            out.push_str(&format!("  output lines: {}\n", output.len()));
+            for line in output {
+                out.push_str(&format!("    | {line}\n"));
+            }
+            out
+        }
+        SessionEnd::Failed(message) => format!("  program failed: {message}\n"),
+    }
 }

@@ -246,6 +246,12 @@ pub enum Command {
     Debug {
         file: String,
         breakpoints: Vec<usize>,
+        /// Run an inspect session (variables + call stack at each stop)
+        /// instead of the trace report.
+        inspect: bool,
+        /// After the initial stop, perform this many steps, printing one
+        /// compact line per stop plus a final variables view.
+        steps: Option<u64>,
     },
     Docs,
     Doctor,
@@ -403,8 +409,17 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
         }),
         "repl" => Ok(Command::Repl),
         "debug" => {
-            let rest = &args[1..];
-            let file = positional_arg(rest, &["--break"])
+            // `--inspect` is a boolean mode flag; strip it before the
+            // positional scan, which assumes every bare flag consumes the
+            // next argument (it would eat the file that follows it).
+            let inspect = args[1..].iter().any(|a| a == "--inspect");
+            let filtered: Vec<String> = args[1..]
+                .iter()
+                .filter(|a| a.as_str() != "--inspect")
+                .cloned()
+                .collect();
+            let rest = filtered.as_slice();
+            let file = positional_arg(rest, &["--break", "--steps"])
                 .ok_or_else(|| err("NXL12002", "debug: missing file argument"))?;
             // `--break=N` (and `--break N`) may repeat; each names a 1-based
             // source line to report hits for.
@@ -435,7 +450,26 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
                     breakpoints.push(line);
                 }
             }
-            Ok(Command::Debug { file, breakpoints })
+            // `--steps=N` (and `--steps N`): how many statements to step
+            // after the initial stop of an inspect session.
+            let steps = flag_value(rest, "--steps").map(|value| {
+                value.parse::<u64>().map_err(|_| {
+                    err(
+                        "NXL12002",
+                        format!("debug: --steps expects a count, got '{value}'"),
+                    )
+                })
+            });
+            let steps = match steps {
+                Some(parsed) => Some(parsed?),
+                None => None,
+            };
+            Ok(Command::Debug {
+                file,
+                breakpoints,
+                inspect,
+                steps,
+            })
         }
         "docs" => Ok(Command::Docs),
         "doctor" => Ok(Command::Doctor),
@@ -641,8 +675,10 @@ COMMANDS:
     clean             Remove build artifacts
     test [filter]     Run test files
     repl              Start an interactive REPL session
-    debug <file> [--break=N]
-                      Trace a file's statements and report breakpoint hits
+    debug <file> [--break=N] [--inspect] [--steps=N]
+                      Trace a file's statements and report breakpoint hits;
+                      --inspect pauses with a call stack + variables view,
+                      --steps=N then steps N statements from that pause
     docs              Show bundled documentation
     doctor            Run toolchain diagnostics
     install           Install dependencies into nxl.lock (--offline supported)
@@ -1568,18 +1604,55 @@ pub fn cmd_repl() -> CliResult<String> {
 /// Run `file` on the VM under tracing and report the statement trace plus any
 /// breakpoint hits. Breakpoints are 1-based source lines; loops count every
 /// hit. Read failures are reported rather than panicking.
-pub fn cmd_debug(file: &str, breakpoints: &[usize]) -> String {
-    match fs::read_to_string(file) {
-        Ok(text) => {
-            let mut debugger = crate::debugger::Debugger::new();
-            for line in breakpoints {
-                debugger.add_breakpoint(*line);
-            }
-            let report = debugger.run(&text);
-            crate::debugger::format_report(&report)
+///
+/// With `inspect`, runs a stepping session instead: pause at the first
+/// breakpoint hit (or the program's first statement when no breakpoints are
+/// set), print the call stack and named locals at that pause, then — when
+/// `steps` is given — step that many statements, printing one compact line
+/// per stop and a final variables view.
+pub fn cmd_debug(file: &str, breakpoints: &[usize], inspect: bool, steps: Option<u64>) -> String {
+    let text = match fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(e) => return format!("cannot read {file}: {e}"),
+    };
+    if !inspect {
+        let mut debugger = crate::debugger::Debugger::new();
+        for line in breakpoints {
+            debugger.add_breakpoint(*line);
         }
-        Err(e) => format!("cannot read {file}: {e}"),
+        let report = debugger.run(&text);
+        return crate::debugger::format_report(&report);
     }
+    let mut session = match crate::debugger::DebugSession::new(&text, breakpoints) {
+        Ok(session) => session,
+        Err(diagnostic) => {
+            return format!("nxl debug --inspect\n  compile error: {}\n", diagnostic.message);
+        }
+    };
+    let mut out = String::from("nxl debug --inspect\n");
+    match session.start() {
+        Ok(stop) => out.push_str(&crate::debugger::format_snapshot(&stop)),
+        Err(end) => {
+            out.push_str(&crate::debugger::format_end(&end));
+            return out;
+        }
+    }
+    if let Some(count) = steps {
+        for _ in 0..count {
+            match session.step() {
+                Ok(stop) => out.push_str(&crate::debugger::format_step(&stop)),
+                Err(end) => {
+                    out.push_str(&crate::debugger::format_end(&end));
+                    return out;
+                }
+            }
+        }
+        if let Some(last) = session.last() {
+            out.push_str("  final stop:\n");
+            out.push_str(&crate::debugger::format_snapshot(last));
+        }
+    }
+    out
 }
 
 pub fn cmd_docs() -> String {

@@ -18,7 +18,7 @@ commands. The release installers create only `nxlc`.
 | `fmt [file]`, `lint [file]` | Normalise whitespace; lint delegates to check. |
 | `dev [--port N] [--host H:P] [--no-watch]` | Start the development server: compiles the project to JavaScript, serves it with live reload over SSE, and shows a compile-error page that recovers on the next fix. Binds `127.0.0.1` by default. |
 | `doctor` | Real environment diagnostics: compiler version and architecture, Node.js availability, `nxl.toml` and its declared entry point. |
-| `debug <file> [--break=N]` | Statement trace with breakpoint counts. |
+| `debug <file> [--break=N] [--inspect] [--steps=N]` | Statement trace with breakpoint counts; `--inspect` runs a stepping session with a call stack + variables view, `--steps=N` steps N statements from the initial pause. |
 | `docs` | Print the documentation map. |
 | `platforms` | Print the platform support summary. |
 | `version`, `--version`, `help` | Toolchain metadata. |
