@@ -1494,7 +1494,16 @@ pub fn cmd_docs() -> String {
 }
 
 pub fn cmd_bridge() -> String {
-    "FFI bridge status: Rust/JS via VM + JS runtime; other languages deferred".to_owned()
+    // Render the real per-guest bridge inventory (`ffi::bridge_table`) rather
+    // than a hardcoded summary, so the report matches what the FFI layer
+    // actually implements. Sorted for deterministic output.
+    let mut rows: Vec<(&str, &str)> = crate::ffi::bridge_table().into_iter().collect();
+    rows.sort_unstable();
+    let mut out = String::from("FFI bridge status (guest language: mechanism):\n");
+    for (language, status) in rows {
+        out.push_str(&format!("  {language}: {status}\n"));
+    }
+    out
 }
 
 pub fn cmd_ide() -> String {
@@ -1506,12 +1515,15 @@ pub fn cmd_ide() -> String {
 }
 
 pub fn cmd_bench() -> String {
-    "bench: lexer/parser/nir smoke benchmarks ok (no regressions detected)".to_owned()
+    // Actually run the smoke benchmarks; the previous string claimed a result
+    // without measuring anything.
+    crate::perf::bench_report()
 }
 
 pub fn cmd_platforms() -> String {
-    "platforms: Windows x64 READY; Linux x64 READY (CI); macOS BEST-EFFORT; WASM/embedded DEFERRED"
-        .to_owned()
+    // Report the honest, evidence-derived matrix rather than a hardcoded list
+    // that advertised targets as ready without evidence.
+    crate::platforms::render_matrix(&crate::platforms::default_matrix())
 }
 
 pub fn cmd_lsp() -> CliResult<()> {
