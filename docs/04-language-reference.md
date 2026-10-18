@@ -133,7 +133,7 @@ The VM stays authoritative; the JavaScript backend now emits real control flow, 
 
 Rust target (`compile_native`): `throw` becomes a panic carrying the rendered message, and `try`/`catch`/`finally` emit `catch_unwind` with a `finally` block that runs on both paths (an uncaught error still propagates). Generated Rust is compiled and executed by the test suite when `rustc` is available. Everything else - branching, loops, `for ... in`, composites, methods, match patterns, concurrency, `catch e: Type`, and standard-library calls - is refused with NXL2007 and a pointer to a working target instead of silently dropping code.
 
-## Standard library (`std.strings`, `std.math`, `std.crypto`)
+## Standard library (`std.strings`, `std.math`, `std.crypto`, `std.http`)
 
 Implemented in `stdlib.rs`, resolved by `nir.rs` (`lower_builtin_call`),
 executed by `vm.rs`, and mirrored by the JavaScript backend; tested in
@@ -158,6 +158,28 @@ VM and on emitted Node.js and require identical output).
   uses the vetted `sha2` crate; hex and base64 are plain encodings. The
   `*_decode` functions return a catchable error on malformed input or
   bytes that are not valid UTF-8.
+- `std.http` (3 functions, **VM-only**): `get(url)`, `post(url, body)`,
+  and `header(response, name)`. The first two return a `Map` with `status`
+  (Int), `body` (Str), and `headers` (Map), read with field access
+  (`r.status`) or with `header`, which matches names case-insensitively
+  (`header(r, "content-type")`) because dashes are not valid field
+  identifiers. `post` sends its body as `application/json; charset=utf-8`.
+  This is a hand-rolled blocking HTTP/1.1 client: only `http://` URLs work
+  (`https://` fails with a catchable error naming the missing TLS
+  support), redirects are returned rather than followed, bodies larger
+  than 8 MiB are rejected, and connect/read are bounded by 10-second
+  timeouts. Failures use the catchable code `NXL11012`. Responses are
+  data: a `404` is a normal result, not an error.
+- `std.networking` (2 functions, **VM-only**): `resolve(host)` returns
+  the platform resolver's addresses as a list of strings (iterable with
+  `for`), and `tcp_probe(host, port, timeout_ms)` reports whether a TCP
+  connection succeeds in time. Unusable ports or timeouts are catchable
+  errors (`NXL11012`), not `false`.
+- VM-only means the JavaScript backend rejects them at compile time with
+  NXL2007 ("needs the VM (`nxl run`)"): Node and browsers have no
+  synchronous fetch or DNS, so there is nothing to mirror. Tests for
+  these modules live in `http_tests.rs` and run against a local test
+  server only - the suite never touches the network.
 - Calling convention: arity is checked at compile time (a wrong count is
   NXL2002); argument *types* are checked at run time, so a mismatch is a
   catchable error rather than a compile failure. `Int` promotes to `Float`
@@ -165,8 +187,9 @@ VM and on emitted Node.js and require identical output).
 - Both runtimes agree exactly: `len` counts code points, `round` rounds half
   away from zero, `substring` uses character indices, and `replace` replaces
   every occurrence.
-- Not yet available (importing them fails loudly with NXL2002 rather than
-  resolving to a stub): `http` and `networking`. The other `std` modules -
-  `json`, `collections`, `env`, `process`, `fs`, `time`, `random`, `testing`,
-  and so on - are internal Rust APIs not yet exposed as builtins. The Rust
-  target rejects standard-library calls with NXL2007.
+- Not yet exposed as builtins: the other `std` modules - `json`,
+  `collections`, `env`, `process`, `fs`, `time`, `random`, `testing`, and
+  so on - are internal Rust APIs; calling one fails with NXL2002 rather
+  than resolving to a stub. The Rust target rejects all standard-library
+  calls with NXL2007; the JavaScript target rejects only the VM-only
+  modules above.

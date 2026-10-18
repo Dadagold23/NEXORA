@@ -1243,6 +1243,528 @@ pub mod crypto {
     }
 }
 
+/// Blocking HTTP/1.1 client.
+///
+/// A deliberately small hand-rolled client over `std::net::TcpStream`: no
+/// extra dependencies and no TLS. Only `http://` URLs are accepted;
+/// `https://` fails with a catchable error that names the limitation, so the
+/// missing TLS support is never silent. Requests send `Connection: close`
+/// and reading stops as soon as the message is complete (Content-Length,
+/// chunked, or read-to-EOF bodies). Responses are held in memory and capped
+/// at [`MAX_RESPONSE_BYTES`]. Redirects are returned as-is, never followed,
+/// and bodies are decoded to text with UTF-8 replacement characters.
+///
+/// The JavaScript backend has no synchronous fetch, so these functions are
+/// rejected at compile time there (NXL2007) and run only on the VM.
+pub mod http {
+    use std::io::{ErrorKind, Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+    use std::time::Duration;
+
+    use super::{NxlValue, StdResult, StdlibError};
+
+    /// Upper bound on a buffered response (headers included); larger
+    /// responses fail with a catchable error instead of exhausting memory.
+    pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+    /// Connect and per-read deadline for [`request`]; `get`/`post` use it.
+    pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+    fn net_err(message: String) -> StdlibError {
+        StdlibError::new("NXL11012", message)
+    }
+
+    /// A parsed `http://` URL: authority plus request target.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Url {
+        pub host: String,
+        pub port: u16,
+        pub path: String,
+    }
+
+    /// Parse `http://host[:port][/path][?query]`. IPv6 hosts need brackets
+    /// (`http://[::1]:8080/`); fragments are stripped (they never reach the
+    /// server). `https://` is recognised specifically so the error can name
+    /// TLS rather than report a generic scheme failure.
+    pub fn parse_url(url: &str) -> StdResult<Url> {
+        let rest = url.strip_prefix("http://").ok_or_else(|| {
+            if url.starts_with("https://") {
+                net_err(
+                    "https (TLS) is not supported by std::http yet; use http:// or a local server"
+                        .to_owned(),
+                )
+            } else {
+                net_err(format!(
+                    "invalid URL '{url}': expected http://host[:port][/path]"
+                ))
+            }
+        })?;
+        let rest = rest.split('#').next().unwrap_or("");
+        let (authority, target) = match rest.find(['/', '?']) {
+            Some(i) => (&rest[..i], &rest[i..]),
+            None => (rest, ""),
+        };
+        if authority.is_empty() {
+            return Err(net_err(format!("invalid URL '{url}': missing host")));
+        }
+        let (host, port) = if let Some(inner) = authority.strip_prefix('[') {
+            let close = inner.find(']').ok_or_else(|| {
+                net_err(format!("invalid URL '{url}': unterminated IPv6 literal"))
+            })?;
+            let host = &inner[..close];
+            if host.is_empty() {
+                return Err(net_err(format!("invalid URL '{url}': missing host")));
+            }
+            let tail = &inner[close + 1..];
+            let port = match tail {
+                "" => 80,
+                _ if tail.starts_with(':') && tail.len() > 1 => parse_port(&tail[1..], url)?,
+                _ => {
+                    return Err(net_err(format!(
+                        "invalid URL '{url}': expected ':port' after the IPv6 literal"
+                    )))
+                }
+            };
+            (host, port)
+        } else if authority.matches(':').count() > 1 {
+            return Err(net_err(format!(
+                "invalid URL '{url}': IPv6 hosts must be written as [{authority}]"
+            )));
+        } else if let Some((host, port_text)) = authority.split_once(':') {
+            if host.is_empty() {
+                return Err(net_err(format!("invalid URL '{url}': missing host")));
+            }
+            if port_text.is_empty() {
+                return Err(net_err(format!("invalid URL '{url}': empty port")));
+            }
+            (host, parse_port(port_text, url)?)
+        } else {
+            (authority, 80)
+        };
+        let path = if target.is_empty() {
+            "/".to_owned()
+        } else if target.starts_with('?') {
+            // A query with no path still needs the "/" separator.
+            format!("/{target}")
+        } else {
+            target.to_owned()
+        };
+        Ok(Url {
+            host: host.to_owned(),
+            port,
+            path,
+        })
+    }
+
+    fn parse_port(text: &str, url: &str) -> StdResult<u16> {
+        text.parse::<u16>().map_err(|_| {
+            net_err(format!(
+                "invalid URL '{url}': port '{text}' is not a number"
+            ))
+        })
+    }
+
+    /// A parsed response: status code, headers as received, decoded body.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Response {
+        pub status: i64,
+        pub headers: Vec<(String, String)>,
+        pub body: String,
+    }
+
+    impl Response {
+        /// Case-insensitive lookup of one header value.
+        pub fn header(&self, name: &str) -> Option<&str> {
+            find_header(&self.headers, name)
+        }
+    }
+
+    fn find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        let want = name.to_ascii_lowercase();
+        headers
+            .iter()
+            .find(|(key, _)| key.to_ascii_lowercase() == want)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// Issue one request and parse the response. `timeout` bounds the
+    /// connection attempt and each read; `get`/`post` use
+    /// [`REQUEST_TIMEOUT`]. This is the low-level entry point tests use to
+    /// exercise the timeout path without waiting ten seconds.
+    pub fn request(
+        url: &str,
+        method: &str,
+        body: Option<&str>,
+        timeout: Duration,
+    ) -> StdResult<Response> {
+        let url = parse_url(url)?;
+        let addresses = (url.host.as_str(), url.port)
+            .to_socket_addrs()
+            .map_err(|e| net_err(format!("cannot resolve '{}': {e}", url.host)))?
+            .collect::<Vec<_>>();
+        if addresses.is_empty() {
+            return Err(net_err(format!("cannot resolve '{}'", url.host)));
+        }
+        let mut last_err = None;
+        let mut stream = None;
+        for address in &addresses {
+            match TcpStream::connect_timeout(address, timeout) {
+                Ok(connected) => {
+                    stream = Some(connected);
+                    break;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        let stream = stream.ok_or_else(|| {
+            net_err(format!(
+                "cannot connect to {}:{}: {}",
+                url.host,
+                url.port,
+                last_err
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "no route to host".to_owned())
+            ))
+        })?;
+        stream
+            .set_read_timeout(Some(timeout))
+            .and_then(|_| stream.set_write_timeout(Some(timeout)))
+            .map_err(|e| net_err(format!("cannot set socket timeouts: {e}")))?;
+
+        let host_header = if url.port == 80 {
+            url.host.clone()
+        } else {
+            format!("{}:{}", url.host, url.port)
+        };
+        let mut request = format!(
+            "{method} {} HTTP/1.1\r\nHost: {host_header}\r\nUser-Agent: nxl/0.1\r\nAccept: */*\r\nConnection: close\r\n",
+            url.path
+        );
+        if let Some(body) = body {
+            request.push_str("Content-Type: application/json; charset=utf-8\r\n");
+            request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+            request.push_str("\r\n");
+            request.push_str(body);
+        } else {
+            request.push_str("\r\n");
+        }
+
+        stream
+            .try_clone()
+            .and_then(|mut writer| writer.write_all(request.as_bytes()).map(|_| writer))
+            .map_err(|e| net_err(format!("cannot send the request: {e}")))?;
+
+        read_response(stream)
+    }
+
+    /// `std::http::get` — GET `url`, returning `{status, body, headers}`.
+    pub fn get(url: &str) -> StdResult<NxlValue> {
+        request(url, "GET", None, REQUEST_TIMEOUT).map(response_value)
+    }
+
+    /// `std::http::post` — POST `body` to `url`, sent as
+    /// `application/json; charset=utf-8`, returning `{status, body, headers}`.
+    pub fn post(url: &str, body: &str) -> StdResult<NxlValue> {
+        request(url, "POST", Some(body), REQUEST_TIMEOUT).map(response_value)
+    }
+
+    /// The Map handed to NXL programs for a response.
+    fn response_value(response: Response) -> NxlValue {
+        NxlValue::Map(vec![
+            ("status".to_owned(), NxlValue::Int(response.status)),
+            ("body".to_owned(), NxlValue::Str(response.body)),
+            (
+                "headers".to_owned(),
+                NxlValue::Map(
+                    response
+                        .headers
+                        .into_iter()
+                        .map(|(key, value)| (key, NxlValue::Str(value)))
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+
+    /// `std::http::header` — case-insensitive header lookup on a response
+    /// from `std::http::get` or `std::http::post`. Header names are not
+    /// valid field identifiers (`content-type`), which is why lookup goes
+    /// through this function rather than field or index access.
+    pub fn header(response: &NxlValue, name: &str) -> StdResult<String> {
+        let headers = match response {
+            NxlValue::Map(pairs) => pairs.iter().find(|(key, _)| key == "headers"),
+            _ => None,
+        }
+        .and_then(|(_, value)| match value {
+            NxlValue::Map(headers) => Some(headers),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            net_err("expected an HTTP response from std::http::get or std::http::post".to_owned())
+        })?;
+        let want = name.to_ascii_lowercase();
+        headers
+            .iter()
+            .find(|(key, _)| key.to_ascii_lowercase() == want)
+            .and_then(|(_, value)| match value {
+                NxlValue::Str(value) => Some(value.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| net_err(format!("response has no header '{name}'")))
+    }
+
+    /// Buffered reader over the socket that enforces the response cap.
+    struct MessageReader {
+        stream: TcpStream,
+        buf: Vec<u8>,
+        eof: bool,
+    }
+
+    impl MessageReader {
+        fn new(stream: TcpStream) -> Self {
+            Self {
+                stream,
+                buf: Vec::new(),
+                eof: false,
+            }
+        }
+
+        /// Read one chunk, or record EOF. Errors (including the read
+        /// timeout, which Windows reports as WouldBlock or TimedOut) become
+        /// catchable `NXL11012` failures.
+        fn fill(&mut self) -> StdResult<()> {
+            if self.eof {
+                return Ok(());
+            }
+            let mut chunk = [0u8; 8192];
+            match self.stream.read(&mut chunk) {
+                Ok(0) => {
+                    self.eof = true;
+                    Ok(())
+                }
+                Ok(n) => {
+                    if self.buf.len() + n > MAX_RESPONSE_BYTES {
+                        return Err(net_err(format!(
+                            "response exceeds {MAX_RESPONSE_BYTES} bytes"
+                        )));
+                    }
+                    self.buf.extend_from_slice(&chunk[..n]);
+                    Ok(())
+                }
+                Err(e) if e.kind() == ErrorKind::Interrupted => Ok(()),
+                Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
+                    Err(net_err("timed out waiting for the response".to_owned()))
+                }
+                Err(e) => Err(net_err(format!("connection error: {e}"))),
+            }
+        }
+
+        /// Buffer until at least `len` bytes are available, EOF permitting.
+        fn ensure(&mut self, len: usize) -> StdResult<()> {
+            while self.buf.len() < len && !self.eof {
+                self.fill()?;
+            }
+            Ok(())
+        }
+
+        /// Offset just past the blank line that ends the header block.
+        fn find_headers_end(&mut self) -> StdResult<usize> {
+            loop {
+                if let Some(pos) = find_from(&self.buf, b"\r\n\r\n", 0) {
+                    return Ok(pos + 4);
+                }
+                if self.eof {
+                    return Err(net_err(
+                        "connection closed before the response headers completed".to_owned(),
+                    ));
+                }
+                self.fill()?;
+            }
+        }
+
+        fn read_to_eof(&mut self) -> StdResult<()> {
+            while !self.eof {
+                self.fill()?;
+            }
+            Ok(())
+        }
+    }
+
+    /// First index of `needle` at or after `from`, if any.
+    fn find_from(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+        if from >= haystack.len() {
+            return None;
+        }
+        haystack[from..]
+            .windows(needle.len())
+            .position(|window| window == needle)
+            .map(|i| i + from)
+    }
+
+    fn read_response(stream: TcpStream) -> StdResult<Response> {
+        let mut reader = MessageReader::new(stream);
+        let head_end = reader.find_headers_end()?;
+        let head = String::from_utf8_lossy(&reader.buf[..head_end]).into_owned();
+        let mut lines = head.split("\r\n");
+        let status_line = lines.next().unwrap_or("").to_owned();
+        let mut parts = status_line.split(' ');
+        let version = parts.next().unwrap_or("");
+        if !version.starts_with("HTTP/1.") {
+            return Err(net_err(format!(
+                "unrecognised response line '{status_line}'"
+            )));
+        }
+        let status = parts
+            .next()
+            .unwrap_or("")
+            .parse::<i64>()
+            .map_err(|_| net_err(format!("unparsable status line '{status_line}'")))?;
+        let headers = lines
+            .filter(|line| !line.is_empty())
+            .map(|line| match line.split_once(':') {
+                Some((key, value)) => (key.to_owned(), value.trim().to_owned()),
+                None => (line.to_owned(), String::new()),
+            })
+            .collect::<Vec<_>>();
+
+        // Chunked wins over Content-Length when both appear (RFC 9112 §6.1).
+        let chunked = headers.iter().any(|(key, value)| {
+            key.eq_ignore_ascii_case("transfer-encoding")
+                && value.to_ascii_lowercase().contains("chunked")
+        });
+        let body = if chunked {
+            decode_body(&read_chunked(&mut reader, head_end)?)
+        } else if let Some((_, value)) = headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+        {
+            let len = value.parse::<usize>().map_err(|_| {
+                net_err(format!("invalid Content-Length '{value}' in the response"))
+            })?;
+            reader.ensure(head_end + len)?;
+            if reader.buf.len() < head_end + len {
+                return Err(net_err(
+                    "connection closed before the body completed".to_owned(),
+                ));
+            }
+            decode_body(&reader.buf[head_end..head_end + len])
+        } else {
+            reader.read_to_eof()?;
+            decode_body(&reader.buf[head_end..])
+        };
+        Ok(Response {
+            status,
+            headers,
+            body,
+        })
+    }
+
+    /// Decode a chunked body starting at `cursor` (past the header block).
+    /// The terminating zero chunk ends it; trailers are ignored.
+    fn read_chunked(reader: &mut MessageReader, mut cursor: usize) -> StdResult<Vec<u8>> {
+        let mut out = Vec::new();
+        loop {
+            let line_end = loop {
+                if let Some(pos) = find_from(&reader.buf, b"\r\n", cursor) {
+                    break pos;
+                }
+                if reader.eof {
+                    return Err(net_err(
+                        "connection closed inside a chunked body".to_owned(),
+                    ));
+                }
+                reader.fill()?;
+            };
+            let line = std::str::from_utf8(&reader.buf[cursor..line_end])
+                .map_err(|_| net_err("chunked body has an unparsable size line".to_owned()))?;
+            let size_text = line.split(';').next().unwrap_or("").trim();
+            let size = usize::from_str_radix(size_text, 16)
+                .map_err(|_| net_err(format!("invalid chunk size '{size_text}'")))?;
+            cursor = line_end + 2;
+            if size == 0 {
+                return Ok(out);
+            }
+            reader.ensure(cursor + size + 2)?;
+            if reader.buf.len() < cursor + size + 2 {
+                return Err(net_err(
+                    "connection closed inside a chunked body".to_owned(),
+                ));
+            }
+            out.extend_from_slice(&reader.buf[cursor..cursor + size]);
+            if &reader.buf[cursor + size..cursor + size + 2] != b"\r\n" {
+                return Err(net_err("chunked body is missing a terminator".to_owned()));
+            }
+            cursor += size + 2;
+            if out.len() > MAX_RESPONSE_BYTES {
+                return Err(net_err(format!(
+                    "response exceeds {MAX_RESPONSE_BYTES} bytes"
+                )));
+            }
+        }
+    }
+
+    /// Bodies are text in NXL (there is no binary type), so bytes are
+    /// decoded leniently: invalid sequences become replacement characters
+    /// rather than failing the whole response.
+    fn decode_body(bytes: &[u8]) -> String {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
+/// DNS resolution and TCP reachability checks.
+///
+/// Both functions are blocking and VM-only: the JavaScript backend has no
+/// synchronous DNS or socket API, so it rejects them at compile time
+/// (NXL2007) instead of emitting calls that could never succeed.
+pub mod networking {
+    use std::net::{TcpStream, ToSocketAddrs};
+    use std::time::{Duration, Instant};
+
+    use super::{NxlValue, StdResult, StdlibError};
+
+    fn net_err(message: String) -> StdlibError {
+        StdlibError::new("NXL11012", message)
+    }
+
+    /// Addresses for `host` exactly as the platform resolver reports them
+    /// (an empty list if the name resolves to nothing at all).
+    pub fn resolve(host: &str) -> StdResult<NxlValue> {
+        let addresses = (host, 0u16)
+            .to_socket_addrs()
+            .map_err(|e| net_err(format!("cannot resolve '{host}': {e}")))?
+            .map(|address| NxlValue::Str(address.ip().to_string()))
+            .collect::<Vec<_>>();
+        Ok(NxlValue::List(addresses))
+    }
+
+    /// True when a TCP connection to `host:port` succeeds within
+    /// `timeout_ms` (shared across all resolved addresses). An unusable
+    /// port or timeout is an error, not `false`.
+    pub fn tcp_probe(host: &str, port: i64, timeout_ms: i64) -> StdResult<bool> {
+        if !(1..=65535).contains(&port) {
+            return Err(net_err(format!(
+                "port {port} is outside the valid range 1-65535"
+            )));
+        }
+        if timeout_ms < 1 {
+            return Err(net_err("timeout_ms must be at least 1".to_owned()));
+        }
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+        let addresses = (host, port as u16)
+            .to_socket_addrs()
+            .map_err(|e| net_err(format!("cannot resolve '{host}': {e}")))?;
+        for address in addresses {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            if TcpStream::connect_timeout(&address, remaining).is_ok() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
 // ── StdlibModule registry ─────────────────────────────────────────────────────
 
 /// Registry of all available stdlib modules.
@@ -1262,12 +1784,14 @@ pub enum StdlibModule {
     Time,
     Fs,
     Testing,
-    /// Planned — not yet implemented.
+    /// Blocking HTTP/1.1 client (`get`, `post`, `header`); VM-only because
+    /// the JavaScript backend has no synchronous fetch.
     Http,
     /// Cryptographic hashing and byte encodings (`sha256_hex`, `hex_*`,
     /// `base64_*`).
     Crypto,
-    /// Planned — not yet implemented.
+    /// DNS resolution and TCP reachability (`resolve`, `tcp_probe`);
+    /// VM-only for the same reason as `Http`.
     Networking,
 }
 
@@ -1295,8 +1819,11 @@ impl StdlibModule {
     }
 
     /// Returns true if this module is fully implemented in this phase.
+    ///
+    /// Every module in the registry is implemented as of this release; the
+    /// check stays so a future planned module cannot resolve silently.
     pub fn is_implemented(&self) -> bool {
-        !matches!(self, Self::Http | Self::Networking)
+        true
     }
 
     pub fn name(&self) -> &'static str {
@@ -1335,7 +1862,9 @@ pub fn all_modules() -> Vec<StdlibModule> {
         StdlibModule::Time,
         StdlibModule::Fs,
         StdlibModule::Testing,
+        StdlibModule::Http,
         StdlibModule::Crypto,
+        StdlibModule::Networking,
     ]
 }
 
@@ -1343,33 +1872,42 @@ pub fn all_modules() -> Vec<StdlibModule> {
 
 /// The static type of a stdlib builtin parameter or result.
 ///
-/// The NXL type system has no dedicated `Char` or list-of-string type yet, so
-/// only functions whose signature is built from these four types are exposed.
+/// The NXL type system has no dedicated `Char` or list-of-string type yet,
+/// so most signatures are built from the four scalar types below. `Value`
+/// covers the rest — null, lists, and maps (including whole HTTP responses)
+/// — for the few functions that accept or return structured data; it lowers
+/// to the NXL `Unknown` type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuiltinType {
     Int,
     Float,
     Str,
     Bool,
+    /// Any NXL value (only where a signature explicitly declares one).
+    Value,
 }
 
 impl BuiltinType {
     /// Whether an argument of type `arg` is acceptable where `self` is
-    /// declared. Integers promote to Float; nothing else is implicit.
+    /// declared. Integers promote to Float; a `Value` parameter accepts
+    /// everything; nothing else is implicit.
     pub fn accepts(self, arg: BuiltinType) -> bool {
-        self == arg || (self == BuiltinType::Float && arg == BuiltinType::Int)
+        self == BuiltinType::Value
+            || self == arg
+            || (self == BuiltinType::Float && arg == BuiltinType::Int)
     }
 }
 
 impl NxlValue {
-    /// The `BuiltinType` of a scalar value, or `None` for null/list/map.
+    /// The `BuiltinType` of a value: scalars carry their own type and
+    /// null/list/map are `Value`, which only `Value` parameters accept.
     pub fn builtin_type(&self) -> Option<BuiltinType> {
         match self {
             NxlValue::Bool(_) => Some(BuiltinType::Bool),
             NxlValue::Int(_) => Some(BuiltinType::Int),
             NxlValue::Float(_) => Some(BuiltinType::Float),
             NxlValue::Str(_) => Some(BuiltinType::Str),
-            _ => None,
+            NxlValue::Null | NxlValue::List(_) | NxlValue::Map(_) => Some(BuiltinType::Value),
         }
     }
 }
@@ -1389,7 +1927,7 @@ impl BuiltinSpec {
     }
 }
 
-use BuiltinType::{Bool as B, Float as F, Int as I, Str as S};
+use BuiltinType::{Bool as B, Float as F, Int as I, Str as S, Value as V};
 
 static STDLIB_BUILTINS: &[BuiltinSpec] = &[
     // std::strings — single-signature functions over String/Int/Bool.
@@ -1615,6 +2153,33 @@ static STDLIB_BUILTINS: &[BuiltinSpec] = &[
         params: &[S],
         ret: S,
     },
+    // std::http — blocking HTTP/1.1; responses are Maps (VM-only).
+    BuiltinSpec {
+        name: "std::http::get",
+        params: &[S],
+        ret: V,
+    },
+    BuiltinSpec {
+        name: "std::http::post",
+        params: &[S, S],
+        ret: V,
+    },
+    BuiltinSpec {
+        name: "std::http::header",
+        params: &[V, S],
+        ret: S,
+    },
+    // std::networking — resolver and TCP reachability (VM-only).
+    BuiltinSpec {
+        name: "std::networking::resolve",
+        params: &[S],
+        ret: V,
+    },
+    BuiltinSpec {
+        name: "std::networking::tcp_probe",
+        params: &[S, I, I],
+        ret: B,
+    },
 ];
 
 /// Look up a stdlib builtin by its fully qualified name.
@@ -1622,9 +2187,16 @@ pub fn builtin(name: &str) -> Option<&'static BuiltinSpec> {
     STDLIB_BUILTINS.iter().find(|spec| spec.name == name)
 }
 
+/// Builtins only the VM can run: blocking network I/O has no synchronous
+/// JavaScript equivalent. The JavaScript backend rejects these at compile
+/// time (NXL2007) rather than emitting a call that could never succeed.
+pub fn is_vm_only_builtin(name: &str) -> bool {
+    name.starts_with("std::http::") || name.starts_with("std::networking::")
+}
+
 /// The canonical `std::<module>` prefix for a module name, accepting both the
-/// qualified (`std::math`) and short (`math`) spellings. `None` for modules
-/// that are not implemented yet (http/networking) or unknown.
+/// qualified (`std::math`) and short (`math`) spellings. `None` for unknown
+/// module names.
 pub fn canonical_module(name: &str) -> Option<&'static str> {
     StdlibModule::from_name(name)
         .filter(|module| module.is_implemented())
@@ -1790,6 +2362,15 @@ pub fn call_builtin(name: &str, args: &[NxlValue]) -> StdResult<NxlValue> {
         "std::crypto::hex_decode" => crypto::hex_decode(as_str(&args[0])?).map(NxlValue::Str),
         "std::crypto::base64_encode" => Ok(NxlValue::Str(crypto::base64_encode(as_str(&args[0])?))),
         "std::crypto::base64_decode" => crypto::base64_decode(as_str(&args[0])?).map(NxlValue::Str),
+
+        "std::http::get" => http::get(as_str(&args[0])?),
+        "std::http::post" => http::post(as_str(&args[0])?, as_str(&args[1])?),
+        "std::http::header" => http::header(&args[0], as_str(&args[1])?).map(NxlValue::Str),
+        "std::networking::resolve" => networking::resolve(as_str(&args[0])?),
+        "std::networking::tcp_probe" => {
+            networking::tcp_probe(as_str(&args[0])?, as_int(&args[1])?, as_int(&args[2])?)
+                .map(NxlValue::Bool)
+        }
 
         _ => Err(StdlibError::new(
             "NXL11010",

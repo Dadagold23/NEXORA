@@ -1861,15 +1861,50 @@ fn stdlib_unknown_function_is_a_compile_error() {
 }
 
 #[test]
-fn stdlib_unimplemented_module_is_a_compile_error() {
-    // Modules that exist in the registry but are not wired as builtins must not
-    // silently resolve to nothing.
-    let source = SourceFile::new(
-        "stdlib_http.nxl",
-        "import std.http;\nprint(std.http.get(\"x\"));\n",
-    );
-    let diagnostic = compile_to_nir(&source).expect_err("unimplemented module must be rejected");
+fn stdlib_module_without_wired_builtins_is_a_compile_error() {
+    // Every registry module is implemented, but several (fs, json, env, …)
+    // expose Rust APIs only — a call into one must fail to resolve rather
+    // than silently resolve to nothing.
+    let source = SourceFile::new("stdlib_fs.nxl", "import std.fs;\nprint(fs.read(\"x\"));\n");
+    let diagnostic = compile_to_nir(&source).expect_err("unwired module call must be rejected");
     assert_eq!(diagnostic.code, "NXL2002");
+
+    // A module name outside the registry fails the same way.
+    let source = SourceFile::new(
+        "stdlib_dns.nxl",
+        "import std.dns;\nprint(std.dns.lookup(\"localhost\"));\n",
+    );
+    let diagnostic = compile_to_nir(&source).expect_err("unknown module must be rejected");
+    assert_eq!(diagnostic.code, "NXL2002");
+}
+
+#[test]
+fn stdlib_vm_only_module_compiles_for_the_vm_but_not_js() {
+    // std::http lowers for the VM; the JavaScript backend rejects it at
+    // compile time because Node and browsers have no synchronous fetch.
+    let source = SourceFile::new(
+        "stdlib_http_vm.nxl",
+        "import std.http;\nprint(std.http.get(\"http://example.com\").status);\n",
+    );
+    let module = compile_to_nir(&source).expect("the VM target must accept std::http");
+    assert!(!module.functions.is_empty());
+
+    let diagnostic = nxl_compiler::backend::compile_js(&source)
+        .expect_err("the JavaScript backend must reject std::http");
+    assert_eq!(diagnostic.code, "NXL2007");
+    assert!(
+        diagnostic.message.contains("needs the VM"),
+        "{}",
+        diagnostic.message
+    );
+
+    let source = SourceFile::new(
+        "stdlib_net_vm.nxl",
+        "import std.networking;\nprint(std.networking.tcp_probe(\"127.0.0.1\", 80, 100));\n",
+    );
+    let diagnostic = nxl_compiler::backend::compile_js(&source)
+        .expect_err("the JavaScript backend must reject std::networking");
+    assert_eq!(diagnostic.code, "NXL2007");
 }
 
 #[test]

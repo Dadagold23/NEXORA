@@ -668,10 +668,20 @@ impl<'m> JsBackend<'m> {
                 callee,
                 arguments,
                 return_type,
+                span,
                 ..
             } => {
                 let args: Vec<String> = arguments.iter().map(|a| self.var(*a)).collect();
                 let call = if crate::stdlib::builtin(callee).is_some() {
+                    if crate::stdlib::is_vm_only_builtin(callee) {
+                        return Err(Diagnostic::error(
+                            "NXL2007",
+                            format!(
+                                "'{callee}' needs the VM (`nxl run`); the JavaScript backend cannot perform blocking network I/O"
+                            ),
+                            *span,
+                        ));
+                    }
                     // Stdlib functions route through the shared dispatcher.
                     format!("__nxl_std(\"{callee}\", [{}])", args.join(", "))
                 } else {

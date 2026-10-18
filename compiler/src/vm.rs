@@ -3494,9 +3494,27 @@ fn value_to_nxl(value: &Value) -> Result<crate::stdlib::NxlValue, VmFault> {
         Value::String(s) => NxlValue::Str(s.clone()),
         Value::Boolean(b) => NxlValue::Bool(*b),
         Value::Unit => NxlValue::Null,
+        // Structured values convert recursively so `Value` parameters (for
+        // example std::http::header) can receive them; parameters declared
+        // as scalars still reject them at the call_builtin type check.
+        Value::Array(elements) => {
+            let mut items = Vec::with_capacity(elements.len());
+            for element in elements {
+                items.push(value_to_nxl(element)?);
+            }
+            NxlValue::List(items)
+        }
+        Value::Object { fields, .. } => {
+            let mut pairs = Vec::with_capacity(fields.len());
+            for (key, field) in fields {
+                pairs.push((key.clone(), value_to_nxl(field)?));
+            }
+            NxlValue::Map(pairs)
+        }
         _ => {
             return Err(VmFault::Throw(Value::String(
-                "standard-library functions accept only Int, Float, String, and Bool".to_owned(),
+                "standard-library functions do not accept task, channel, closure, or enum values"
+                    .to_owned(),
             )))
         }
     })

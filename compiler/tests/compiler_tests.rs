@@ -1746,8 +1746,8 @@ fn concurrency_error_converts_to_diagnostic() {
 #[cfg(test)]
 mod stdlib_tests {
     use nxl_compiler::stdlib::{
-        all_modules, call_builtin, crypto, json, math, strings, testing, time, NxlList, NxlMap,
-        NxlValue, Rng, StdlibModule,
+        all_modules, builtin, call_builtin, crypto, http, is_vm_only_builtin, json, math, strings,
+        testing, time, BuiltinType, NxlList, NxlMap, NxlValue, Rng, StdlibModule,
     };
 
     // ── NxlList ───────────────────────────────────────────────────────────────
@@ -2039,16 +2039,103 @@ mod stdlib_tests {
     #[test]
     fn stdlib_module_implemented_flag() {
         assert!(StdlibModule::Math.is_implemented());
-        assert!(!StdlibModule::Http.is_implemented());
+        assert!(StdlibModule::Http.is_implemented());
         assert!(StdlibModule::Crypto.is_implemented());
-        assert!(!StdlibModule::Networking.is_implemented());
+        assert!(StdlibModule::Networking.is_implemented());
     }
 
     #[test]
     fn stdlib_all_modules_count() {
         let modules = all_modules();
-        assert_eq!(modules.len(), 13);
+        assert_eq!(modules.len(), 15);
         assert!(modules.iter().all(|m| m.is_implemented()));
+    }
+
+    // ── http / networking ─────────────────────────────────────────────────────
+
+    #[test]
+    fn stdlib_http_and_networking_builtins_are_registered() {
+        let get = builtin("std::http::get").expect("get must be registered");
+        assert_eq!(get.arity(), 1);
+        let post = builtin("std::http::post").expect("post must be registered");
+        assert_eq!(post.arity(), 2);
+        let header = builtin("std::http::header").expect("header must be registered");
+        assert_eq!(header.arity(), 2);
+        let resolve = builtin("std::networking::resolve").expect("resolve must be registered");
+        assert_eq!(resolve.arity(), 1);
+        let probe = builtin("std::networking::tcp_probe").expect("probe must be registered");
+        assert_eq!(probe.arity(), 3);
+        assert_eq!(probe.ret, BuiltinType::Bool);
+    }
+
+    #[test]
+    fn stdlib_vm_only_builtin_classification() {
+        assert!(is_vm_only_builtin("std::http::get"));
+        assert!(is_vm_only_builtin("std::http::header"));
+        assert!(is_vm_only_builtin("std::networking::resolve"));
+        // Everything else stays mirrorable, including crypto.
+        assert!(!is_vm_only_builtin("std::crypto::sha256_hex"));
+        assert!(!is_vm_only_builtin("std::math::sqrt"));
+        assert!(!is_vm_only_builtin("print"));
+    }
+
+    #[test]
+    fn stdlib_http_url_parsing() {
+        use http::parse_url;
+        let url = parse_url("http://example.com").expect("bare host");
+        assert_eq!(
+            (url.host.as_str(), url.port, url.path.as_str()),
+            ("example.com", 80, "/")
+        );
+        let url = parse_url("http://example.com:8080/a/b?x=1").expect("port and query");
+        assert_eq!(
+            (url.host.as_str(), url.port, url.path.as_str()),
+            ("example.com", 8080, "/a/b?x=1")
+        );
+        let url = parse_url("http://example.com?x=1").expect("query only");
+        assert_eq!(url.path, "/?x=1");
+        let url = parse_url("http://[::1]:9090/").expect("ipv6 literal");
+        assert_eq!((url.host.as_str(), url.port), ("::1", 9090));
+        let url = parse_url("http://example.com/a#frag").expect("fragment");
+        assert_eq!(url.path, "/a");
+
+        let https = parse_url("https://example.com/").expect_err("https must be named");
+        assert_eq!(https.code, "NXL11012");
+        assert!(https.message.contains("TLS"), "{}", https.message);
+        assert!(parse_url("ftp://example.com/").is_err());
+        assert!(parse_url("http://:8080/").is_err());
+        assert!(parse_url("http://example.com:port/").is_err());
+        assert!(parse_url("http://example.com:70000/").is_err());
+        assert!(parse_url("http://::1/").is_err());
+        assert!(parse_url("http://[::1/").is_err());
+    }
+
+    #[test]
+    fn stdlib_http_header_lookup_is_case_insensitive() {
+        use http::Response;
+        // The lookup contract, checked without a socket: identical to what
+        // request() hands back after parsing real headers.
+        let response = Response {
+            status: 200,
+            headers: vec![
+                (
+                    "Content-Type".to_owned(),
+                    "text/plain; charset=utf-8".to_owned(),
+                ),
+                ("X-Request-Id".to_owned(), "42".to_owned()),
+            ],
+            body: String::new(),
+        };
+        assert_eq!(
+            response.header("content-type"),
+            Some("text/plain; charset=utf-8")
+        );
+        assert_eq!(
+            response.header("CONTENT-TYPE"),
+            Some("text/plain; charset=utf-8")
+        );
+        assert_eq!(response.header("x-request-id"), Some("42"));
+        assert_eq!(response.header("missing"), None);
     }
 
     // ── crypto ─────────────────────────────────────────────────────────────────

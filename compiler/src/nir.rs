@@ -5987,5 +5987,8 @@ fn stdlib_type(ty: crate::stdlib::BuiltinType) -> Type {
         BuiltinType::Float => Type::Float,
         BuiltinType::Str => Type::String,
         BuiltinType::Bool => Type::Bool,
+        // Structured values (HTTP responses, resolver results) arrive with
+        // no static shape; field reads on them are checked at runtime.
+        BuiltinType::Value => Type::Unknown,
     }
 }
