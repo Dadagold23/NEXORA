@@ -217,12 +217,19 @@ pub enum Command {
         registry: Option<String>,
     },
     DbCreate,
-    DbDrop,
+    DbDrop {
+        /// The operator confirmed the destruction (`--yes` or interactive
+        /// prompt); without it the command refuses to run.
+        yes: bool,
+    },
     DbMigrate,
     DbRollback,
-    DbRefresh,
+    DbRefresh {
+        yes: bool,
+    },
     DbFresh {
         seed: bool,
+        yes: bool,
     },
     DbSeed,
     DbStatus,
@@ -603,15 +610,20 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
         "platforms" => Ok(Command::Platforms),
         s if s.starts_with("db:") || s == "db" => match s {
             "db:create" => Ok(Command::DbCreate),
-            "db:drop" => Ok(Command::DbDrop),
+            "db:drop" => Ok(Command::DbDrop {
+                yes: args.iter().any(|a| a == "--yes"),
+            }),
             "db:migrate" => Ok(Command::DbMigrate),
             "db:rollback" => Ok(Command::DbRollback),
-            "db:refresh" => Ok(Command::DbRefresh),
+            "db:refresh" => Ok(Command::DbRefresh {
+                yes: args.iter().any(|a| a == "--yes"),
+            }),
             "db:seed" => Ok(Command::DbSeed),
             "db:status" => Ok(Command::DbStatus),
             "db:audit" => Ok(Command::DbAudit),
             "db:fresh" => Ok(Command::DbFresh {
                 seed: args.iter().any(|a| a == "--seed"),
+                yes: args.iter().any(|a| a == "--yes"),
             }),
             _ => Err(err("NXL12003", format!("unknown command '{s}'"))),
         },
@@ -692,11 +704,13 @@ COMMANDS:
     tree              Show dependency tree
     publish           Publish the package into a registry
     db:create         Create database
-    db:drop           Drop database
+    db:drop [--yes]   Drop database (destroys data; --yes or prompt required)
     db:migrate        Run migrations
     db:rollback       Roll back last migration
-    db:refresh        Roll back all then re-migrate
-    db:fresh [--seed] Fresh migrate (optionally seed)
+    db:refresh [--yes]
+                      Roll back all then re-migrate (destroys data)
+    db:fresh [--seed] [--yes]
+                      Fresh migrate (optionally seed; destroys data)
     db:seed           Run seeders
     db:status         Show migration status
     db:audit          Show migration audit log
@@ -1797,21 +1811,76 @@ fn nuf_fallback_app(dir: &Path) -> crate::nuf::App {
     app
 }
 
+/// Validate configuration and required environment variables before binding.
+///
+/// Every problem is reported at once — an operator fixing one typo should
+/// not have to restart to discover the next. Only environment variable
+/// *names* are listed; values never reach a diagnostic or a log line,
+/// because a required secret is still a secret.
+pub fn validate_startup(dir: &Path) -> CliResult<crate::nuf::WebConfig> {
+    use crate::nuf::{DeployConfig, WebConfig};
+
+    let config = WebConfig::load(dir);
+    let mut problems = Vec::new();
+    if let Err(problem) = config.validate() {
+        problems.push(problem);
+    }
+    let missing = DeployConfig::load(dir).missing();
+    if !missing.is_empty() {
+        problems.push(format!(
+            "missing required environment variable(s): {}",
+            missing.join(", ")
+        ));
+    }
+    if problems.is_empty() {
+        Ok(config)
+    } else {
+        Err(err(
+            "NXL12011",
+            format!(
+                "startup validation failed:\n  - {}",
+                problems.join("\n  - ")
+            ),
+        ))
+    }
+}
+
+/// Complete on the first Ctrl+C (SIGINT); on Unix also on SIGTERM, so a
+/// service-manager stop drains in-flight requests instead of killing the
+/// process mid-response.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.ok();
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    eprintln!("shutting down; draining in-flight requests");
+}
+
 /// Start the NUF demonstration server. Blocks until the process is stopped.
 ///
 /// Async because the CLI already runs on a tokio runtime; calling the blocking
 /// `App::serve` from here would try to nest one runtime inside another.
 pub async fn cmd_serve(dir: &Path) -> CliResult<String> {
-    use crate::nuf::WebConfig;
-
-    let config = WebConfig::load(dir);
+    let config = validate_startup(dir)?;
     let app = nuf_demo_app(dir);
 
     // Announce the address before blocking, so the server is not silent while
     // it waits. `serve` returns only if binding fails or the process stops.
     println!(
-        "NUF server listening on http://{}:{}",
-        config.host, config.port
+        "NUF server listening on http://{}:{} ({})",
+        config.host, config.port, config.environment
     );
     for operation in app.operations() {
         println!("  {} {}", operation.method.to_uppercase(), operation.path);
@@ -1819,10 +1888,10 @@ pub async fn cmd_serve(dir: &Path) -> CliResult<String> {
     println!("  GET /openapi.json");
     println!("  press Ctrl+C to stop");
 
-    app.serve_async(&config)
+    app.serve_async_until(&config, shutdown_signal())
         .await
         .map_err(|e| err("NXL12004", e.to_string()))?;
-    Ok(String::new())
+    Ok("server stopped; in-flight requests drained".to_owned())
 }
 
 // ── Package manager commands ──────────────────────────────────────────────────
@@ -1837,6 +1906,7 @@ fn pkg_manager(dir: &Path, offline: bool) -> crate::pkg::PackageManager {
 /// real HTTP server, but not a server-side NXL runtime: NXL has no HTTP types
 /// in the language yet, so handlers cannot yet be written in NXL.
 pub async fn cmd_dev(dir: &Path, config: crate::dev::DevConfig) -> CliResult<()> {
+    validate_startup(dir)?;
     crate::devserver::serve_in(dir.to_path_buf(), config)
         .await
         .map_err(CliError::from)
@@ -2349,7 +2419,11 @@ fn registry_packages(registry_dir: &Path) -> Vec<String> {
 /// The database layer prefixes its messages with `error[NDB…]:`, so the code is
 /// stripped back out here rather than double-reported by `CliError`'s Display.
 fn db_err(error: crate::ndb::NdbError) -> CliError {
-    let text = error.to_string();
+    // A database error can echo connection details (driver, host, port,
+    // database name). `display_target` is careful to omit the password, but a
+    // driver message is free-form, so anything reaching the operator is run
+    // through the secret redactor first.
+    let text = crate::security::redact(&error.to_string());
     match text.split_once(']') {
         Some((prefix, rest)) if prefix.starts_with("error[NDB") => {
             let code = prefix.trim_start_matches("error[").to_owned();
@@ -2376,7 +2450,50 @@ pub fn cmd_db_create(dir: &Path) -> CliResult<String> {
     crate::ndb::db_create(dir).map_err(db_err)
 }
 
-pub fn cmd_db_drop(dir: &Path) -> CliResult<String> {
+/// Guard for commands that permanently destroy data.
+///
+/// `db:drop`, `db:fresh`, and `db:refresh` refuse to run without explicit
+/// confirmation: `--yes` for scripts and CI, or the interactive prompt the
+/// CLI shows on a terminal. Deployment rule: a deployment tool must never
+/// silently destroy production data.
+pub fn confirm_destructive(action: &str, confirmed: bool) -> CliResult<()> {
+    if confirmed {
+        return Ok(());
+    }
+    Err(err(
+        "NXL12010",
+        format!(
+            "{action} permanently destroys data; pass --yes to confirm \
+             (an interactive terminal gets a prompt instead)"
+        ),
+    ))
+}
+
+/// Ask a terminal operator to confirm a destructive database command.
+///
+/// Returns `true` only when the answer is exactly `yes`, so a stray Enter
+/// aborts. Non-terminal stdin yields `false` immediately: scripts never
+/// hang on a prompt and instead receive the NXL12010 error from
+/// [`confirm_destructive`].
+pub fn prompt_destructive(dir: &Path, action: &str) -> bool {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return false;
+    }
+    let target = crate::ndb::DatabaseConfig::load(dir)
+        .map(|c| c.display_target())
+        .unwrap_or_else(|_| "the configured database".to_owned());
+    eprint!("{action} will permanently destroy {target}. Type 'yes' to continue: ");
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        return false;
+    }
+    answer.trim() == "yes"
+}
+
+pub fn cmd_db_drop(dir: &Path, confirmed: bool) -> CliResult<String> {
+    confirm_destructive("db:drop", confirmed)?;
     crate::ndb::db_drop(dir).map_err(db_err)
 }
 
@@ -2396,7 +2513,8 @@ pub fn cmd_db_rollback(dir: &Path) -> CliResult<String> {
     )
 }
 
-pub fn cmd_db_refresh(dir: &Path) -> CliResult<String> {
+pub fn cmd_db_refresh(dir: &Path, confirmed: bool) -> CliResult<String> {
+    confirm_destructive("db:refresh", confirmed)?;
     let (rolled, ran) = crate::ndb::refresh(dir).map_err(db_err)?;
     let mut out = Vec::new();
     out.push(if rolled.is_empty() {
@@ -2412,7 +2530,8 @@ pub fn cmd_db_refresh(dir: &Path) -> CliResult<String> {
     Ok(out.join("\n"))
 }
 
-pub fn cmd_db_fresh(dir: &Path, seed: bool) -> CliResult<String> {
+pub fn cmd_db_fresh(dir: &Path, seed: bool, confirmed: bool) -> CliResult<String> {
+    confirm_destructive("db:fresh", confirmed)?;
     let ran = crate::ndb::fresh(dir, seed).map_err(db_err)?;
     let mut out = vec![format!(
         "fresh: dropped and recreated the database ({} migration(s))",

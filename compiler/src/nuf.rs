@@ -45,6 +45,11 @@ use serde_json::{json, Value};
 pub struct WebConfig {
     pub host: String,
     pub port: u16,
+    /// The deployment environment this configuration was loaded for.
+    pub environment: String,
+    /// Problems found while parsing, surfaced by [`WebConfig::validate`]
+    /// before the server binds. Empty for a well-formed manifest.
+    pub problems: Vec<String>,
 }
 
 impl Default for WebConfig {
@@ -52,32 +57,185 @@ impl Default for WebConfig {
         Self {
             host: "127.0.0.1".to_owned(),
             port: 8080,
+            environment: "development".to_owned(),
+            problems: Vec::new(),
         }
     }
 }
 
 impl WebConfig {
-    pub fn parse(toml: &str) -> Self {
-        let mut cfg = WebConfig::default();
-        let mut in_web = false;
+    /// Parse `nxl.toml` content for the given environment.
+    ///
+    /// Base `[web]` keys are overlaid by `[env.<environment>]` keys, so
+    /// development, test, and production can point at different hosts and
+    /// ports without separate files. A malformed port is recorded as a
+    /// problem instead of silently falling back, and [`WebConfig::validate`]
+    /// turns every recorded problem into a startup error.
+    pub fn parse_for_env(toml: &str, environment: &str) -> Self {
+        #[derive(PartialEq)]
+        enum Target {
+            Base,
+            Overlay,
+            Other,
+        }
+        let mut cfg = WebConfig {
+            environment: environment.to_owned(),
+            ..Default::default()
+        };
+        let mut target = Target::Other;
         for raw in toml.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
             if line.starts_with('[') {
-                in_web = line == "[web]";
+                target = if line == "[web]" {
+                    Target::Base
+                } else if let Some(name) = line
+                    .strip_prefix("[env.")
+                    .and_then(|rest| rest.strip_suffix(']'))
+                {
+                    if name == environment {
+                        Target::Overlay
+                    } else {
+                        Target::Other
+                    }
+                } else {
+                    Target::Other
+                };
                 continue;
             }
-            if !in_web {
+            if target == Target::Other {
                 continue;
             }
             if let Some((k, v)) = line.split_once('=') {
                 let v = v.trim().trim_matches('"');
                 match k.trim() {
                     "host" => cfg.host = v.to_owned(),
-                    "port" => cfg.port = v.parse().unwrap_or(8080),
+                    "port" => match v.parse() {
+                        Ok(port) => cfg.port = port,
+                        Err(_) => cfg
+                            .problems
+                            .push(format!("web.port '{v}' is not a valid port number")),
+                    },
                     _ => {}
+                }
+            }
+        }
+        cfg
+    }
+
+    /// Parse `nxl.toml` content with the base configuration only.
+    ///
+    /// No `[env.*]` overlay is applied; use [`WebConfig::parse_for_env`] or
+    /// [`WebConfig::load`] when the environment matters.
+    pub fn parse(toml: &str) -> Self {
+        let mut cfg = Self::parse_for_env(toml, SUPERSEDED_ENV_SENTINEL);
+        cfg.environment = "development".to_owned();
+        cfg
+    }
+
+    pub fn load(dir: &Path) -> Self {
+        let Ok(toml) = fs::read_to_string(dir.join("nxl.toml")) else {
+            return Self::default();
+        };
+        match active_environment() {
+            Ok(environment) => Self::parse_for_env(&toml, &environment),
+            Err(problem) => Self {
+                problems: vec![problem],
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Validate the configuration before the server binds.
+    ///
+    /// Startup rule: fail fast with every problem at once — an operator
+    /// fixing one typo should not have to restart to discover the next.
+    pub fn validate(&self) -> Result<(), String> {
+        let mut problems = self.problems.clone();
+        if self.port == 0 {
+            problems.push("web.port 0 is not a usable port".to_owned());
+        }
+        if self.host.is_empty()
+            || self.host.contains(char::is_whitespace)
+            || self.host.contains('/')
+        {
+            problems.push(format!("web.host '{}' is not a valid host", self.host));
+        }
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(problems.join("; "))
+        }
+    }
+}
+
+/// The environments `[env.<name>]` overlays may name.
+pub const KNOWN_ENVIRONMENTS: &[&str] = &["development", "test", "production"];
+
+/// A section name that can never occur in a manifest, so
+/// [`WebConfig::parse`] applies no environment overlay.
+const SUPERSEDED_ENV_SENTINEL: &str = "\u{0}no-environment";
+
+/// The active deployment environment, from `NXL_ENV` (default: development).
+///
+/// An unknown value is an error rather than a silent fallback: deploying with
+/// `NXL_ENV=productionn` must not quietly serve development configuration.
+pub fn active_environment() -> Result<String, String> {
+    match std::env::var("NXL_ENV") {
+        Ok(value) if KNOWN_ENVIRONMENTS.contains(&value.as_str()) => Ok(value),
+        Ok(value) => Err(format!(
+            "NXL_ENV '{value}' is unknown; expected one of {}",
+            KNOWN_ENVIRONMENTS.join(", ")
+        )),
+        Err(_) => Ok("development".to_owned()),
+    }
+}
+
+/// Deployment-time requirements read from `nxl.toml`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeployConfig {
+    /// Environment variables the application refuses to start without.
+    pub required_env: Vec<String>,
+}
+
+impl DeployConfig {
+    /// Parse the `[deploy]` section of a manifest.
+    ///
+    /// Only `required_env` is recognised: a list of variable *names* whose
+    /// values must come from the environment, never from the manifest.
+    pub fn parse(toml: &str) -> Self {
+        let mut cfg = DeployConfig::default();
+        let mut in_deploy = false;
+        for raw in toml.lines() {
+            let line = raw.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if line.starts_with('[') {
+                in_deploy = line == "[deploy]";
+                continue;
+            }
+            if !in_deploy {
+                continue;
+            }
+            if let Some((k, v)) = line.split_once('=') {
+                if k.trim() != "required_env" {
+                    continue;
+                }
+                // Collect every quoted name in the list, whether it spans one
+                // line or many.
+                let mut rest = v;
+                while let Some(start) = rest.find('"') {
+                    let after = &rest[start + 1..];
+                    match after.find('"') {
+                        Some(end) => {
+                            cfg.required_env.push(after[..end].to_owned());
+                            rest = &after[end + 1..];
+                        }
+                        None => break,
+                    }
                 }
             }
         }
@@ -88,6 +246,18 @@ impl WebConfig {
         fs::read_to_string(dir.join("nxl.toml"))
             .map(|t| Self::parse(&t))
             .unwrap_or_default()
+    }
+
+    /// Names of required variables that are unset.
+    ///
+    /// Only names are returned — values must never reach a diagnostic or a
+    /// log line, because a required secret is still a secret.
+    pub fn missing(&self) -> Vec<String> {
+        self.required_env
+            .iter()
+            .filter(|name| std::env::var(name).is_err())
+            .cloned()
+            .collect()
     }
 }
 
@@ -656,9 +826,23 @@ impl App {
 
     /// Start the HTTP server on the current runtime.
     pub async fn serve_async(self, config: &WebConfig) -> std::io::Result<()> {
+        self.serve_async_until(config, std::future::pending()).await
+    }
+
+    /// Start the HTTP server, stopping gracefully when `shutdown` completes.
+    ///
+    /// In-flight requests are drained before this returns, so a deployment
+    /// restart does not cut responses mid-flight.
+    pub async fn serve_async_until<F: std::future::Future<Output = ()> + Send + 'static>(
+        self,
+        config: &WebConfig,
+        shutdown: F,
+    ) -> std::io::Result<()> {
         let addr = format!("{}:{}", config.host, config.port);
         let listener = tokio::net::TcpListener::bind(&addr).await?;
-        axum::serve(listener, self.into_router()).await
+        axum::serve(listener, self.into_router())
+            .with_graceful_shutdown(shutdown)
+            .await
     }
 
     /// Bind the TCP listener without serving; used by tests.
@@ -693,8 +877,15 @@ async fn cors_headers(req: axum::extract::Request, next: axum::middleware::Next)
 }
 
 async fn request_logger(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    eprintln!("nuf: {} {}", req.method(), req.uri());
-    next.run(req).await
+    // Only the method and path are logged — never the query string or
+    // headers, both of which routinely carry tokens, API keys, and session
+    // identifiers. This is the deployment rule: an access log is not a place
+    // for credentials.
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
+    let response = next.run(req).await;
+    eprintln!("nuf: {} {} {}", method, path, response.status().as_u16());
+    response
 }
 
 /// Reject requests that do not carry a valid authenticated session (401).

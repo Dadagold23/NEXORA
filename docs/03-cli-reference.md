@@ -45,8 +45,11 @@ Short forms work too: `install`, `add`, `remove`, `update`, `audit`, `tree`,
 
 ## Database (NDB)
 
-`db:create`, `db:drop`, `db:migrate`, `db:rollback`, `db:refresh`,
-`db:fresh [--seed]`, `db:seed`, `db:status`, `db:audit`.
+`db:create`, `db:drop [--yes]`, `db:migrate`, `db:rollback`, `db:refresh [--yes]`,
+`db:fresh [--seed] [--yes]`, `db:seed`, `db:status`, `db:audit`.
+
+`db:drop`, `db:fresh`, and `db:refresh` destroy data, so they require
+confirmation: an interactive prompt, or `--yes` for scripts and CI (NXL12010).
 
 ## Scaffolding
 

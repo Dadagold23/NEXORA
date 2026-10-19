@@ -7,7 +7,7 @@ bash cargo run --quiet -- check ../examples/hello/src/main.nxl
 ## blog — NDB database app
 bash
 TMP=$(mktemp -d) && cp -r examples/blog/* "$TMP" && cd "$TMP"
-cargo run --manifest-path ../../compiler/Cargo.toml -- db:fresh --seed
+cargo run --manifest-path ../../compiler/Cargo.toml -- db:fresh --seed --yes
 cargo run --manifest-path ../../compiler/Cargo.toml -- db:migrate
 
 ## api — REST-style server demo

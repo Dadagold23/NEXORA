@@ -45,6 +45,7 @@ fn spawn_test_server() -> (String, Arc<nuf::AppState>) {
     let config = nuf::WebConfig {
         host: "127.0.0.1".into(),
         port: 0,
+        ..Default::default()
     };
 
     let rt = tokio::runtime::Builder::new_multi_thread()

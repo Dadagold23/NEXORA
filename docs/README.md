@@ -24,6 +24,7 @@
 | [Testing/Perf/CI](14-testing-performance-ci.md) | P23-P25 |
 | [Debugger & IDE](15-debugger-ide.md) | P21, P22, and the VS Code extension |
 | [Troubleshooting](16-troubleshooting.md) | common errors |
+| [Build & Deployment](21-deployment.md) | build profiles, env separation, startup validation, secrets, templates, rollback |
 | [Architecture](17-architecture.md) | subsystem map |
 | [Contributing & Release](18-contributing-release.md) | workflow expectations |
 | [Platform support matrix](platform-support.md) | what is built and tested, with evidence |

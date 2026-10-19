@@ -216,9 +216,73 @@ fn db_audit_records_what_ran() {
 fn db_drop_removes_the_database() {
     let dir = db_project("drop");
     cli::cmd_db_create(&dir).unwrap();
-    let message = cli::cmd_db_drop(&dir).expect("drop should succeed");
+    let message = cli::cmd_db_drop(&dir, true).expect("drop should succeed");
     assert!(message.contains("Dropped database"), "{message}");
     assert!(!dir.join("database").join("database.sqlite").exists());
+}
+
+// ── destructive-command guards ────────────────────────────────────────────────
+//
+// `db:drop`, `db:fresh`, and `db:refresh` destroy data, so they refuse to run
+// without explicit confirmation. In a non-interactive session (this test
+// harness) the only way through is `confirmed = true`; without it the command
+// fails with NXL12010 and leaves the database untouched.
+
+#[test]
+fn db_drop_refuses_to_run_without_confirmation() {
+    let dir = db_project("guard_drop");
+    cli::cmd_db_create(&dir).unwrap();
+    let error = cli::cmd_db_drop(&dir, false).expect_err("must refuse without --yes");
+    assert_eq!(error.code, "NXL12010");
+    assert!(error.message.contains("db:drop"), "{}", error.message);
+    assert!(
+        dir.join("database").join("database.sqlite").exists(),
+        "the database must be untouched after a refused drop"
+    );
+}
+
+#[test]
+fn db_fresh_refuses_to_run_without_confirmation() {
+    let dir = db_project("guard_fresh");
+    let error = cli::cmd_db_fresh(&dir, false, false).expect_err("must refuse without --yes");
+    assert_eq!(error.code, "NXL12010");
+    assert!(error.message.contains("db:fresh"), "{}", error.message);
+}
+
+#[test]
+fn db_refresh_refuses_to_run_without_confirmation() {
+    let dir = db_project("guard_refresh");
+    let error = cli::cmd_db_refresh(&dir, false).expect_err("must refuse without --yes");
+    assert_eq!(error.code, "NXL12010");
+    assert!(error.message.contains("db:refresh"), "{}", error.message);
+}
+
+#[test]
+fn destructive_commands_parse_the_yes_flag() {
+    let yes_flag = || String::from("--yes");
+    let args: Vec<String> = vec!["db:drop".into()];
+    let cli::Command::DbDrop { yes } = cli::parse_args(&args).unwrap() else {
+        panic!("db:drop should parse");
+    };
+    assert!(!yes, "without --yes the flag is off");
+
+    let args: Vec<String> = vec!["db:drop".into(), yes_flag()];
+    let cli::Command::DbDrop { yes } = cli::parse_args(&args).unwrap() else {
+        panic!("db:drop --yes should parse");
+    };
+    assert!(yes, "--yes flips the flag");
+
+    let args: Vec<String> = vec!["db:fresh".into(), "--seed".into(), yes_flag()];
+    let cli::Command::DbFresh { seed, yes } = cli::parse_args(&args).unwrap() else {
+        panic!("db:fresh --seed --yes should parse");
+    };
+    assert!(seed && yes, "--seed and --yes combine");
+
+    let args: Vec<String> = vec!["db:refresh".into(), yes_flag()];
+    let cli::Command::DbRefresh { yes } = cli::parse_args(&args).unwrap() else {
+        panic!("db:refresh --yes should parse");
+    };
+    assert!(yes);
 }
 
 #[test]

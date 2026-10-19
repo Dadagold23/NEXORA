@@ -11,8 +11,26 @@ use nxl_compiler::cli::{
     cmd_new_from_template, cmd_pkg_add, cmd_pkg_audit, cmd_pkg_info_in, cmd_pkg_install_in,
     cmd_pkg_publish, cmd_pkg_remove, cmd_pkg_search_in, cmd_pkg_tree, cmd_pkg_update,
     cmd_platforms, cmd_repl, cmd_run, cmd_serve, cmd_test, format_doctor_report, help_text,
-    parse_args, run_doctor, version_text, AddRequest, Command,
+    parse_args, prompt_destructive, run_doctor, version_text, AddRequest, Command,
 };
+
+/// Resolve confirmation for a destructive database command.
+///
+/// `--yes` short-circuits; an interactive terminal gets a prompt naming the
+/// target; anything else falls through so `cmd_db_*` reports NXL12010 with
+/// the `--yes` hint. `None` means the operator aborted at the prompt.
+fn confirmed_destructive(dir: &Path, action: &str, yes: bool) -> Option<bool> {
+    use std::io::IsTerminal;
+    if yes || !std::io::stdin().is_terminal() {
+        return Some(yes);
+    }
+    if prompt_destructive(dir, action) {
+        Some(true)
+    } else {
+        println!("aborted; nothing was changed.");
+        None
+    }
+}
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -392,15 +410,18 @@ async fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::DbDrop => match cmd_db_drop(&cwd) {
-            Ok(msg) => {
-                println!("{msg}");
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::FAILURE
-            }
+        Command::DbDrop { yes } => match confirmed_destructive(&cwd, "db:drop", yes) {
+            None => ExitCode::FAILURE,
+            Some(confirmed) => match cmd_db_drop(&cwd, confirmed) {
+                Ok(msg) => {
+                    println!("{msg}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            },
         },
         Command::DbMigrate => match cmd_db_migrate(&cwd) {
             Ok(msg) => {
@@ -422,25 +443,31 @@ async fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::DbRefresh => match cmd_db_refresh(&cwd) {
-            Ok(msg) => {
-                println!("{msg}");
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::FAILURE
-            }
+        Command::DbRefresh { yes } => match confirmed_destructive(&cwd, "db:refresh", yes) {
+            None => ExitCode::FAILURE,
+            Some(confirmed) => match cmd_db_refresh(&cwd, confirmed) {
+                Ok(msg) => {
+                    println!("{msg}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            },
         },
-        Command::DbFresh { seed } => match cmd_db_fresh(&cwd, seed) {
-            Ok(msg) => {
-                println!("{msg}");
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::FAILURE
-            }
+        Command::DbFresh { seed, yes } => match confirmed_destructive(&cwd, "db:fresh", yes) {
+            None => ExitCode::FAILURE,
+            Some(confirmed) => match cmd_db_fresh(&cwd, seed, confirmed) {
+                Ok(msg) => {
+                    println!("{msg}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            },
         },
         Command::DbSeed => match cmd_db_seed(&cwd) {
             Ok(msg) => {

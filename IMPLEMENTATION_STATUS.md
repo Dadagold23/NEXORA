@@ -184,7 +184,7 @@ first-match-wins); `%` on integers was rejected (now works).
 | ORM models / relationships | IMPLEMENTED (CRUD) | `Model` trait (`TABLE`, `columns`, `values`, `from_row`) + `Database::{model_all,model_find,model_count,model_insert,model_delete}`; driver-agnostic. Relationships are expressed via foreign keys in migrations (enforced: sqlite `foreign_keys=ON`). `make:model` still scaffolds a stub |
 | Connection pooling | IMPLEMENTED | `ConnectionPool::new(dir, max)` with lazy creation, checkout/return via `PooledConnection` (Deref to `Database`), bounded size, and idle reuse (`connection_pool_reuses_and_bounds_connections`) |
 | Migration audit logging / observability | IMPLEMENTED | `nxl_migration_log` records every apply/rollback attempt (name, direction, batch, duration_ms, outcome) inside `migrate`/`rollback`; exposed via `ndb::migration_audit` and `nxl db:audit`. `db:status` prints the current migration status |
-| Production CLI commands | IMPLEMENTED | `nxl db:create`, `db:drop`, `db:migrate`, `db:rollback`, `db:refresh`, `db:fresh [--seed]`, `db:seed`, `db:status`, `db:audit`, `make:model`, `make:migration`, `make:seeder`, `make:factory` in `cli.rs`/`main.rs` |
+| Production CLI commands | IMPLEMENTED | `nxl db:create`, `db:drop [--yes]`, `db:migrate`, `db:rollback`, `db:refresh [--yes]`, `db:fresh [--seed] [--yes]`, `db:seed`, `db:status`, `db:audit`, `make:model`, `make:migration`, `make:seeder`, `make:factory` in `cli.rs`/`main.rs`. `db:drop`/`db:fresh`/`db:refresh` destroy data and require confirmation: an interactive prompt, or `--yes` for scripts/CI (NXL12010). |
 | Test suite | TESTED | `compiler/tests/ndb_tests.rs`: 16 tests pass; full suite 270 compiler + 13 frontend + 16 ndb + 3 example + others = 369 total |
 
 Migration file format: `database/migrations/<name>.sql` with `-- up` / `-- down` sections. Seeders and factories live under `database/seeders/` and `database/factories/`. Project databases default to `database/database.sqlite`.
@@ -205,7 +205,7 @@ Migration file format: `database/migrations/<name>.sql` with `-- up` / `-- down`
 | Configuration | IMPLEMENTED | `[web]` section (`host`, `port`) in nxl.toml |
 | Caching (TTL) | IMPLEMENTED | `Cache` with expiry (tested) |
 | Queues / event bus | IMPLEMENTED | `Queue` FIFO, `EventBus` pub/sub (tested) |
-| Production CLI | IMPLEMENTED | `nxl serve` (demo API server) in cli.rs/main.rs |
+| Production CLI | IMPLEMENTED | `nxl serve` (demo API server) in cli.rs/main.rs; validates config + `required_env` before binding (NXL12011) and drains in-flight requests on Ctrl+C/SIGTERM (tested) |
 | Authentication | IMPLEMENTED | `AuthStore` argon2id registration/verification via `security`; `login`/`logout`/`current_user` session helpers with fixation-safe rotation (tested) |
 | Authorization / auth guard | IMPLEMENTED | `auth_guard` middleware rejects unauthenticated requests with 401; `AppState.auth` registry (integration tested) |
 | CSRF protection | IMPLEMENTED | `csrf_guard` double-submit middleware (`x-csrf-token` vs session token), `csrf_token`/`csrf_valid` constant-time check (tested) |

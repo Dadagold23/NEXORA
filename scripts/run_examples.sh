@@ -10,7 +10,7 @@ echo "== examples/blog =="
 TMP="$(mktemp -d)"
 cp -r "$ROOT/examples/blog/nxl.toml" "$TMP/"
 cp -r "$ROOT/examples/blog/database" "$TMP/database"
-(cd "$TMP" && cargo run --manifest-path "$ROOT/compiler/Cargo.toml" --quiet -- db:fresh --seed)
+(cd "$TMP" && cargo run --manifest-path "$ROOT/compiler/Cargo.toml" --quiet -- db:fresh --seed --yes)
 (cd "$TMP" && cargo run --manifest-path "$ROOT/compiler/Cargo.toml" --quiet -- db:migrate)
 rm -rf "$TMP"
 

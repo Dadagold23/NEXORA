@@ -1,0 +1,50 @@
+# NXL application service unit.
+#
+# Install:
+#   sudo cp nxl.service /etc/systemd/system/nxl-app.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now nxl-app
+#
+# Secrets live in /etc/nxl/app.env (root-owned, mode 0600), never in this
+# unit or in nxl.toml — see docs/16-deployment.md.
+
+[Unit]
+Description=NXL application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Run as an unprivileged, ephemeral user: the service owns no home
+# directory and cannot log in.
+DynamicUser=yes
+
+# WorkingDirectory must contain nxl.toml, src/, and the built artifact.
+WorkingDirectory=/opt/nxl-app
+
+# One env file per environment; the names in required_env are checked at
+# startup and the process refuses to start if any are missing.
+EnvironmentFile=/etc/nxl/app.env
+Environment=NXL_ENV=production
+
+# The built artifact is plain JavaScript; node is the only runtime
+# dependency. Replace with the real artifact path.
+ExecStart=/usr/bin/node build/release/app.js
+
+# Graceful shutdown: `nxl serve` (or the node runtime) drains in-flight
+# requests on SIGTERM before exiting; give it time to finish.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=on-failure
+RestartSec=5
+
+# Least privilege: no new privileges, a private /tmp, and only the
+# filesystem views the application actually needs.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/nxl-app/build
+
+[Install]
+WantedBy=multi-user.target
