@@ -1,0 +1,50 @@
+// C-ABI extern demo — call OS-shipped C functions directly.
+//
+// Only the VM performs foreign calls (`nxl run` / `nxlc run`); the JS and
+// Rust backends refuse them with NXL2007. The declared signature is trusted
+// exactly like linking a native binary — see docs/11-ffi.md.
+
+// ── Windows ─────────────────────────────────────────────────────────────────
+extern "kernel32.dll" {
+    fn GetTickCount64() -> Int;
+    fn lstrlenA(s: String) -> Int;
+    fn MulDiv(a: Int, b: Int, c: Int) -> Int;
+    fn ticks() -> Int as "GetTickCount64";   // alias the C symbol
+}
+
+// ── Linux (uncomment for libc) ──────────────────────────────────────────────
+// extern "libc.so.6" {
+//     fn strlen(s: String) -> Int;
+//     fn getppid() -> Int;
+//     fn abs(x: Int) -> Int;
+// }
+
+// ── macOS (uncomment for libSystem) ─────────────────────────────────────────
+// extern "libSystem.B.dylib" {
+//     fn strlen(s: String) -> Int;
+//     fn getpid() -> Int;
+// }
+
+let uptime_ms = GetTickCount64();
+print("uptime (ms):");
+print(uptime_ms);
+
+print("length of 'hello':");
+print(lstrlenA("hello"));
+
+print("MulDiv(3, 4, 2) =");
+print(MulDiv(3, 4, 2));
+
+print("aliased symbol resolves:");
+print(ticks() >= 0);
+
+// Runtime failures are catchable, with the error code embedded in the value.
+// (Extern blocks are top-level declarations; only the call goes in the try.)
+extern "definitely-not-a-real-library.dll" {
+    fn mystery() -> Int;
+}
+try {
+    print(mystery());
+} catch e {
+    print(e);
+}

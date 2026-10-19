@@ -133,6 +133,24 @@ The VM stays authoritative; the JavaScript backend now emits real control flow, 
 
 Rust target (`compile_native`): `throw` becomes a panic carrying the rendered message, and `try`/`catch`/`finally` emit `catch_unwind` with a `finally` block that runs on both paths (an uncaught error still propagates). Generated Rust is compiled and executed by the test suite when `rustc` is available. Everything else - branching, loops, `for ... in`, composites, methods, match patterns, concurrency, `catch e: Type`, and standard-library calls - is refused with NXL2007 and a pointer to a working target instead of silently dropping code.
 
+## C-ABI extern blocks (VM only)
+
+A top-level `extern` block declares C functions from a dynamically linked library; calls then look like ordinary NXL calls:
+
+```
+extern "kernel32.dll" {
+    fn GetTickCount64() -> Int;
+    fn lstrlenA(s: String) -> Int;
+    fn ticks() -> Int as "GetTickCount64";   // alias the C symbol
+}
+print(lstrlenA("hello"));
+```
+
+- Scalar types only: `Int` (`int64_t`), `Float` (`double`), `String` (NUL-terminated `const char *`), `Bool` (0/1 integer class); no `-> T` means `void`. At most four parameters.
+- Declarations are order-independent (all files' extern blocks register before lowering) and must be top-level; the NXL-visible names must be unique.
+- Runtime failures — unloadable library (`NXL11013`), missing symbol (`NXL11014`), bad argument such as an interior NUL byte (`NXL11015`), NULL string return (`NXL11016`) — are catchable: `try { ... } catch e { print(e); }` receives `"error[CODE]: message"`.
+- VM only: the JS and Rust backends reject foreign calls with NXL2007. The signature is trusted exactly like linking a native binary (see `12-security.md`); the compiler catches arity/type mismatches statically (`NXL2001`, `NXL2009`) but cannot verify a library's real C prototype.
+
 ## Standard library (`std.strings`, `std.math`, `std.crypto`, `std.http`)
 
 Implemented in `stdlib.rs`, resolved by `nir.rs` (`lower_builtin_call`),

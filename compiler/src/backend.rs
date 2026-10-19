@@ -825,21 +825,14 @@ impl<'m> JsBackend<'m> {
                 self.line(&format!("{t}.__cancel?.();"));
             }
 
-            Instruction::ForeignCall {
-                result,
-                callee,
-                arguments,
-                return_type,
-                ..
-            } => {
-                let args: Vec<String> = arguments.iter().map(|a| self.var(*a)).collect();
-                let call = format!("{}({})", js_safe(callee), args.join(", "));
-                if matches!(return_type, Type::Void) {
-                    self.line(&format!("{call};"));
-                } else {
-                    let v = self.var(*result);
-                    self.line(&format!("let {v} = {call};"));
-                }
+            Instruction::ForeignCall { callee, span, .. } => {
+                return Err(Diagnostic::error(
+                    "NXL2007",
+                    format!(
+                        "'{callee}' is a C-ABI extern call; the JavaScript backend cannot link native libraries (`nxl run` supports it)"
+                    ),
+                    *span,
+                ));
             }
 
             Instruction::ToString { result, value, .. } => {

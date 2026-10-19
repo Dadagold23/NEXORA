@@ -212,6 +212,28 @@ pub enum Statement {
         span: Span,
     },
     Unsafe(Block),
+    /// A top-level block of C-ABI foreign function declarations bound to one
+    /// shared library. Bodies are omitted; calls are performed by the VM via
+    /// dynamic linking (`cabi`). Not supported by the JS/Rust backends.
+    ExternBlock {
+        library: String,
+        functions: Vec<ExternFunction>,
+        span: Span,
+    },
+}
+
+/// One `fn` declaration inside an `extern` block: an ABI signature for a C
+/// symbol. `symbol` overrides the linked name when it differs from `name`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExternFunction {
+    pub name: String,
+    /// NXL parameter names paired with their declared type names.
+    pub parameters: Vec<(String, String)>,
+    /// Declared C return type name; `None` means `void`.
+    pub return_type: Option<String>,
+    /// The C symbol to look up; defaults to `name` when absent.
+    pub symbol: Option<String>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq)]

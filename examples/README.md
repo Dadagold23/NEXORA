@@ -16,5 +16,12 @@ cd examples/api
 cargo run --manifest-path ../../compiler/Cargo.toml -- serve   # blocks
 curl http://127.0.0.1:8080/api/hello
 
+## ffi — C-ABI extern calls (VM only)
+bash
+cargo run --quiet --manifest-path ../../compiler/Cargo.toml -- run examples/ffi/src/main.nxl
+(Calls OS-shipped C libraries — kernel32.dll here; libc/libSystem variants
+are commented in the source. VM-only: the JS/Rust backends reject foreign
+calls with NXL2007.)
+
 ## NOT IMPLEMENTED targets
 CRUD over NDB models, auth, WebSocket clients, desktop/WASM — wait on P07 native backend. Do NOT demo them with fake shells.

@@ -369,15 +369,16 @@ fn nir_verifier_rejects_value_defined_only_in_one_branch_used_after_merge() {
 
 #[test]
 fn nir_memory_and_abi_operations_have_typed_representation() {
-    use nxl_compiler::nir::{CallingConvention, ForeignFunction, Instruction, Type};
+    use nxl_compiler::nir::{CallingConvention, FfiType, ForeignFunction, Instruction, Type};
 
     let source = SourceFile::new("ir_schema.nxl", "let value = 1;");
     let mut module = compile_to_nir(&source).expect("source should lower");
     module.foreign_functions.push(ForeignFunction {
         name: "native_fn".to_owned(),
-        library: Some("libnative".to_owned()),
-        parameters: vec![Type::Int],
-        return_type: Type::Int,
+        symbol: "native_fn".to_owned(),
+        library: "libnative".to_owned(),
+        parameters: vec![FfiType::Int],
+        return_type: Some(FfiType::Int),
         calling_convention: CallingConvention::C,
     });
     module
@@ -428,8 +429,11 @@ fn nir_memory_and_abi_operations_have_typed_representation() {
     block.instructions.push(Instruction::ForeignCall {
         result: 601,
         callee: "native_fn".to_owned(),
+        library: "libnative".to_owned(),
+        symbol: "native_fn".to_owned(),
         arguments: vec![value],
-        return_type: Type::Int,
+        parameter_types: vec![FfiType::Int],
+        return_type: Some(FfiType::Int),
         calling_convention: CallingConvention::C,
         span,
     });

@@ -23,7 +23,7 @@ use std::sync::{
 };
 
 use crate::diagnostic::Diagnostic;
-use crate::nir::{self, BasicBlockId, Constant, Module, Terminator, Type};
+use crate::nir::{self, BasicBlockId, Constant, FfiType, Module, Terminator, Type};
 use crate::source::{SourceFile, Span};
 
 // ── Bytecode format version ───────────────────────────────────────────────────
@@ -105,6 +105,16 @@ pub enum Opcode {
     MakeClosure { name: String, capture_count: u32 },
     /// Call a function value on the stack with `argc` arguments.
     CallIndirect { argc: u32 },
+    /// Perform a C-ABI foreign call: pop `parameter_types.len()` arguments,
+    /// invoke `symbol` in `library`, push the converted result (Unit for a
+    /// `void` return). The signature rides with the opcode so serialized
+    /// programs are self-contained.
+    ForeignCall {
+        library: String,
+        symbol: String,
+        parameter_types: Vec<FfiType>,
+        return_type: Option<FfiType>,
+    },
     /// Return the top-of-stack value (or unit if stack is empty).
     Return,
     /// Pop and discard the top of stack.
@@ -387,6 +397,31 @@ fn read_str(data: &[u8], cursor: &mut usize) -> Result<String, String> {
     Ok(s)
 }
 
+/// Stable byte tag for a C-ABI scalar type in serialized bytecode.
+fn ffi_type_tag(ty: FfiType) -> u8 {
+    match ty {
+        FfiType::Int => 0,
+        FfiType::Float => 1,
+        FfiType::Str => 2,
+        FfiType::Bool => 3,
+    }
+}
+
+fn read_ffi_type(data: &[u8], cursor: &mut usize) -> Result<FfiType, String> {
+    if *cursor >= data.len() {
+        return Err("unexpected end of bytecode FFI type".to_owned());
+    }
+    let tag = data[*cursor];
+    *cursor += 1;
+    match tag {
+        0 => Ok(FfiType::Int),
+        1 => Ok(FfiType::Float),
+        2 => Ok(FfiType::Str),
+        3 => Ok(FfiType::Bool),
+        _ => Err(format!("unknown FFI type tag 0x{tag:02X}")),
+    }
+}
+
 fn serialize_chunk(buf: &mut Vec<u8>, chunk: &Chunk) {
     write_str(buf, &chunk.name);
     buf.extend_from_slice(&chunk.arity.to_le_bytes());
@@ -610,6 +645,27 @@ fn serialize_opcode(buf: &mut Vec<u8>, op: &Opcode) {
             buf.push(0x28);
             buf.extend_from_slice(&argc.to_le_bytes());
         }
+        Opcode::ForeignCall {
+            library,
+            symbol,
+            parameter_types,
+            return_type,
+        } => {
+            buf.push(0x29);
+            write_str(buf, library);
+            write_str(buf, symbol);
+            buf.push(parameter_types.len() as u8);
+            for ty in parameter_types {
+                buf.push(ffi_type_tag(*ty));
+            }
+            match return_type {
+                Some(ty) => {
+                    buf.push(1);
+                    buf.push(ffi_type_tag(*ty));
+                }
+                None => buf.push(0),
+            }
+        }
         Opcode::AwaitTask => buf.push(0x24),
         Opcode::CompleteTask => buf.push(0x25),
         Opcode::ChannelNew => buf.push(0x26),
@@ -718,6 +774,35 @@ fn deserialize_opcode(data: &[u8], cursor: &mut usize) -> Result<Opcode, String>
         0x28 => {
             let argc = read_u32(data, cursor)?;
             Ok(Opcode::CallIndirect { argc })
+        }
+        0x29 => {
+            let library = read_str(data, cursor)?;
+            let symbol = read_str(data, cursor)?;
+            if *cursor >= data.len() {
+                return Err("truncated ForeignCall".to_owned());
+            }
+            let count = data[*cursor] as usize;
+            *cursor += 1;
+            let mut parameter_types = Vec::with_capacity(count);
+            for _ in 0..count {
+                parameter_types.push(read_ffi_type(data, cursor)?);
+            }
+            if *cursor >= data.len() {
+                return Err("truncated ForeignCall return type".to_owned());
+            }
+            let has_return = data[*cursor];
+            *cursor += 1;
+            let return_type = if has_return == 0 {
+                None
+            } else {
+                Some(read_ffi_type(data, cursor)?)
+            };
+            Ok(Opcode::ForeignCall {
+                library,
+                symbol,
+                parameter_types,
+                return_type,
+            })
         }
         0x21 => {
             let method = read_str(data, cursor)?;
@@ -1042,6 +1127,30 @@ fn compile_instruction(
             } else {
                 chunk.emit(Opcode::Pop);
             }
+        }
+
+        nir::Instruction::ForeignCall {
+            result,
+            library,
+            symbol,
+            arguments,
+            parameter_types,
+            return_type,
+            ..
+        } => {
+            for arg in arguments {
+                let s = *value_slots.get(arg).unwrap_or(&0);
+                chunk.emit(Opcode::LoadLocal(s));
+            }
+            chunk.emit(Opcode::ForeignCall {
+                library: library.clone(),
+                symbol: symbol.clone(),
+                parameter_types: parameter_types.clone(),
+                return_type: *return_type,
+            });
+            // The call always yields a value (Unit for `void`).
+            let slot = ensure_slot(result, value_slots, next_slot);
+            chunk.emit(Opcode::StoreLocal(slot));
         }
 
         nir::Instruction::MakeClosure {
@@ -2533,6 +2642,32 @@ impl Vm {
                             Err(value) => return Err(VmFault::Throw(value)),
                         },
                         Err(fatal) => return Err(fatal),
+                    }
+                }
+
+                Opcode::ForeignCall {
+                    library,
+                    symbol,
+                    parameter_types,
+                    return_type,
+                } => {
+                    let mut args = vec![Value::Unit; parameter_types.len()];
+                    for i in (0..parameter_types.len()).rev() {
+                        args[i] = self.stack.pop().unwrap_or(Value::Unit);
+                    }
+                    match crate::cabi::call(&library, &symbol, &parameter_types, return_type, args)
+                    {
+                        Ok(value) => self.stack.push(value),
+                        Err(error) => {
+                            // Embed the code so catch handlers and tests can
+                            // observe it; FFI has no direct-call error path.
+                            let value =
+                                Value::String(format!("error[{}]: {}", error.code, error.message));
+                            match self.handle_throw(depth, value) {
+                                Ok(()) => {}
+                                Err(value) => return Err(VmFault::Throw(value)),
+                            }
+                        }
                     }
                 }
 

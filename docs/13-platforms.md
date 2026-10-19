@@ -14,3 +14,5 @@ Current honest matrix (`nxl platforms`):
 | iOS | Tier 4 — Planned | No evidence |
 
 Promotion: CI runners must populate `platforms::record_evidence(...)`. The `platforms_tests` suite enforces that no target reports Tier 1/2 without meeting the evidence bar.
+
+C-ABI `extern` calls use OS-shipped libraries in the test suite (`kernel32.dll` on Windows, `libc.so.6` on Linux, `libSystem.B.dylib` on macOS) — no bundled native fixtures — so `tests/ffi_tests.rs` exercises real dynamic loading on every platform CI runs.

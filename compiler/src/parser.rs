@@ -1,8 +1,8 @@
 use crate::ast::{
     AssignmentOperator, BinaryOperator, Block, CatchClause, DeclarationKind, EnumVariant,
-    Expression, ExpressionKind, Field, Function, GenericConstraint, ImplBlock, MatchBody,
-    MatchCase, Parameter, Pattern, PatternKind, Program, Statement, TypeAlias, TypeDeclaration,
-    UnaryOperator,
+    Expression, ExpressionKind, ExternFunction, Field, Function, GenericConstraint, ImplBlock,
+    MatchBody, MatchCase, Parameter, Pattern, PatternKind, Program, Statement, TypeAlias,
+    TypeDeclaration, UnaryOperator,
 };
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Token, TokenKind, TokenStringPart};
@@ -112,6 +112,9 @@ impl Parser {
         }
         if self.matches(&TokenKind::From) {
             return self.selective_import();
+        }
+        if self.matches(&TokenKind::Extern) {
+            return self.extern_block();
         }
         if self.matches(&TokenKind::If) {
             return self.if_statement();
@@ -550,6 +553,104 @@ impl Parser {
             path.push(self.expect_identifier("expected name after '.'")?);
         }
         Ok(path)
+    }
+
+    /// Parse `extern "lib" { fn name(a: Int) -> Int [as "symbol"]; ... }`.
+    /// Only the C ABI (`extern "C"` implied) exists in v1; there is no body.
+    fn extern_block(&mut self) -> Result<Statement, Diagnostic> {
+        let start = self.previous().span;
+        // The linked library: a string literal. We intentionally do not accept
+        // a calling-convention tag here; the C ABI is the only one implemented.
+        let library_token = self.advance().clone();
+        let library_span = library_token.span;
+        let TokenKind::String(library) = library_token.kind else {
+            return Err(self.error_at(
+                &library_token,
+                "expected a library name string after 'extern'",
+            ));
+        };
+        if library.is_empty() {
+            return Err(Diagnostic::error(
+                "NXL2001",
+                "extern library name must not be empty",
+                library_span,
+            ));
+        }
+        self.consume(&TokenKind::LeftBrace, "expected '{' after extern library")?;
+        let mut functions = Vec::new();
+        while !self.check(&TokenKind::RightBrace) && !self.check(&TokenKind::Eof) {
+            functions.push(self.extern_function()?);
+        }
+        let close = self.consume(&TokenKind::RightBrace, "expected '}' after extern block")?;
+        if functions.is_empty() {
+            return Err(Diagnostic::error(
+                "NXL2001",
+                "extern block must declare at least one function",
+                library_span,
+            ));
+        }
+        Ok(Statement::ExternBlock {
+            library,
+            functions,
+            span: start.join(close.span),
+        })
+    }
+
+    /// Parse one `fn name(params) -> Ret [as "symbol"];` inside an extern block.
+    fn extern_function(&mut self) -> Result<ExternFunction, Diagnostic> {
+        let start = self.previous().span;
+        self.consume(&TokenKind::Fn, "expected 'fn' in extern block")?;
+        let name = self.expect_identifier("expected extern function name")?;
+        self.consume(
+            &TokenKind::LeftParen,
+            "expected '(' after extern function name",
+        )?;
+        let mut parameters = Vec::new();
+        if !self.check(&TokenKind::RightParen) {
+            loop {
+                let param_name = self.expect_identifier("expected extern parameter name")?;
+                self.consume(
+                    &TokenKind::Colon,
+                    "expected ':' after extern parameter name",
+                )?;
+                let param_type = self.expect_identifier("expected extern parameter type")?;
+                parameters.push((param_name, param_type));
+                if !self.matches(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        self.consume(
+            &TokenKind::RightParen,
+            "expected ')' after extern parameters",
+        )?;
+        let return_type = if self.matches(&TokenKind::Arrow) {
+            Some(self.expect_identifier("expected extern return type")?)
+        } else {
+            None
+        };
+        let symbol = if self.matches(&TokenKind::As) {
+            let symbol_token = self.advance().clone();
+            match symbol_token.kind {
+                TokenKind::String(value) if !value.is_empty() => Some(value),
+                _ => {
+                    return Err(self.error_at(
+                        &symbol_token,
+                        "expected a non-empty symbol string after 'as'",
+                    ))
+                }
+            }
+        } else {
+            None
+        };
+        let end = self.consume(&TokenKind::Semicolon, "expected ';' after extern function")?;
+        Ok(ExternFunction {
+            name,
+            parameters,
+            return_type,
+            symbol,
+            span: start.join(end.span),
+        })
     }
 
     fn if_statement(&mut self) -> Result<Statement, Diagnostic> {
@@ -1442,7 +1543,8 @@ fn statement_span(statement: &Statement) -> Span {
         | Statement::Try { span, .. }
         | Statement::Throw { span, .. }
         | Statement::Module { span, .. }
-        | Statement::Import { span, .. } => *span,
+        | Statement::Import { span, .. }
+        | Statement::ExternBlock { span, .. } => *span,
         Statement::Let { span, .. } | Statement::Return { span, .. } => *span,
         Statement::Break(span) | Statement::Continue(span) => *span,
         Statement::Function(function) => function.span,

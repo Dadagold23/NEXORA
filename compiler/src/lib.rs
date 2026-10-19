@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod backend;
+pub mod cabi;
 pub mod cli;
 pub mod concurrency;
 pub mod debugger;

@@ -166,13 +166,58 @@ pub enum CallingConvention {
     Nxl,
 }
 
+/// A scalar C-ABI type supported by `extern` bindings. Maps to `int64_t`
+/// (`Int`), `double` (`Float`), `const char *` (`Str`), and a 0/1 integer
+/// class value (`Bool`). Compound types, pointers-to-pointer, and variadic
+/// signatures are out of scope for the C ABI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FfiType {
+    Int,
+    Float,
+    Str,
+    Bool,
+}
+
+/// A resolved `extern` declaration: the C symbol to call in `library`, with
+/// its scalar ABI signature. `return_type` is `None` for `void`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ForeignFunction {
+    /// The NXL-visible name used to call the function.
     pub name: String,
-    pub library: Option<String>,
-    pub parameters: Vec<Type>,
-    pub return_type: Type,
+    /// The C symbol looked up in the library (may differ from `name`).
+    pub symbol: String,
+    /// The shared library to load.
+    pub library: String,
+    pub parameters: Vec<FfiType>,
+    pub return_type: Option<FfiType>,
     pub calling_convention: CallingConvention,
+}
+
+/// Map an `extern` scalar type to the NIR type used for inference.
+pub fn ffi_scalar_type(ty: FfiType) -> Type {
+    match ty {
+        FfiType::Int => Type::Int,
+        FfiType::Float => Type::Float,
+        FfiType::Str => Type::String,
+        FfiType::Bool => Type::Bool,
+    }
+}
+
+/// Map a declared `extern` return (`None` = `void`) to its NIR type.
+pub fn ffi_return_type(ret: Option<FfiType>) -> Type {
+    ret.map_or(Type::Void, ffi_scalar_type)
+}
+
+/// Parse a bare NXL type name used in an `extern` signature to its C-ABI
+/// scalar. Returns `None` for unsupported types.
+fn parse_ffi_type(name: &str) -> Option<FfiType> {
+    match name {
+        "Int" => Some(FfiType::Int),
+        "Float" => Some(FfiType::Float),
+        "String" => Some(FfiType::Str),
+        "Bool" => Some(FfiType::Bool),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -490,9 +535,17 @@ pub enum Instruction {
     },
     ForeignCall {
         result: ValueId,
+        /// The NXL-visible callee name, used for diagnostics only.
         callee: String,
+        /// The shared library loaded for this call.
+        library: String,
+        /// The C symbol looked up in `library`.
+        symbol: String,
         arguments: Vec<ValueId>,
-        return_type: Type,
+        /// The declared scalar ABI parameter types, for marshalling.
+        parameter_types: Vec<FfiType>,
+        /// The declared scalar ABI return type; `None` means `void`.
+        return_type: Option<FfiType>,
         calling_convention: CallingConvention,
         span: Span,
     },
@@ -701,7 +754,18 @@ pub fn lower_project_files(files: &[ProjectFile]) -> Result<Module, Diagnostic> 
         type_aliases: HashMap::new(),
         async_counter: 0,
         closure_counter: 0,
+        externs: HashMap::new(),
     };
+
+    // Register every `extern` block before lowering so calls resolve
+    // regardless of declaration order, and collect the module's foreign
+    // signature table.
+    let mut foreign_table: Vec<ForeignFunction> = Vec::new();
+    for file in files {
+        for statement in &file.hir.program.statements {
+            lowerer.register_externs(statement, &mut foreign_table)?;
+        }
+    }
 
     for file in files {
         lowerer.current_module = file.path.clone();
@@ -761,7 +825,7 @@ pub fn lower_project_files(files: &[ProjectFile]) -> Result<Module, Diagnostic> 
         name: "main".to_owned(),
         functions,
         signatures,
-        foreign_functions: Vec::new(),
+        foreign_functions: foreign_table,
         type_definitions,
         globals,
         initializers,
@@ -1832,9 +1896,7 @@ fn verify_instruction_types(
                         .iter()
                         .find(|signature| signature.name == *callee)
                     {
-                        if arguments.len() != foreign.parameters.len()
-                            || *return_type != foreign.return_type
-                        {
+                        if arguments.len() != foreign.parameters.len() {
                             return Err(mismatch(format!(
                                 "foreign call to '{callee}' does not match its ABI signature"
                             )));
@@ -1844,29 +1906,13 @@ fn verify_instruction_types(
                 Instruction::ForeignCall {
                     callee,
                     arguments,
-                    return_type,
+                    parameter_types,
                     ..
                 } => {
-                    let signature = foreign_functions
-                        .iter()
-                        .find(|signature| signature.name == *callee)
-                        .ok_or_else(|| {
-                            mismatch(format!("missing foreign ABI declaration for '{callee}'"))
-                        })?;
-                    if arguments.len() != signature.parameters.len()
-                        || *return_type != signature.return_type
-                    {
+                    if arguments.len() != parameter_types.len() {
                         return Err(mismatch(format!(
                             "foreign call to '{callee}' does not match its ABI signature"
                         )));
-                    }
-                    for (argument, expected) in arguments.iter().zip(&signature.parameters) {
-                        let actual = types.get(argument).copied().unwrap_or(Type::Unknown);
-                        if actual != *expected && actual != Type::Unknown {
-                            return Err(mismatch(format!(
-                                "foreign ABI argument has type {actual:?}, expected {expected:?}"
-                            )));
-                        }
                     }
                 }
                 Instruction::Allocate { ty, .. } => {
@@ -2168,7 +2214,7 @@ fn instruction_value_types(instruction: &Instruction) -> Vec<(ValueId, Type)> {
             result,
             return_type,
             ..
-        } => vec![(*result, *return_type)],
+        } => vec![(*result, ffi_return_type(*return_type))],
         Instruction::CallIndirect {
             result,
             return_type,
@@ -2390,6 +2436,8 @@ struct Lowerer {
     /// Bare-to-qualified type names for the current file (own types plus
     /// selected imports), used when resolving generic annotations.
     type_aliases: HashMap<String, String>,
+    /// Registered `extern` (C ABI) declarations, keyed by NXL-visible name.
+    externs: HashMap<String, ForeignFunction>,
 }
 
 /// One file of a multi-file lowering unit: its HIR plus module context.
@@ -2464,6 +2512,91 @@ fn find_type_declaration<'a>(
 }
 
 impl Lowerer {
+    /// Register every `fn` in a top-level `extern` block as a C-ABI foreign
+    /// declaration. Types are validated to the supported scalar surface and
+    /// the arity is capped; the declaration is recorded both in the lowerer's
+    /// call-resolution table and the module's foreign signature table.
+    fn register_externs(
+        &mut self,
+        statement: &Statement,
+        table: &mut Vec<ForeignFunction>,
+    ) -> Result<(), Diagnostic> {
+        let Statement::ExternBlock {
+            library,
+            functions,
+            span,
+        } = statement
+        else {
+            return Ok(());
+        };
+        for function in functions {
+            if function.parameters.len() > crate::cabi::MAX_FFI_ARITY {
+                return Err(Diagnostic::error(
+                    "NXL2001",
+                    format!(
+                        "extern function '{}' declares {} parameters; the C ABI supports at most {}",
+                        function.name,
+                        function.parameters.len(),
+                        crate::cabi::MAX_FFI_ARITY
+                    ),
+                    function.span,
+                ));
+            }
+            let parameters = function
+                .parameters
+                .iter()
+                .map(|(name, ty)| {
+                    parse_ffi_type(ty).ok_or_else(|| {
+                        Diagnostic::error(
+                            "NXL2001",
+                            format!(
+                                "extern function '{}' parameter '{name}' has unsupported C type '{ty}'; use Int, Float, String, or Bool",
+                                function.name
+                            ),
+                            function.span,
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let return_type = match &function.return_type {
+                None => None,
+                Some(ty) => Some(parse_ffi_type(ty).ok_or_else(|| {
+                    Diagnostic::error(
+                        "NXL2001",
+                        format!(
+                            "extern function '{}' has unsupported C return type '{ty}'; use Int, Float, String, Bool, or omit it for void",
+                            function.name
+                        ),
+                        function.span,
+                    )
+                })?),
+            };
+            let symbol = function
+                .symbol
+                .clone()
+                .unwrap_or_else(|| function.name.clone());
+            let declaration = ForeignFunction {
+                name: function.name.clone(),
+                symbol,
+                library: library.clone(),
+                parameters,
+                return_type,
+                calling_convention: CallingConvention::C,
+            };
+            if self.externs.contains_key(&declaration.name) {
+                return Err(Diagnostic::error(
+                    "NXL2005",
+                    format!("duplicate extern function '{}'", declaration.name),
+                    *span,
+                ));
+            }
+            self.externs
+                .insert(declaration.name.clone(), declaration.clone());
+            table.push(declaration);
+        }
+        Ok(())
+    }
+
     fn lower_statement(&mut self, statement: &Statement) -> Result<(), Diagnostic> {
         match statement {
             Statement::TypeDeclaration(declaration)
@@ -2577,6 +2710,9 @@ impl Lowerer {
             }
             Statement::Export(inner) => self.lower_statement(inner),
             Statement::Module { .. } => Ok(()),
+            // `extern` blocks are registered up front by `register_externs`;
+            // there is no code to lower here.
+            Statement::ExternBlock { .. } => Ok(()),
             Statement::Let {
                 name,
                 annotation,
@@ -4356,6 +4492,56 @@ impl Lowerer {
         span: Span,
         concurrent: bool,
     ) -> Result<ValueId, Diagnostic> {
+        // An `extern` (C ABI) function: emit a self-contained ForeignCall that
+        // carries its library, symbol, and scalar signature inline.
+        if let Some(foreign) = self.externs.get(qualified).cloned() {
+            if arguments.len() != foreign.parameters.len() {
+                return Err(Diagnostic::error(
+                    "NXL2009",
+                    format!(
+                        "extern function '{display}' expects {} argument(s), found {}",
+                        foreign.parameters.len(),
+                        arguments.len()
+                    ),
+                    span,
+                ));
+            }
+            let mut lowered_arguments = Vec::with_capacity(arguments.len());
+            for (index, (argument, parameter)) in
+                arguments.iter().zip(foreign.parameters.iter()).enumerate()
+            {
+                let argument_value = self.expression(argument)?;
+                let argument_type = self.value_type(argument_value);
+                let expected = ffi_scalar_type(*parameter);
+                if !types_compatible(argument_type, expected) {
+                    return Err(Diagnostic::error(
+                        "NXL2001",
+                        format!(
+                            "argument {} to extern function '{display}' has type {argument_type:?}, expected {expected:?}",
+                            index + 1
+                        ),
+                        argument.span,
+                    ));
+                }
+                lowered_arguments.push(argument_value);
+            }
+            let result = self.allocate();
+            let instruction = Instruction::ForeignCall {
+                result,
+                callee: display.to_owned(),
+                library: foreign.library.clone(),
+                symbol: foreign.symbol.clone(),
+                arguments: lowered_arguments,
+                parameter_types: foreign.parameters.clone(),
+                return_type: foreign.return_type,
+                calling_convention: foreign.calling_convention,
+                span,
+            };
+            self.record_value_type(&instruction);
+            self.instructions.push(instruction);
+            return Ok(result);
+        }
+
         // Check for user-defined function signature
         let (param_types, return_type) = {
             let signature = self
@@ -5510,6 +5696,18 @@ impl Lowerer {
                         if let Some(qualified) = self.resolve_stdlib_builtin(name) {
                             return self.lower_builtin_call(&qualified, arguments, expression.span);
                         }
+                        // A registered `extern` (C ABI) declaration answers a
+                        // bare call when no NXL function owns the name.
+                        if self.externs.contains_key(name) {
+                            return self.lower_direct_call(
+                                name,
+                                name,
+                                arguments,
+                                callee.span,
+                                expression.span,
+                                false,
+                            );
+                        }
                         return Err(Diagnostic::error(
                             "NXL2002",
                             format!("use of undeclared function '{name}'"),
@@ -5918,7 +6116,8 @@ fn statement_span(statement: &Statement) -> Span {
         | Statement::Match { span, .. }
         | Statement::Try { span, .. }
         | Statement::Throw { span, .. }
-        | Statement::Yield { span, .. } => *span,
+        | Statement::Yield { span, .. }
+        | Statement::ExternBlock { span, .. } => *span,
         Statement::Break(span) | Statement::Continue(span) => *span,
         Statement::Function(function) => function.span,
         Statement::TypeDeclaration(declaration) => declaration.span,
