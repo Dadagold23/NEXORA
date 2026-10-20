@@ -15,7 +15,7 @@
 
 ## Performance (P24)
 
-`nxl bench` reports indicative medians for: lexer, parser, compile_to_nir, VM loop (100-iter), NDB migrate-fresh. See the Performance section above.
+`nxl bench` reports indicative medians for: lexer, parser, compile_to_nir, VM loop (100-iter), task spawn/await round-trip (10 pairs), channel send/receive throughput (50 messages), NDB migrate-fresh. See the Performance section above.
 
 ## CI (P25)
 

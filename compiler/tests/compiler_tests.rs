@@ -2046,12 +2046,13 @@ mod stdlib_tests {
         assert!(StdlibModule::Http.is_implemented());
         assert!(StdlibModule::Crypto.is_implemented());
         assert!(StdlibModule::Networking.is_implemented());
+        assert!(StdlibModule::Concurrency.is_implemented());
     }
 
     #[test]
     fn stdlib_all_modules_count() {
         let modules = all_modules();
-        assert_eq!(modules.len(), 15);
+        assert_eq!(modules.len(), 16);
         assert!(modules.iter().all(|m| m.is_implemented()));
     }
 

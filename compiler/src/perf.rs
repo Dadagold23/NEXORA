@@ -35,6 +35,9 @@ fn bench_fn<F: FnMut()>(mut f: F, samples: usize) -> u128 {
 const LEX_SAMPLE: &str = r#"fn main() { let x = 1 + 2 * 3; print(x); }"#;
 const RUN_SAMPLE: &str =
     "fn main() { let mut i = 0; loop { if i >= 100 { break; } i = i + 1; } print(i); }";
+const SPAWN_SAMPLE: &str = "fn work(n: Int) -> Int { return n + 1; } fn main() { let mut i = 0; loop { if i >= 10 { break; } let t = spawn work(i); print(await t); i = i + 1; } }";
+const CHANNEL_SAMPLE: &str =
+    "fn main() { let c = channel(); let mut i = 0; loop { if i >= 50 { break; } c.send(i); print(c.recv()); i = i + 1; } c.close(); }";
 const DB_MIGRATION_SQL: &str =
     "-- up\nCREATE TABLE bench (id INTEGER PRIMARY KEY, v TEXT);\n-- down\nDROP TABLE bench;\n";
 
@@ -102,6 +105,38 @@ pub fn bench_vm_run() -> BenchRow {
     }
 }
 
+/// VM spawn + await round-trip median ns/iter (10 spawn/await pairs per run).
+pub fn bench_spawn_roundtrip() -> BenchRow {
+    let ns = bench_fn(
+        || {
+            let sf = crate::source::SourceFile::new("bench_spawn.nxl", SPAWN_SAMPLE);
+            let _ = crate::vm::run(&sf);
+        },
+        7,
+    );
+    BenchRow {
+        name: "spawn_roundtrip",
+        iterations: 50,
+        total_ns: ns * 50,
+    }
+}
+
+/// VM channel send/receive throughput median ns/iter (50 messages per run).
+pub fn bench_channel_throughput() -> BenchRow {
+    let ns = bench_fn(
+        || {
+            let sf = crate::source::SourceFile::new("bench_channel.nxl", CHANNEL_SAMPLE);
+            let _ = crate::vm::run(&sf);
+        },
+        7,
+    );
+    BenchRow {
+        name: "channel_msgs",
+        iterations: 50,
+        total_ns: ns * 50,
+    }
+}
+
 /// NDB: fresh-project migrate + rollback timing.
 pub fn bench_migrate() -> BenchRow {
     let unique = std::time::SystemTime::now()
@@ -142,6 +177,8 @@ pub fn bench_report() -> String {
         bench_parse(),
         bench_compile_nir(),
         bench_vm_run(),
+        bench_spawn_roundtrip(),
+        bench_channel_throughput(),
         bench_migrate(),
     ];
     let mut out = String::from("nxl bench (median of samples, per-iter mean shown):\n");

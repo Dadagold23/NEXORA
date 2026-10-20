@@ -16,9 +16,10 @@
 /// | time          | IMPLEMENTED   |
 /// | testing       | IMPLEMENTED   |
 /// | fs            | IMPLEMENTED   |
-/// | http          | NOT IMPLEMENTED (P15+) |
+/// | http          | IMPLEMENTED   |
 /// | crypto        | IMPLEMENTED   |
-/// | networking    | NOT IMPLEMENTED (P15+) |
+/// | networking    | IMPLEMENTED   |
+/// | concurrency   | IMPLEMENTED   |
 use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1765,6 +1766,47 @@ pub mod networking {
     }
 }
 
+// ── concurrency ───────────────────────────────────────────────────────────────
+
+/// Cooperative concurrency helpers.
+///
+/// `sleep` is the one *sanctioned* blocking operation in this module: it
+/// parks the calling worker thread for the given milliseconds. Everything
+/// else in the concurrency surface (task inspection, await timeouts, channel
+/// receive timeouts, cancellation via channel close) lives on the task and
+/// channel values themselves as methods, because those builtins take
+/// task/channel values that the typed stdlib bridge does not accept.
+pub mod concurrency {
+    use super::{NxlValue, StdResult, StdlibError};
+
+    /// The longest accepted sleep: one hour. A stray value must not park a
+    /// worker for effectively forever.
+    pub const MAX_SLEEP_MS: i64 = 60 * 60 * 1000;
+
+    /// Block the calling worker thread for `ms` milliseconds.
+    ///
+    /// Negative values and values over [`MAX_SLEEP_MS`] are errors rather
+    /// than silent no-ops.
+    pub fn sleep(ms: i64) -> StdResult<NxlValue> {
+        if ms < 0 {
+            return Err(StdlibError::new(
+                "NXL11011",
+                "std.concurrency::sleep: milliseconds must not be negative".to_owned(),
+            ));
+        }
+        if ms > MAX_SLEEP_MS {
+            return Err(StdlibError::new(
+                "NXL11011",
+                format!(
+                    "std.concurrency::sleep: {ms}ms exceeds the one-hour limit ({MAX_SLEEP_MS}ms)"
+                ),
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+        Ok(NxlValue::Null)
+    }
+}
+
 // ── StdlibModule registry ─────────────────────────────────────────────────────
 
 /// Registry of all available stdlib modules.
@@ -1793,6 +1835,9 @@ pub enum StdlibModule {
     /// DNS resolution and TCP reachability (`resolve`, `tcp_probe`);
     /// VM-only for the same reason as `Http`.
     Networking,
+    /// Cooperative concurrency helpers (`sleep`); VM-only because a blocking
+    /// sleep has no synchronous JavaScript equivalent.
+    Concurrency,
 }
 
 impl StdlibModule {
@@ -1814,6 +1859,7 @@ impl StdlibModule {
             "std::http" | "http" => Some(Self::Http),
             "std::crypto" | "crypto" => Some(Self::Crypto),
             "std::networking" | "networking" => Some(Self::Networking),
+            "std::concurrency" | "concurrency" => Some(Self::Concurrency),
             _ => None,
         }
     }
@@ -1843,6 +1889,7 @@ impl StdlibModule {
             Self::Http => "std::http",
             Self::Crypto => "std::crypto",
             Self::Networking => "std::networking",
+            Self::Concurrency => "std::concurrency",
         }
     }
 }
@@ -1865,6 +1912,7 @@ pub fn all_modules() -> Vec<StdlibModule> {
         StdlibModule::Http,
         StdlibModule::Crypto,
         StdlibModule::Networking,
+        StdlibModule::Concurrency,
     ]
 }
 
@@ -2180,6 +2228,13 @@ static STDLIB_BUILTINS: &[BuiltinSpec] = &[
         params: &[S, I, I],
         ret: B,
     },
+    // std::concurrency — cooperative helpers (VM-only: a blocking sleep has
+    // no synchronous JavaScript equivalent).
+    BuiltinSpec {
+        name: "std::concurrency::sleep",
+        params: &[I],
+        ret: V,
+    },
 ];
 
 /// Look up a stdlib builtin by its fully qualified name.
@@ -2191,7 +2246,9 @@ pub fn builtin(name: &str) -> Option<&'static BuiltinSpec> {
 /// JavaScript equivalent. The JavaScript backend rejects these at compile
 /// time (NXL2007) rather than emitting a call that could never succeed.
 pub fn is_vm_only_builtin(name: &str) -> bool {
-    name.starts_with("std::http::") || name.starts_with("std::networking::")
+    name.starts_with("std::http::")
+        || name.starts_with("std::networking::")
+        || name.starts_with("std::concurrency::")
 }
 
 /// The canonical `std::<module>` prefix for a module name, accepting both the
@@ -2371,6 +2428,7 @@ pub fn call_builtin(name: &str, args: &[NxlValue]) -> StdResult<NxlValue> {
             networking::tcp_probe(as_str(&args[0])?, as_int(&args[1])?, as_int(&args[2])?)
                 .map(NxlValue::Bool)
         }
+        "std::concurrency::sleep" => concurrency::sleep(as_int(&args[0])?),
 
         _ => Err(StdlibError::new(
             "NXL11010",

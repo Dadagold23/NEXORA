@@ -115,11 +115,14 @@ Implemented in `nir.rs`/`vm.rs`, tested in `language_frontend_tests.rs` (concurr
 
 - `spawn f(args)` runs a function on a worker thread and returns a task handle; `spawn obj.method(args)` too (receiver cloned in); anything else evaluates now and wraps in a completed task
 - `await t` blocks until the task completes; task failures re-raise catchably (`task failed: ...`); awaiting a plain value returns it
-- `channel()` creates a queue: `c.send(v)` never blocks, `c.recv()` blocks until a value arrives or the channel closes (catchable on closed+empty), `c.close()` seals it; `for v in ch` streams until close
+- tasks expose `t.is_done()` (non-blocking completion check) and `t.timeout(ms)`: the latter returns a handle to the same task whose awaits give up after the budget with the catchable timeout error `error[NXL11018]: await on task#N timed out after Nms`. A timed-out task keeps running — the timeout bounds the wait, not the work (see "Cancellation" below)
+- `channel()` creates a queue: `c.send(v)` never blocks, `c.recv()` blocks until a value arrives or the channel closes (catchable on closed+empty), `c.recv_timeout(ms)` bounds the wait (catchable `error[NXL11018]: channel#N recv timed out after Nms`; nothing is consumed), `c.is_closed()` reports the close signal (a polled cancellation check), `c.close()` seals it; `for v in ch` streams until close
+- `std.concurrency.sleep(ms)` parks the calling worker thread for the given milliseconds (negative or over one hour is a catchable error); the module is VM-only like `std.http`, so the JS and Rust backends refuse it with NXL2007
+- cancellation is cooperative: close the channel a worker polls (`is_closed()`/blocked `recv()` unblocks), or bound the wait with `timeout`/`recv_timeout`; there is no preemption — the end-of-run reaper joins every spawned task to real completion, so workers must be written to terminate (poll a cancellation channel, use bounded loops)
 - `async { ... }` snapshots visible bindings by value, runs as a worker function, and returns its task; `async fn` is a marker (plain function otherwise)
 - actors construct with a `mailbox` channel field (`a.mailbox.send(..)` / `a.mailbox.recv()`); methods stay synchronous: an actor loop is `while true` over the mailbox inside a spawned task
 - the run joins outstanding tasks before exiting (first background failure fails the run); awaiting cycles and never-completing tasks hang: always close channels and await
-- limits: no `select`, no timeouts/sleep, no cancellation, no shared mutable state (by design), JS/Rust backends reject async with NXL2007 (channel construction emits a stub so sync actor use still compiles to JS)
+- limits: no `select`, no cancellation tokens as values, no shared mutable state (by design), JS/Rust backends reject async with NXL2007 (channel construction emits a stub so sync actor use still compiles to JS); full model, rules, and benchmarks in `docs/22-concurrency.md`
 
 ## Phase 6 - backend control flow
 

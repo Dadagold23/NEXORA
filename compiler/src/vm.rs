@@ -21,6 +21,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Condvar, Mutex,
 };
+use std::time::Duration;
 
 use crate::diagnostic::Diagnostic;
 use crate::nir::{self, BasicBlockId, Constant, FfiType, Module, Terminator, Type};
@@ -1953,7 +1954,7 @@ impl PartialEq for Value {
                     args: b_args,
                 },
             ) => a_type == b_type && a_variant == b_variant && a_args == b_args,
-            (Value::Task(a), Value::Task(b)) => Arc::ptr_eq(&a.0, &b.0),
+            (Value::Task(a), Value::Task(b)) => Arc::ptr_eq(&a.state, &b.state),
             (Value::Channel(a), Value::Channel(b)) => Arc::ptr_eq(&a.0, &b.0),
             (
                 Value::Closure {
@@ -1972,8 +1973,24 @@ impl PartialEq for Value {
 }
 
 /// Shared handle to a spawned task's outcome.
+///
+/// The `deadline` is per-handle bookkeeping (set by `t.timeout(ms)`), not
+/// shared state: the end-of-run reaper joins the registry's own clones,
+/// which carry no deadline, so structured shutdown always waits for real
+/// completion no matter how callers bounded their individual awaits.
 #[derive(Clone, Debug)]
-pub struct TaskShared(pub Arc<TaskState>);
+pub struct TaskShared {
+    pub state: Arc<TaskState>,
+    deadline: Option<AwaitDeadline>,
+}
+
+/// A per-handle await deadline: when the wait gives up, and for the error
+/// message, how long the budget was.
+#[derive(Clone, Copy, Debug)]
+struct AwaitDeadline {
+    at: std::time::Instant,
+    ms: i64,
+}
 
 /// Shared handle to a channel's queue.
 #[derive(Clone, Debug)]
@@ -2011,32 +2028,61 @@ fn next_handle_id() -> u64 {
 
 impl TaskShared {
     fn new() -> Self {
-        Self(Arc::new(TaskState {
-            id: next_handle_id(),
-            state: Mutex::new(TaskOutcome::Running),
-            notify: Condvar::new(),
-        }))
+        Self {
+            state: Arc::new(TaskState {
+                id: next_handle_id(),
+                state: Mutex::new(TaskOutcome::Running),
+                notify: Condvar::new(),
+            }),
+            deadline: None,
+        }
     }
 
     fn completed(value: Value) -> Self {
-        Self(Arc::new(TaskState {
-            id: next_handle_id(),
-            state: Mutex::new(TaskOutcome::Done(Ok(value))),
-            notify: Condvar::new(),
-        }))
+        Self {
+            state: Arc::new(TaskState {
+                id: next_handle_id(),
+                state: Mutex::new(TaskOutcome::Done(Ok(value))),
+                notify: Condvar::new(),
+            }),
+            deadline: None,
+        }
     }
 
     fn complete(&self, outcome: Result<Value, String>) {
-        if let Ok(mut state) = self.0.state.lock() {
+        if let Ok(mut state) = self.state.state.lock() {
             *state = TaskOutcome::Done(outcome);
         }
-        self.0.notify.notify_all();
+        self.state.notify.notify_all();
+    }
+
+    /// A handle to the same task whose awaits give up after `ms`.
+    ///
+    /// The deadline starts now — the timeout races from its creation, not
+    /// from the eventual `await` — and it belongs to this handle alone. The
+    /// task itself keeps running: only cooperative measures (a cancellation
+    /// channel the worker polls, or a bounded worker body) stop work, and
+    /// the end-of-run reaper still joins the task to real completion.
+    fn with_timeout(&self, ms: i64) -> Self {
+        let millis = u64::try_from(ms).unwrap_or(0);
+        Self {
+            state: Arc::clone(&self.state),
+            deadline: Some(AwaitDeadline {
+                at: std::time::Instant::now() + Duration::from_millis(millis),
+                ms,
+            }),
+        }
     }
 
     /// Block until the task finishes; completed tasks return immediately.
+    ///
+    /// A handle carrying a per-handle deadline waits at most until it
+    /// expires, then fails with the catchable NXL11018 timeout. A value
+    /// that arrives in the same instant as the deadline still wins: the
+    /// wait re-checks the outcome before reporting the timeout.
     fn join(&self) -> Result<Value, String> {
         let mut state = self
-            .0
+            .state
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -2044,11 +2090,29 @@ impl TaskShared {
             match &*state {
                 TaskOutcome::Done(outcome) => return outcome.clone(),
                 TaskOutcome::Running => {
-                    state = self
-                        .0
-                        .notify
-                        .wait(state)
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    state = match self.deadline {
+                        Some(deadline) => {
+                            let remaining = deadline
+                                .at
+                                .saturating_duration_since(std::time::Instant::now());
+                            if remaining.is_zero() {
+                                return Err(format!(
+                                    "error[NXL11018]: await on task#{} timed out after {}ms",
+                                    self.state.id, deadline.ms
+                                ));
+                            }
+                            self.state
+                                .notify
+                                .wait_timeout(state, remaining)
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .0
+                        }
+                        None => self
+                            .state
+                            .notify
+                            .wait(state)
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                    };
                 }
             }
         }
@@ -2056,7 +2120,7 @@ impl TaskShared {
 
     fn is_done(&self) -> bool {
         matches!(
-            *self.0.state.lock().unwrap_or_else(|p| p.into_inner()),
+            *self.state.state.lock().unwrap_or_else(|p| p.into_inner()),
             TaskOutcome::Done(_)
         )
     }
@@ -2101,6 +2165,43 @@ impl ChannelShared {
                 .wait(queue)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
+    }
+
+    /// Block for the next value at most `ms` milliseconds.
+    ///
+    /// A value that arrives in the same instant as the deadline still wins.
+    /// On expiry the wait fails catchably with NXL11018; nothing is consumed
+    /// and the channel stays open.
+    fn recv_timeout(&self, ms: i64) -> Result<Value, String> {
+        let millis = u64::try_from(ms).unwrap_or(0);
+        let deadline = std::time::Instant::now() + Duration::from_millis(millis);
+        let mut queue = self.0.queue.lock().unwrap_or_else(|p| p.into_inner());
+        loop {
+            if let Some(value) = queue.pop_front() {
+                return Ok(value);
+            }
+            if self.0.closed.load(Ordering::SeqCst) {
+                return Err("receive on a closed, empty channel".to_owned());
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(format!(
+                    "error[NXL11018]: channel#{} recv timed out after {ms}ms",
+                    self.0.id
+                ));
+            }
+            queue = self
+                .0
+                .notify
+                .wait_timeout(queue, remaining)
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .0;
+        }
+    }
+
+    /// Whether this channel has been closed (a polled cancellation signal).
+    fn is_closed(&self) -> bool {
+        self.0.closed.load(Ordering::SeqCst)
     }
 
     fn close(&self) {
@@ -2154,7 +2255,7 @@ impl fmt::Display for Value {
                 }
                 Ok(())
             }
-            Value::Task(shared) => write!(f, "task#{}", shared.0.id),
+            Value::Task(shared) => write!(f, "task#{}", shared.state.id),
             Value::Channel(shared) => write!(f, "channel#{}", shared.0.id),
             Value::Closure { name, .. } => write!(f, "<closure {name}>"),
             Value::Unit => write!(f, "()"),
@@ -2469,18 +2570,26 @@ impl Vm {
         let started = std::thread::Builder::new()
             .name(target.clone())
             .spawn(move || {
-                let mut child = Vm::with_output(program, output);
-                let outcome = child
-                    .call_function(&target, args)
-                    .map(|(ret, _)| ret)
-                    .map_err(|fault| match fault {
-                        VmFault::Throw(value) => format!("task failed: {value}"),
-                        VmFault::Fatal(message) => message,
-                        // Worker VMs never carry a stepping policy.
-                        VmFault::DebugStop => {
-                            "internal error: debugger stop in task worker".to_owned()
-                        }
-                    });
+                // A Rust-level panic inside the worker becomes a catchable
+                // task failure instead of aborting the whole run; the
+                // structured reaper then reports it like any other task
+                // error. The panic message itself still reaches stderr
+                // under the default hook — it is a bug signal, not debris.
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut child = Vm::with_output(program, output);
+                    child
+                        .call_function(&target, args)
+                        .map(|(ret, _)| ret)
+                        .map_err(|fault| match fault {
+                            VmFault::Throw(value) => format!("task failed: {value}"),
+                            VmFault::Fatal(message) => message,
+                            // Worker VMs never carry a stepping policy.
+                            VmFault::DebugStop => {
+                                "internal error: debugger stop in task worker".to_owned()
+                            }
+                        })
+                }))
+                .unwrap_or_else(|_| Err("task failed: panicked".to_owned()));
                 worker.complete(outcome);
             });
         if started.is_err() {
@@ -2680,6 +2789,20 @@ impl Vm {
                     // Channels expose builtin methods through call syntax.
                     if let Value::Channel(shared) = &receiver {
                         match channel_method(shared, &method, &args) {
+                            Ok(returned) => {
+                                self.stack.push(returned);
+                                self.stack.push(receiver);
+                                continue;
+                            }
+                            Err(message) => {
+                                self.raise(depth, message)?;
+                                continue;
+                            }
+                        }
+                    }
+                    // Tasks expose inspection and await-bounding methods.
+                    if let Value::Task(shared) = &receiver {
+                        match task_method(shared, &method, &args) {
                             Ok(returned) => {
                                 self.stack.push(returned);
                                 self.stack.push(receiver);
@@ -3148,17 +3271,40 @@ fn short_type_name(qualified: &str) -> &str {
 }
 
 /// A channel builtin invoked through method-call syntax
-/// (`c.send(v)`, `c.recv()`, `c.close()`).
+/// (`c.send(v)`, `c.recv()`, `c.recv_timeout(ms)`, `c.close()`, `c.is_closed()`).
 fn channel_method(shared: &ChannelShared, method: &str, args: &[Value]) -> Result<Value, String> {
     match (method, args) {
         ("send", [value]) => shared.send(value.clone()).map(|()| Value::Unit),
         ("recv", []) => shared.recv(),
+        ("recv_timeout", [Value::Integer(ms)]) => shared.recv_timeout(*ms),
         ("close", []) => {
             shared.close();
             Ok(Value::Unit)
         }
+        ("is_closed", []) => Ok(Value::Boolean(shared.is_closed())),
         ("send", _) => Err("channel.send takes exactly one argument".to_owned()),
+        ("recv_timeout", _) => {
+            Err("channel.recv_timeout takes exactly one Int argument (milliseconds)".to_owned())
+        }
+        ("is_closed", _) => Err("channel.is_closed takes no arguments".to_owned()),
         _ => Err(format!("unknown channel method '{method}'")),
+    }
+}
+
+/// A task builtin invoked through method-call syntax (`t.is_done()`,
+/// `t.timeout(ms)`).
+///
+/// Awaiting a timeout handle is still spelled `await`; `timeout` only
+/// bounds the wait, it does not cancel the task.
+fn task_method(shared: &TaskShared, method: &str, args: &[Value]) -> Result<Value, String> {
+    match (method, args) {
+        ("is_done", []) => Ok(Value::Boolean(shared.is_done())),
+        ("timeout", [Value::Integer(ms)]) => Ok(Value::Task(shared.with_timeout(*ms))),
+        ("is_done", _) => Err("task.is_done takes no arguments".to_owned()),
+        ("timeout", _) => {
+            Err("task.timeout takes exactly one Int argument (milliseconds)".to_owned())
+        }
+        _ => Err(format!("unknown task method '{method}'")),
     }
 }
 
@@ -3340,10 +3486,10 @@ fn eval_binary(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, String> {
         (BinaryOp::Ne, Value::Unit, Value::Unit) => Ok(Value::Boolean(false)),
         // Tasks and channels compare by identity.
         (BinaryOp::Eq, Value::Task(a), Value::Task(b)) => {
-            Ok(Value::Boolean(Arc::ptr_eq(&a.0, &b.0)))
+            Ok(Value::Boolean(Arc::ptr_eq(&a.state, &b.state)))
         }
         (BinaryOp::Ne, Value::Task(a), Value::Task(b)) => {
-            Ok(Value::Boolean(!Arc::ptr_eq(&a.0, &b.0)))
+            Ok(Value::Boolean(!Arc::ptr_eq(&a.state, &b.state)))
         }
         (BinaryOp::Eq, Value::Channel(a), Value::Channel(b)) => {
             Ok(Value::Boolean(Arc::ptr_eq(&a.0, &b.0)))

@@ -135,8 +135,7 @@ ignored, and `try`/`throw`/interpolation/`async` failed with NXL2007.
 | 2 — iteration + data | `for-in` over ranges/arrays, arrays + indexing, struct/enum construction + member access, real `match` dispatch, gradual operators | IMPLEMENTED — `nir.rs`/`vm.rs`/`backend.rs` (JS expressions), 25 new tests, full suite 421/421, clippy clean |
 | 3 — objects + methods | classes, `init`/auto-constructors, dynamic method dispatch with receiver write-back, `impl` blocks, `interface`/`trait` validation | IMPLEMENTED — `nir.rs`/`vm.rs`/`backend.rs` (JS), 12 new tests, full suite 433/433, clippy clean |
 | 4 — modules | multi-file programs, `import`/`from` resolution, cross-module calls/types/methods | IMPLEMENTED — `project.rs`/`nir.rs`/`hir.rs`/CLI, 12 new tests, full suite 445/445, clippy clean |
-| 5 — async | threads for `spawn`/`await`, channels, `async {}` capture, actor mailboxes, end-of-run join | IMPLEMENTED — `nir.rs`/`vm.rs`, honest JS/Rust NXL2007, 12 new tests, full suite 457/457, clippy clean |
-| 5 — async | `async`/`await`/`spawn`/`channel` execution, `actor` mailboxes | PLANNED |
+| 5 — async | threads for `spawn`/`await`, channels, `async {}` capture, actor mailboxes, end-of-run join; task inspection (`is_done`), await deadlines (`t.timeout(ms)`), bounded receive (`c.recv_timeout(ms)`), cancellation polling (`c.is_closed()`), `std.concurrency.sleep`, task-panic isolation | IMPLEMENTED — `nir.rs`/`vm.rs`/`stdlib.rs`, honest JS/Rust NXL2007, 12 + 9 new tests (`concurrency_tests.rs`), concurrency bench rows, full suite 797/797, clippy clean |
 | 6 — backend control flow | JS-backend `while`/`for ... in` emission, Rust-backend `try` | IMPLEMENTED — `backend.rs` + `nir.rs` loop metadata; JS loops match the VM on every case; Rust `throw`/`try`/`catch`/`finally` verified by compiling and running generated Rust; 28 new tests; full suite 485/485; clippy clean |
 
 Known pre-existing gaps confirmed during Phase 1 (unchanged behavior):
@@ -449,7 +448,7 @@ The repository has a Python prototype (19/19 tests passing) and a production Rus
 - P07 backend code emitter and executable generation
 - P08 - Runtime | Module 08 - NEXORA Interpreter | COMPLETED | Runtime (runtime.rs) and VM (vm.rs) implemented with tests
 - P09 - VM | Module 09 - BYTECODE & VIRTUAL MACHINE | COMPLETED | VM/bytecode implemented (vm.rs) with tests
-- P10 async/concurrency task scheduling: spawn/await, unbounded+bounded channels, close/backpressure, cancellation tokens, task groups, barriers, and a real (non-stub) actor mailbox with FIFO drain; deadlock detection and a cooperative scheduler remain future work.
+- P10 async/concurrency task scheduling: language-level spawn/await over OS threads with structured end-of-run join, channels (send/recv/recv_timeout/close/is_closed, `for..in` drain), await deadlines (`t.timeout(ms)`, NXL11018), cooperative cancellation via channel close, task-panic isolation (a Rust panic in a worker becomes a catchable task failure), `std.concurrency.sleep`, and concurrency benchmarks; Rust-side primitives (concurrency.rs: tokens, task groups, actors, barriers) exist but are not exposed to NXL — tokens-as-values and a cooperative scheduler remain future work.
 - P11 standard library core modules (math, strings, JSON, collections, time, RNG, testing)
 - P12 production CLI suite (`new`, `init`, `run`, `build`, `check`, `fmt`, `lint`, `clean`, `test`, `doctor`, `version`)
 - P13 package manager (NXP) with semantic versioning, manifest parsing, lockfile serialization, transitive dependency resolution, package cache, content checksums, path & git sources, workspace support, offline mode, dependency graphs, security auditing, and CLI integration.
