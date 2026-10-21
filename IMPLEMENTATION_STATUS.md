@@ -201,7 +201,7 @@ Migration file format: `database/migrations/<name>.sql` with `-- up` / `-- down`
 | Cookies / sessions | IMPLEMENTED | `SessionStore` create/set/get/destroy/flush, `nxl_session` cookie extraction (tested) |
 | WebSockets | IMPLEMENTED | `ws_echo_handler`, `ws_broadcast_handler` (axum ws) |
 | JSON APIs / serialization | IMPLEMENTED | serde_json throughout |
-| Configuration | IMPLEMENTED | `[web]` section (`host`, `port`) in nxl.toml |
+| Configuration | IMPLEMENTED | `[web]` section (`host`, `port`, `layout`, `not_found`) plus `[env.<name>]` overlays selected by `NXL_ENV` in nxl.toml; complete manifest specification in `docs/24-nxl-toml.md` |
 | Caching (TTL) | IMPLEMENTED | `Cache` with expiry (tested) |
 | Queues / event bus | IMPLEMENTED | `Queue` FIFO, `EventBus` pub/sub (tested) |
 | Production CLI | IMPLEMENTED | `nxl serve` (demo API server) in cli.rs/main.rs; validates config + `required_env` before binding (NXL12011) and drains in-flight requests on Ctrl+C/SIGTERM (tested) |

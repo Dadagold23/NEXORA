@@ -2582,6 +2582,31 @@ mod cli_tests {
         assert_eq!(c.name, "commented");
     }
 
+    #[test]
+    fn cli_project_config_rejects_unknown_package_key() {
+        // A typo'd key must fail loudly instead of being silently dropped.
+        let toml = "[package]\nname = \"app\"\ntargt = \"vm\"\n";
+        let err = ProjectConfig::parse(toml).unwrap_err();
+        assert_eq!(err.code, "NXL12012");
+        assert!(err.message.contains("targt"), "{}", err.message);
+    }
+
+    #[test]
+    fn cli_project_config_rejects_unknown_target() {
+        // Previously an unknown target silently became the JS artifact.
+        let toml = "[package]\nname = \"app\"\ntarget = \"native\"\n";
+        let err = ProjectConfig::parse(toml).unwrap_err();
+        assert_eq!(err.code, "NXL12012");
+        assert!(err.message.contains("native"), "{}", err.message);
+    }
+
+    #[test]
+    fn cli_project_config_accepts_explicit_js_target() {
+        let toml = "[package]\nname = \"app\"\ntarget = \"js\"\n";
+        let c = ProjectConfig::parse(toml).unwrap();
+        assert_eq!(c.target, BuildTarget::Js);
+    }
+
     // ── cmd_new / cmd_init / cmd_clean ────────────────────────────────────────
 
     #[test]

@@ -844,12 +844,29 @@ impl ProjectConfig {
                     "edition" => cfg.edition = v,
                     "target" => {
                         cfg.target = match v.as_str() {
+                            "js" => BuildTarget::Js,
                             "vm" => BuildTarget::Vm,
                             "wasm" => BuildTarget::Wasm,
-                            _ => BuildTarget::Js,
+                            other => {
+                                return Err(err(
+                                    "NXL12012",
+                                    format!(
+                                        "[package] target: unknown target '{other}' (available: js, vm, wasm)"
+                                    ),
+                                ))
+                            }
                         };
                     }
-                    _ => {}
+                    // A silently dropped key here means a typo like `targt`
+                    // quietly changes what the project does; refuse loudly.
+                    other => {
+                        return Err(err(
+                            "NXL12012",
+                            format!(
+                                "[package] unknown key '{other}' (known keys: name, version, description, authors, entry, edition, target)"
+                            ),
+                        ))
+                    }
                 },
                 "dependencies" => {
                     cfg.dependencies.push(Dependency {
@@ -1690,7 +1707,7 @@ pub fn cmd_debug(file: &str, breakpoints: &[usize], inspect: bool, steps: Option
 }
 
 pub fn cmd_docs() -> String {
-    "NXL docs:\n  docs/01-getting-started.md\n  docs/03-cli-reference.md\n  docs/06-ndb.md\n  docs/07-nuf.md".to_owned()
+    "NXL docs:\n  docs/01-getting-started.md\n  docs/03-cli-reference.md\n  docs/06-ndb.md\n  docs/07-nuf.md\n  docs/23-webassembly.md\n  docs/24-nxl-toml.md".to_owned()
 }
 
 pub fn cmd_bridge() -> String {
