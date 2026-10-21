@@ -28,6 +28,7 @@ pub mod security;
 pub mod source;
 pub mod stdlib;
 pub mod vm;
+pub mod wasm_backend;
 pub mod web;
 
 use diagnostic::Diagnostic;

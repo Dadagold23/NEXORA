@@ -10,7 +10,7 @@ This matrix reflects the actual repository state, not the intended architecture.
 | Production compiler language | RUST-FIRST | Better performance, memory safety, and compiler tooling |
 | Canonical compiler boundary | NIR | Aligns with the project architecture and keeps front-end/back-end separation clear |
 | Initial backend target | NATIVE | Fastest path to real execution and build validation |
-| WASM backend | PLANNED | Add after native backend is stable |
+| WASM backend | IMPLEMENTED | Core-WASM subset (Int/Float/Bool, functions, control flow, `print`, `std.math`), honest NXL2007 refusals for everything else, VM-parity suite under Node; `docs/23-webassembly.md` |
 | Python as production runtime | REJECTED | Not suitable as the long-term compiler/runtime base |
 | Full rewrite before validation | BLOCKED | Must validate architecture against the current prototype first |
 
@@ -249,7 +249,7 @@ Migration file format: `database/migrations/<name>.sql` with `-- up` / `-- down`
 | C ABI bridge | NOT IMPLEMENTED | Requires native backend (P07) |
 | Rust rlib embedding | DEFERRED | — |
 | Go / Java / Dart bridges | BLOCKED | Toolchains not installed |
-| WASM component bridge | BLOCKED | WASM backend pending |
+| WASM component bridge | BLOCKED | Core-WASM modules now compile (`target = "wasm"`); the WASM *component model* bridge is still not designed or implemented |
 | `nxl bridge` CLI | IMPLEMENTED | Prints honest bridge status table |
 | Test suite | TESTED | `compiler/tests/ffi_tests.rs`: 6 tests pass; full suite 315 tests pass, 0 fail |
 
@@ -281,7 +281,7 @@ Migration file format: `database/migrations/<name>.sql` with `-- up` / `-- down`
 | `nxl platforms` CLI | IMPLEMENTED | Renders the matrix; never advertises Tier 1 (tested) |
 | Linux/macOS/CI verification | BLOCKED | No runners configured |
 | Packaging/installers/upgrade tests | NOT IMPLEMENTED | No installers exist yet |
-| WASM target | BLOCKED | WASM backend not implemented (native backend exists since P07) |
+| WASM target | IMPLEMENTED | `nxlc build` with `target = "wasm"` in `nxl.toml` emits `<name>.wasm`; scalar subset only, VM-parity tested (see docs/23-webassembly.md) |
 | Test suite | TESTED | `compiler/tests/platforms_tests.rs`: 5 tests pass; full suite 327 tests pass, 0 fail |
 
 ## P20 — Language Server (NLS)
@@ -400,7 +400,7 @@ Decision: colocate a `docs/` directory with per-phase guides that mirror the act
 | Auth example | NOT IMPLEMENTED | Blocked on auth policies (P16 partial) |
 | WebSocket client example | NOT IMPLEMENTED | Server side only today |
 | Desktop app | NOT IMPLEMENTED | Requires NUI adapter (NOT IMPLEMENTED) |
-| WASM app | NOT IMPLEMENTED | Requires a WASM backend (not implemented) |
+| WASM app | PARTIAL | Scalar NXL programs compile to `.wasm` and run under any host providing the documented `env` imports (reference Node host in `wasm_backend_tests.rs`); no browser app template or DOM bridge yet |
 | Android/iOS apps | NOT IMPLEMENTED | Requires Tier 1/2 targets (P19 blocked) |
 | Example runner script | IMPLEMENTED | `scripts/run_examples.sh` |
 

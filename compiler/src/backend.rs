@@ -61,24 +61,24 @@ pub fn compile_native(source: &SourceFile) -> Result<NativeArtifact, Diagnostic>
 /// native emission: header instructions, the condition test, then the body
 /// emitted recursively.
 #[derive(Clone, Debug)]
-struct LoopInfo {
+pub(crate) struct LoopInfo {
     /// Block index of the loop header.
-    header: usize,
+    pub(crate) header: usize,
     /// Block index of the single loop exit, when one exists.
-    exit: Option<usize>,
+    pub(crate) exit: Option<usize>,
     /// Every block index belonging to the loop, nested loops included.
-    blocks: HashSet<usize>,
+    pub(crate) blocks: HashSet<usize>,
     /// JS label used for `break`/`continue`.
     label: String,
 }
 
 /// Index of a block by its id, if the function contains it.
-fn block_index(function: &Function, id: BasicBlockId) -> Option<usize> {
+pub(crate) fn block_index(function: &Function, id: BasicBlockId) -> Option<usize> {
     function.basic_blocks.iter().position(|b| b.id == id)
 }
 
 /// Blocks control can flow to next.
-fn successors(block: &BasicBlock) -> Vec<BasicBlockId> {
+pub(crate) fn successors(block: &BasicBlock) -> Vec<BasicBlockId> {
     match &block.terminator {
         Terminator::Jump { target, .. } => vec![*target],
         Terminator::Branch {
@@ -94,7 +94,7 @@ fn successors(block: &BasicBlock) -> Vec<BasicBlockId> {
 /// Blocks are the header plus everything reachable from the body entry that
 /// does not leave through the exit or revisit the header, which is exactly the
 /// set the VM walks at runtime.
-fn analyze_loops(function: &Function) -> HashMap<usize, LoopInfo> {
+pub(crate) fn analyze_loops(function: &Function) -> HashMap<usize, LoopInfo> {
     let mut loops: HashMap<usize, LoopInfo> = HashMap::new();
     for meta in &function.loops {
         let (Some(header), Some(body), Some(exit)) = (

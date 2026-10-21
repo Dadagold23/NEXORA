@@ -740,6 +740,7 @@ pub fn version_text() -> String {
 pub enum BuildTarget {
     Js,
     Vm,
+    Wasm,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -844,6 +845,7 @@ impl ProjectConfig {
                     "target" => {
                         cfg.target = match v.as_str() {
                             "vm" => BuildTarget::Vm,
+                            "wasm" => BuildTarget::Wasm,
                             _ => BuildTarget::Js,
                         };
                     }
@@ -895,6 +897,7 @@ impl ProjectConfig {
             match self.target {
                 BuildTarget::Js => "js",
                 BuildTarget::Vm => "vm",
+                BuildTarget::Wasm => "wasm",
             }
         ));
         if !self.dependencies.is_empty() {
@@ -1463,7 +1466,6 @@ pub fn cmd_build(dir: &Path, release: bool) -> CliResult<BuildResult> {
     let text = fs::read_to_string(&entry)
         .map_err(|_| err("NXL12006", format!("cannot read '{}'", entry.display())))?;
     let module = crate::project::compile_project(&entry).map_err(|d| located(d, &entry, &text))?;
-    let artifact = crate::backend::compile_js_module(&module).map_err(CliError::from)?;
     let profile = if release {
         BuildProfile::Release
     } else {
@@ -1473,8 +1475,23 @@ pub fn cmd_build(dir: &Path, release: bool) -> CliResult<BuildResult> {
         .join("build")
         .join(if release { "release" } else { "debug" });
     fs::create_dir_all(&out_dir).map_err(|e| err("NXL12004", e.to_string()))?;
-    let out_path = out_dir.join(format!("{}.js", cfg.name));
-    fs::write(&out_path, artifact.source).map_err(|e| err("NXL12004", e.to_string()))?;
+    // The manifest's `target` picks the artifact: `"wasm"` emits a core
+    // WebAssembly binary, anything else the JavaScript module.
+    let out_path = match cfg.target {
+        BuildTarget::Wasm => {
+            let artifact =
+                crate::wasm_backend::compile_wasm_module(&module).map_err(CliError::from)?;
+            let out_path = out_dir.join(format!("{}.wasm", cfg.name));
+            fs::write(&out_path, artifact.bytes).map_err(|e| err("NXL12004", e.to_string()))?;
+            out_path
+        }
+        BuildTarget::Js | BuildTarget::Vm => {
+            let artifact = crate::backend::compile_js_module(&module).map_err(CliError::from)?;
+            let out_path = out_dir.join(format!("{}.js", cfg.name));
+            fs::write(&out_path, artifact.source).map_err(|e| err("NXL12004", e.to_string()))?;
+            out_path
+        }
+    };
     Ok(BuildResult {
         artifact_path: Some(out_path),
         profile,
