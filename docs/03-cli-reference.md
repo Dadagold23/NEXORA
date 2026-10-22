@@ -59,7 +59,7 @@ confirmation: an interactive prompt, or `--yes` for scripts and CI (NXL12010).
 
 | Command | Status |
 | --- | --- |
-| `serve` | NUF server. Serves the routes the project declares in `nxl.toml` (`[[route]]`), with `/openapi.json` describing them. A project with no routes gets the demonstration routes. Not a development server with hot reload — that is `dev`. |
+| `serve` | NUF server. Serves the routes the project declares in `nxl.toml` (`[[route]]`), with `/openapi.json` describing them. A project with no routes gets the demonstration routes. Renders the declared layout and 404 page; every response carries `nosniff`, `referrer-policy: strict-origin-when-cross-origin` and `x-frame-options: DENY`. Not a development server with hot reload — that is `dev`. |
 | `lsp` | Language server (NLS). The CLI entry point validates initialisation. |
 | `ide` | Print the IDE capability sources. |
 | `bridge` | Print FFI bridge status. |
@@ -92,24 +92,34 @@ not happen.
 
 ```text
 <name>/
-  nxl.toml              [package] metadata; entry is src/main.nxl, target js
+  nxl.toml              [package] metadata plus the [[route]] table served by `serve`
+  pages/                one .nxlhtml template per route
+  layouts/main.nxlhtml  nav, brand, <title>, footer — wrapped around every page
   src/main.nxl          boot sequence; prints the log the page is built from
   src/app/config.nxl    name, tagline and features
   src/app/routes.nxl    the routes the dev server exposes
   src/app/state.nxl     AppState, the boot state machine
-  public/index.nxl      the page, written in NXL and rendered on the server
-  public/styles.css     page and splash styling
+  public/index.nxl      the dev-server landing page, written in NXL
+  public/styles.css     page, card, form and navigation styling
   public/bootstrap.js   turns the program's print() output into the page
   public/favicon.svg    the mark used by the page and the tab
   tests/basic.nxl       compiled and run by `test`
-  README.md             project notes
+  README.md             project notes, including how to add a page
   .gitignore
 ```
 
-Serve it with `nxlc dev`, which serves `public/` and falls back to its own
-generated page for projects that have no `public/` directory. See
-[repl-and-dev.md](repl-and-dev.md) for what the dev server does and does not
-do.
+Two commands serve it, and they are different servers:
+
+- `nxlc serve` renders the `[[route]]` table in `nxl.toml` — the pages in
+  `pages/`, with the declared layout and 404 — as finished HTML.
+- `nxlc dev` serves the browser program: it compiles `src/` to JavaScript,
+  serves `public/`, and reloads on edits. It falls back to its own generated
+  page for projects that have no `public/` directory. See
+  [repl-and-dev.md](repl-and-dev.md) for what the dev server does and does not
+  do.
+
+Both accept `[web] host`/`port` from `nxl.toml`; `serve` binds `127.0.0.1:8080`
+and `dev` `127.0.0.1:3000` by default.
 
 `--target` and `--template` are the same flag. The word changed because a
 `console` project is not the only shape a program can take; both spellings are

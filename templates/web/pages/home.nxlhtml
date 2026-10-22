@@ -1,8 +1,43 @@
-<h1 class="page-title">Welcome</h1>
-<p class="lede">
-  This page is an <code>.nxlhtml</code> template. The layout supplied the nav and
-  the footer; this file supplied the content.
-</p>
+<section class="hero">
+  <p class="eyebrow">NEXORA · NXL</p>
+  <h1 class="page-title">Welcome to <nxl expr="app_name" /></h1>
+  <p class="lede">
+    A generated NXL web application: every page is a server-rendered
+    <code>.nxlhtml</code> template, every route is declared in
+    <code>nxl.toml</code>, and every value is escaped on the way out.
+  </p>
+  <p class="actions">
+    <a class="btn" href="/about">Get started</a>
+    <a class="btn btn-secondary" href="/contact">Contact</a>
+  </p>
+</section>
+
+<ul class="cards">
+  <li class="panel">
+    <h2>Declared routes</h2>
+    <p>
+      <code>nxl.toml</code> lists every route, the page it renders and the
+      fields a form must supply. The server serves exactly that table —
+      nothing more.
+    </p>
+  </li>
+  <li class="panel">
+    <h2>Escaped output</h2>
+    <p>
+      <code>&lt;nxl expr&gt;</code> escapes its output, so a value can never
+      become markup. <a href="/search">Search for a term</a> to see the page
+      echo it safely.
+    </p>
+  </li>
+  <li class="panel">
+    <h2>The language itself</h2>
+    <p>
+      <code>src/</code> is real NXL — modules, classes and arrays — compiled
+      and run by the toolchain, not a scripting shim around another
+      language.
+    </p>
+  </li>
+</ul>
 
 <section class="panel">
   <h2>How routing works here</h2>

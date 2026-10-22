@@ -84,6 +84,23 @@ empty string when the request did not supply them:
 A field listed in `validate` is also always bound on a POST, so a page that
 draws a form still compiles on the submission that is missing something.
 
+`app_name` is bound to the project's `name` from `nxl.toml`, for pages and for
+the layout, so a layout's `<title>` and brand can be written as
+`<nxl expr="app_name" />` instead of hard-coding a string. It is bound for the
+404 page too, which renders through the same path.
+
+A submission that passes validation renders the same page with `method` set to
+`POST` and `has_error` `"false"`, which is how the starter shows its success
+state:
+
+```html
+<nxl>
+if method == "POST" && has_error == "false" {
+    print("<p class=\"success\" role=\"status\">Thank you.</p>");
+}
+</nxl>
+```
+
 ## Forms
 
 ```html
@@ -101,6 +118,12 @@ Nothing is stored: there is no session handling and no database behind this.
 NXL has no HTTP types, so a page is a template, not a handler. It cannot choose
 a status code, set a header, or call another route. Adding any of those needs
 request and response types in the language first.
+
+Every response — a page, the 404, `/openapi.json` — leaves through the same
+middleware and carries `x-content-type-options: nosniff`,
+`referrer-policy: strict-origin-when-cross-origin` and `x-frame-options: DENY`.
+That is the set the serving architecture permits today; per-route headers need
+the request and response types the language does not have yet.
 
 Pages render by printing: every printed piece becomes its own line, exactly as
 a plain `.nxl` program does. The newlines are harmless in HTML but mean byte

@@ -11,6 +11,10 @@ if has_error == "true" {
     print(escape_html(error));
     print("</p>");
 }
+if method == "POST" && has_error == "false" {
+    print("<p class=\"success\" role=\"status\">Thank you — the submission was accepted and validated. ");
+    print("This starter does not send it anywhere yet; an application built on it would store it or forward it from here.</p>");
+}
 </nxl>
 
 <form class="form" method="post" action="/contact">

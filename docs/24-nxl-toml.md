@@ -31,7 +31,7 @@ target = "js"            # "js" (default) | "vm" | "wasm"
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `name` | `project` | Project identity; used by `pkg publish` and reports. |
+| `name` | `project` | Project identity; used by `pkg publish` and reports. Bound into pages and layouts as `app_name`, so a `<title>` or brand tracks the manifest instead of being hard-coded. |
 | `version` | `0.1.0` | Reported and published with the package. |
 | `description` | — | One-line summary, shown by `pkg info`. |
 | `authors` | — | Comma-separated list, published with the package. |
@@ -96,6 +96,10 @@ than `[[route]]`), missing page — is reported with its line number:
 `line N: unknown route key '...' (method, path, page, validate)`. There is no
 convention that invents routes behind your back; the routes in the manifest
 are the routes the server serves. `GET /openapi.json` describes them.
+
+A route whose declared page is missing fails at startup, before anything is
+served: `serve` reports it and exits non-zero rather than answering requests
+with a half-built site.
 
 ## `[database]`
 

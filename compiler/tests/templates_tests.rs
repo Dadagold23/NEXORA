@@ -327,6 +327,94 @@ fn web_template_scaffolding_locks_dependencies() {
 }
 
 #[test]
+fn the_generated_pages_render_the_starter_ui() {
+    // The generated project's pages are what `nexora serve` puts in a browser.
+    // Rendering has to produce the real starter markup: the name from the
+    // manifest in the title and nav, the hero and its actions, the feature
+    // cards, a form, and a 404 that shows the path it could not match. A
+    // template that stopped rendering, or a page the layout no longer wraps,
+    // would otherwise still pass every compile-and-run test.
+    let dir = TempDir::new("web_render");
+    cmd_new_from_template_in(dir.path(), "site", "web").unwrap();
+    let project = dir.path().join("site");
+
+    let context = nxl_compiler::web::SiteContext::new(
+        project.clone(),
+        nxl_compiler::web::Site::load(&project)
+            .expect("the generated nxl.toml parses")
+            .expect("the generated project declares routes"),
+    );
+
+    let home = context
+        .render_page("home.nxlhtml", &nxl_compiler::web::Request::default(), "/")
+        .expect("home renders");
+    for expected in [
+        "<!doctype html>",
+        // The layout's title and brand come from `name` in nxl.toml.
+        "<title>site</title>",
+        "Welcome to site",
+        "class=\"hero\"",
+        "class=\"actions\"",
+        "Get started",
+        "btn-secondary",
+        "class=\"cards\"",
+        "class=\"nav\"",
+        "class=\"footer\"",
+        "class=\"panel\"",
+    ] {
+        assert!(
+            home.contains(expected),
+            "home is missing {expected}: {home}"
+        );
+    }
+
+    let contact_request = nxl_compiler::web::Request {
+        method: "GET".to_owned(),
+        form: [
+            ("name", "Ada"),
+            ("email", "ada@example.com"),
+            ("message", "Hello"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect(),
+        ..nxl_compiler::web::Request::default()
+    };
+    let form_page = context
+        .render_page("contact.nxlhtml", &contact_request, "/contact")
+        .expect("the form renders");
+    assert!(form_page.contains("method=\"post\""), "{form_page}");
+    assert!(form_page.contains("value=\"Ada\""), "{form_page}");
+    assert!(!form_page.contains("class=\"success\""), "{form_page}");
+
+    let accepted = nxl_compiler::web::Request {
+        method: "POST".to_owned(),
+        form: contact_request.form.clone(),
+        ..nxl_compiler::web::Request::default()
+    };
+    let accepted_page = context
+        .render_page("contact.nxlhtml", &accepted, "/contact")
+        .expect("the accepted submission renders");
+    assert!(
+        accepted_page.contains("class=\"success\""),
+        "a validated submission must show its success state: {accepted_page}"
+    );
+    assert!(
+        !accepted_page.contains("class=\"alert\""),
+        "{accepted_page}"
+    );
+
+    // The 404 is rendered through the same path and binds the request path.
+    let (status, not_found) = context.render_not_found("/does-not-exist");
+    assert_eq!(status.as_u16(), 404);
+    assert!(not_found.contains("404"), "{not_found}");
+    assert!(
+        not_found.contains("/does-not-exist"),
+        "the 404 page must show the path that was not found: {not_found}"
+    );
+}
+
+#[test]
 fn the_scaffolded_page_is_wired_to_the_program() {
     // Compiling and running the project is not the same as proving the page
     // shows anything: the landing page depends on bootstrap.js turning the

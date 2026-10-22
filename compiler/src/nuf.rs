@@ -873,6 +873,16 @@ async fn cors_headers(req: axum::extract::Request, next: axum::middleware::Next)
     let mut res = next.run(req).await;
     res.headers_mut()
         .insert("access-control-allow-origin", "*".parse().unwrap());
+    // Safe defaults every served response carries: never let a browser
+    // MIME-sniff a response into something executable, never leak the full
+    // URL to another origin, and never let another site frame these pages.
+    let headers = res.headers_mut();
+    headers.insert("x-content-type-options", "nosniff".parse().unwrap());
+    headers.insert(
+        "referrer-policy",
+        "strict-origin-when-cross-origin".parse().unwrap(),
+    );
+    headers.insert("x-frame-options", "DENY".parse().unwrap());
     res
 }
 

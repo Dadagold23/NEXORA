@@ -40,8 +40,8 @@
 //!
 //! The whole template becomes one NXL program: markup is emitted as `print` of a
 //! string literal, expressions become `print(escape_html(…))`, and blocks are
-//! inlined. One compile, one run, and bindings declared in one block are visible
-//! in the next — which is what makes loops over data worth writing.
+//! inlined. One compile, one run, and bindings declared in one block are
+//! visible in the next — which is what makes loops over data worth writing.
 //!
 //! Nothing here executes text as a system command. The only thing that is ever
 //! compiled is NXL source, through the ordinary compiler.
@@ -246,22 +246,32 @@ impl Template {
     /// Markup becomes a printed string literal, an expression becomes a printed
     /// escaped value, and a block's statements are inlined between braces so
     /// its bindings stay its own.
+    ///
+    /// Markup and expressions that stand next to each other in the source
+    /// share a single `print`, so a value lands exactly where the author put
+    /// it: `<title>` and the value inside it stay on one line, and an
+    /// attribute value does not gain a stray newline. A block is a boundary —
+    /// each `print` inside it is still a line of its own, which is what makes
+    /// a loop over items produce one line per item.
     pub fn to_program(&self) -> String {
         let mut program = String::from("// generated from a .nxlhtml template\nfn main() {\n");
+        let mut inline: Vec<String> = Vec::new();
         for segment in &self.segments {
             match segment {
                 Segment::Markup(markup) => {
-                    program.push_str(&format!("    print({});\n", nxl_string_literal(markup)));
+                    inline.push(nxl_string_literal(markup));
                 }
                 Segment::Expression(expression) => {
-                    program.push_str(&format!("    print(escape_html({expression}));\n"));
+                    inline.push(format!("escape_html({expression})"));
                 }
                 Segment::Raw(binding) => {
+                    flush_inline(&mut program, &mut inline);
                     // Deliberately not escaped: this is how a layout inserts a
                     // page it already rendered.
                     program.push_str(&format!("    print({binding});\n"));
                 }
                 Segment::Statements(statements) => {
+                    flush_inline(&mut program, &mut inline);
                     program.push_str("    {\n");
                     for line in statements.lines() {
                         program.push_str("        ");
@@ -272,6 +282,7 @@ impl Template {
                 }
             }
         }
+        flush_inline(&mut program, &mut inline);
         program.push_str("}\n");
         program
     }
@@ -339,6 +350,20 @@ impl Template {
 /// Render a template from its text in one step.
 pub fn render(text: &str, name: &str) -> Result<String, TemplateError> {
     Template::parse(text)?.render(name)
+}
+
+/// Print the inline pieces collected so far as one line.
+///
+/// The pieces are concatenated with `+` inside a single `print`, so the value
+/// of an expression ends up in the same line as the markup around it. A
+/// template prints one line per `print`, and joining those lines is what puts
+/// a newline between them.
+fn flush_inline(program: &mut String, inline: &mut Vec<String>) {
+    if inline.is_empty() {
+        return;
+    }
+    let joined = inline.drain(..).collect::<Vec<String>>().join(" + ");
+    program.push_str(&format!("    print({joined});\n"));
 }
 
 /// A binding name has to be something NXL will accept as an identifier, so a
@@ -499,6 +524,15 @@ mod tests {
         let page = render_ok(r#"<nxl expr='"<script>alert(1)</script>"' />"#);
         assert!(!page.contains("<script"), "script tag survived: {page}");
         assert!(page.contains("&lt;script&gt;"), "{page}");
+    }
+
+    #[test]
+    fn an_expression_lands_where_the_author_put_it() {
+        // A value is part of the line it sits on. It used to be printed on a
+        // line of its own, which put a newline inside the tag around it and
+        // inside any attribute value.
+        let page = render_ok(r#"<title><nxl expr='"serveapp"' /></title>"#);
+        assert_eq!(page, "<title>serveapp</title>");
     }
 
     #[test]

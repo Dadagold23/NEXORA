@@ -136,6 +136,20 @@ fn project(name: &str) -> PathBuf {
 }
 
 fn request(dir: &Path, method: &str, target: &str, body: Option<&str>) -> (u16, String) {
+    let (headers, body) = response(dir, method, target, body);
+    let status = headers
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .unwrap_or(0);
+    (status, body)
+}
+
+/// The raw head and body of one request against a fresh server for `dir`.
+///
+/// The head is returned whole so tests can assert on response headers, which
+/// the status/body shape would otherwise throw away.
+fn response(dir: &Path, method: &str, target: &str, body: Option<&str>) -> (String, String) {
     let app = nxl_compiler::web::build_app(Arc::new(SiteContext::new(
         dir.to_path_buf(),
         Site::load(dir).unwrap().unwrap(),
@@ -162,19 +176,14 @@ fn request(dir: &Path, method: &str, target: &str, body: Option<&str>) -> (u16, 
     );
     stream.write_all(head.as_bytes()).unwrap();
     stream.write_all(payload.as_bytes()).unwrap();
-    let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).unwrap();
 
     task.abort();
     runtime.shutdown_timeout(Duration::from_millis(100));
 
-    let status = response
-        .split_whitespace()
-        .nth(1)
-        .and_then(|code| code.parse().ok())
-        .unwrap_or(0);
-    let body = response.split("\r\n\r\n").nth(1).unwrap_or("").to_owned();
-    (status, body)
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw.as_str(), ""));
+    (head.to_owned(), body.to_owned())
 }
 
 #[test]
@@ -191,11 +200,9 @@ fn a_path_parameter_reaches_the_page() {
     let dir = project("params");
     let (status, body) = request(&dir, "GET", "/posts/42", None);
     assert_eq!(status, 200);
-    // Each printed piece is its own line, so the value lands on a line of its
-    // own between the markup around it. Harmless in HTML, and it is how a
-    // plain `index.nxl` page already renders.
-    assert!(body.contains("Post "), "{body}");
-    assert!(body.contains("42"), "{body}");
+    // The value lands inside the heading, on the same line: a template prints
+    // what the author wrote, with the value put where it belongs.
+    assert!(body.contains("<h1>Post 42</h1>"), "{body}");
 }
 
 #[test]
@@ -295,4 +302,79 @@ fn a_project_that_declares_routes_still_publishes_openapi() {
         "the project's own routes are missing: {body}"
     );
     assert!(body.contains("/openapi.json"), "{body}");
+}
+
+#[test]
+fn a_page_renders_the_request_from_the_top_of_the_http_response() {
+    // The 404 page of the web starter shows the path it could not match, so the
+    // unmatched path has to be bound for the 404 as well as for ordinary pages.
+    let dir = project("notfound_path");
+    std::fs::write(
+        dir.join("pages").join("404.nxlhtml"),
+        "<h1>Missing</h1><p><nxl expr=\"path\" /></p>",
+    )
+    .unwrap();
+    let (status, body) = request(&dir, "GET", "/nothing/here", None);
+    assert_eq!(status, 404, "{body}");
+    assert!(body.contains("/nothing/here"), "{body}");
+}
+
+#[test]
+fn an_unmatched_path_renders_escaped_in_the_404_page() {
+    // The 404 page binds `path`; a crafted path must not become markup there.
+    let dir = project("notfound_xss");
+    std::fs::write(
+        dir.join("pages").join("404.nxlhtml"),
+        "<h1>Missing</h1><p><nxl expr=\"path\" /></p>",
+    )
+    .unwrap();
+    let (status, body) = request(&dir, "GET", "/%3Cscript%3Ealert(1)%3C%2Fscript%3E", None);
+    assert_eq!(status, 404, "{body}");
+    assert!(!body.contains("<script>"), "a tag survived: {body}");
+}
+
+#[test]
+fn every_response_carries_the_safe_header_defaults() {
+    // A page, a 404 and the JSON description all leave through the same
+    // middleware, so all three have to carry the headers.
+    let dir = project("headers");
+    let headers = response(dir.as_path(), "GET", "/", None).0;
+    for (name, value) in [
+        ("x-content-type-options", "nosniff"),
+        ("referrer-policy", "strict-origin-when-cross-origin"),
+        ("x-frame-options", "DENY"),
+    ] {
+        assert!(
+            headers.contains(&format!("{name}: {value}")),
+            "missing '{name}: {value}' in:\n{headers}"
+        );
+    }
+
+    let not_found = response(dir.as_path(), "GET", "/nowhere", None).0;
+    assert!(
+        not_found.contains("x-content-type-options: nosniff"),
+        "{not_found}"
+    );
+
+    let openapi = response(dir.as_path(), "GET", "/openapi.json", None).0;
+    assert!(
+        openapi.contains("x-content-type-options: nosniff"),
+        "{openapi}"
+    );
+}
+
+#[test]
+fn a_layout_can_print_the_project_name_from_the_manifest() {
+    // The starter's layout uses `<nxl expr="app_name" />` for its title and
+    // brand; the binding comes from the manifest, not the request.
+    let dir = project("app_name");
+    std::fs::write(
+        dir.join("layouts").join("main.nxlhtml"),
+        "<html><title><nxl expr=\"app_name\" /></title><main><nxl raw=\"content\" /></main></html>",
+    )
+    .unwrap();
+    let (status, body) = request(&dir, "GET", "/", None);
+    assert_eq!(status, 200, "{body}");
+    // The fixture manifests `name = "fixture"`, not its directory name.
+    assert!(body.contains("<title>fixture</title>"), "{body}");
 }

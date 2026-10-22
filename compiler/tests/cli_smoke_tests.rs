@@ -1,10 +1,10 @@
 //! End-to-end smoke tests for the real `nxlc` binary: generate a project the
-//! way a developer would, build it, run its tests, and check that overwriting
-//! and malformed manifests fail loudly. No mocks — every leg runs the
-//! compiled executable through `std::process::Command`.
+//! way a developer would, build it, run its tests, serve it, and check that
+//! overwriting and malformed manifests fail loudly. No mocks — every leg runs
+//! the compiled executable through `std::process::Command`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_nxlc")
@@ -139,5 +139,121 @@ fn cli_build_refuses_a_manifest_with_a_typo() {
     let build = run(&project, &["build"]);
     assert_fails_with(&build, "nxlc build with a typo'd key", "NXL12012");
 
+    let _ = std::fs::remove_dir_all(&workspace);
+}
+
+// ── the dev server, end to end ────────────────────────────────────────────────
+
+/// A raw HTTP exchange over a fresh connection, so no client dependency is
+/// needed. Returns the raw response — status line, headers and body.
+fn http(addr: &str, method: &str, target: &str, body: Option<&str>) -> String {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let mut stream = TcpStream::connect(addr).expect("connect to the dev server");
+    let payload = body.unwrap_or("");
+    let head = format!(
+        "{method} {target} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        payload.len()
+    );
+    stream.write_all(head.as_bytes()).expect("send request");
+    stream.write_all(payload.as_bytes()).expect("send body");
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).expect("read response");
+    raw
+}
+
+fn pick_free_port() -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+    port
+}
+
+#[test]
+fn cli_serve_answers_the_generated_routes() {
+    // The server a developer actually starts: the real `nxlc serve` process,
+    // reading `nxl.toml`, rendering `pages/`, and answering over HTTP. The
+    // in-process tests in web_tests.rs cover rendering; this covers the wiring
+    // between the binary, the manifest and the socket.
+    let workspace = temp_workspace("serve");
+    let new = run(&workspace, &["new", "web", "serveapp"]);
+    assert_ok(&new, "nxlc new web");
+    let project = workspace.join("serveapp");
+
+    // The generated manifest pins port 8080, which another process may hold.
+    // A free port keeps this leg from flaking and proves `port` is honoured.
+    let port = pick_free_port();
+    let manifest_path = project.join("nxl.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest");
+    std::fs::write(
+        &manifest_path,
+        manifest.replace("port = 8080", &format!("port = {port}")),
+    )
+    .expect("write manifest with a free port");
+
+    let mut server = Command::new(bin())
+        .args(["serve"])
+        .current_dir(&project)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start nxlc serve");
+    let addr = format!("127.0.0.1:{port}");
+
+    // Wait for the socket, not a fixed sleep: the build step inside `serve`
+    // can take a moment.
+    let mut up = false;
+    for _ in 0..80 {
+        if std::net::TcpStream::connect(&addr).is_ok() {
+            up = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    assert!(up, "nxlc serve never listened on {addr}");
+
+    let home = http(&addr, "GET", "/", None);
+    assert!(home.starts_with("HTTP/1.1 200"), "{home}");
+    assert!(home.contains("<title>serveapp</title>"), "{home}");
+    assert!(home.contains("Welcome to serveapp"), "{home}");
+    assert!(home.contains("x-content-type-options: nosniff"), "{home}");
+
+    let parameterized = http(&addr, "GET", "/posts/42", None);
+    assert!(parameterized.starts_with("HTTP/1.1 200"), "{parameterized}");
+    assert!(parameterized.contains("42"), "{parameterized}");
+
+    // An incomplete submission is refused with the validation message.
+    let rejected = http(&addr, "POST", "/contact", Some("name=Ada"));
+    assert!(rejected.starts_with("HTTP/1.1 422"), "{rejected}");
+    assert!(rejected.contains("email"), "{rejected}");
+
+    // A complete one renders the page's success state.
+    let accepted = http(
+        &addr,
+        "POST",
+        "/contact",
+        Some("name=Ada&email=ada%40example.com&message=Hello"),
+    );
+    assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
+    assert!(accepted.contains("class=\"success\""), "{accepted}");
+
+    // The 404 tells the browser which path missed and offers navigation; it is
+    // a real page, not a bare <h1>.
+    let missing = http(&addr, "GET", "/definitely-not-a-page", None);
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+    assert!(
+        missing.contains("<a href=\"/\">Home</a>"),
+        "the 404 page must offer real navigation:\n{missing}"
+    );
+
+    // A path segment is echoed back escaped, never as markup.
+    let escaped = http(&addr, "GET", "/posts/%3Cb%3Ex%3C%2Fb%3E", None);
+    assert!(escaped.starts_with("HTTP/1.1 200"), "{escaped}");
+    assert!(!escaped.contains("<b>x</b>"), "a tag survived: {escaped}");
+    assert!(escaped.contains("&lt;b&gt;x&lt;/b&gt;"), "{escaped}");
+
+    server.kill().expect("stop nxlc serve");
+    let _ = server.wait();
     let _ = std::fs::remove_dir_all(&workspace);
 }

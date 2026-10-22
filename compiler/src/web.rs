@@ -474,7 +474,12 @@ impl SiteContext {
         let name = file.display().to_string();
         let text = std::fs::read_to_string(&file)
             .map_err(|error| format!("could not read page '{}': {error}", file.display()))?;
-        let bindings = request.bindings(path);
+        let mut bindings = request.bindings(path);
+        // The project's name, from nxl.toml, so a layout's <title> and brand
+        // come from the manifest instead of a hard-coded string. Bound for
+        // pages as well as layouts, and for the 404 page, which renders
+        // through here too.
+        bindings.push(("app_name".to_owned(), self.site_name()));
         let body = Self::render_template(&text, &name, &bindings)?;
         match &self.site.layout {
             None => Ok(body),
@@ -510,7 +515,11 @@ impl SiteContext {
     }
 
     /// The page to show when nothing matched.
-    pub fn render_not_found(&self) -> (StatusCode, String) {
+    ///
+    /// `path` is the request that found nothing, which the 404 page can print
+    /// so the visitor sees what was asked for. It goes through the same
+    /// escaping as any other binding.
+    pub fn render_not_found(&self, path: &str) -> (StatusCode, String) {
         let page = match &self.site.not_found {
             None => (
                 StatusCode::NOT_FOUND,
@@ -521,7 +530,7 @@ impl SiteContext {
                     method: "GET".to_owned(),
                     ..Request::default()
                 };
-                match self.render_page(page, &request, "") {
+                match self.render_page(page, &request, path) {
                     Ok(page) => (StatusCode::NOT_FOUND, page),
                     // A broken 404 page must still produce a 404, not a 500.
                     Err(error) => (
@@ -648,10 +657,10 @@ pub fn build_app(context: Arc<SiteContext>) -> nuf::App {
     // Anything unmatched is the project's 404 page, with a real 404 status.
     let not_found_context = context.clone();
     app.set_fallback(axum::routing::any(
-        move |State(_): State<Arc<nuf::AppState>>| {
+        move |State(_): State<Arc<nuf::AppState>>, uri: axum::http::Uri| {
             let context = not_found_context.clone();
             async move {
-                let (status, page) = context.render_not_found();
+                let (status, page) = context.render_not_found(uri.path());
                 (status, Html(page)).into_response()
             }
         },

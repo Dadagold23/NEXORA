@@ -309,10 +309,12 @@ mod devserver_tests {
         let rendered = render_page(&dir).expect("a page should be found");
         let page = rendered.expect("the template should render");
         // Each printed piece is its own line, exactly as a plain `index.nxl`
-        // page already renders. Pinning the whole string documents that.
+        // page already renders. A value that sits inside a line of markup
+        // stays on that line, so it never pushes a newline into the tag around
+        // it. Pinning the whole string documents that.
         assert_eq!(
             page,
-            "<h1>Welcome</h1>\n\n<li>one</li>\n<li>two</li>\n\n<p>\nv0.1.1\n</p>"
+            "<h1>Welcome</h1>\n\n<li>one</li>\n<li>two</li>\n\n<p>v0.1.1</p>"
         );
     }
 

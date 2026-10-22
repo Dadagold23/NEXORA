@@ -1,6 +1,6 @@
 <h1 class="page-title">404</h1>
 <p class="lede">
-  There is no page at this address.
+  There is no page at <code><nxl expr="path" /></code>.
 </p>
 
 <section class="panel">
@@ -8,10 +8,12 @@
     This page is what the server returns for any path it does not recognise, and
     it is returned with a real <code>404</code> status — not a styled
     <code>200</code>, which would be worse for everyone, search engines included.
+    The path above is the one you asked for, escaped like every other value.
   </p>
   <ul class="list">
     <li><a href="/">Home</a></li>
     <li><a href="/about">About</a></li>
+    <li><a href="/search">Search</a></li>
     <li><a href="/contact">Contact</a></li>
   </ul>
 </section>

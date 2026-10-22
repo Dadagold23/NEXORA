@@ -13,10 +13,42 @@ nexora dev       # the browser program, with live reload
 listens on `127.0.0.1:8080`. `dev` serves `public/index.nxl`, compiles `src/` to
 JavaScript and reloads the page on <http://127.0.0.1:3000> when you edit a file.
 
+## Make it yours
+
+| What | Where |
+| --- | --- |
+| Application name (nav, `<title>`, hero) | `name` in `nxl.toml` — the layout binds it as `app_name` |
+| Bind address and port | `[web]` `host`/`port` in `nxl.toml`, or `[env.production]` for a deployment |
+| Pages | one `.nxlhtml` file in `pages/`, referenced by a `[[route]]` entry |
+| Navigation | `layouts/main.nxlhtml` (top nav and footer) |
+| Feature cards, hero copy | `pages/home.nxlhtml` |
+| Form fields | `pages/contact.nxlhtml` plus the route's `validate` list |
+| Colors, spacing, buttons | the custom properties at the top of `public/styles.css` |
+
+## Adding a page
+
+1. Create `pages/pricing.nxlhtml` — plain markup, with `<nxl expr="…" />` where a
+   value should appear (escaped) and `<nxl> … </nxl>` for statements.
+2. Declare it in `nxl.toml`:
+
+   ```toml
+   [[route]]
+   method = "GET"
+   path = "/pricing"
+   page = "pricing.nxlhtml"
+   ```
+
+3. Add a link in `layouts/main.nxlhtml`.
+4. Run `nexora serve` and open <http://127.0.0.1:8080/pricing>.
+
+A route whose page is missing, or with an unknown key, is refused at startup
+with the line number in `nxl.toml` — the server never serves a half-declared
+route.
+
 ## What is here
 
 ```
-nxl.toml              manifest; routes, layout and 404 page
+nxl.toml              manifest; routes, layout, 404 page, project name
 pages/                one .nxlhtml template per route
 layouts/main.nxlhtml  wrapped around every page
 public/               static assets, plus the dev-server landing page
@@ -40,11 +72,29 @@ submitted form fields are bound as variables before the page runs, so a
 
 A form posting to a route with `validate = ["name", "email"]` comes back as
 `422` with the page redrawn, the submitted values still in place, and `error`
-holding the message.
+holding the message. A submission that passes validation renders the same page
+with `method` set to `POST`, which is how `pages/contact.nxlhtml` shows its
+success state.
 
-See `docs/20-web-applications.md` in the NEXORA repository for the full
-reference, including the limits — short version: NXL has no HTTP types yet, so
-a page is a template and not a handler.
+### What serving a page cannot do yet
+
+This is the honest boundary of the current toolchain, not a stylistic choice:
+
+- **No request/response types.** NXL has no HTTP types, so a page is a template
+  and not a handler: it can render, but it cannot read headers, set status
+  codes per case or return JSON. `q`, `method`, `path`, the path parameters and
+  the submitted fields are the whole binding surface.
+- **No state between requests.** Nothing is stored; a submission is validated
+  and echoed, then forgotten. There is no database behind this starter.
+- **`serve` and `dev` are separate.** `serve` renders the routes in
+  `nxl.toml`; `dev` runs the browser program in `src/`. They listen on
+  different ports (8080 and 3000) and do not share a request pipeline.
+- **Arithmetic edge cases.** A crafted path can make an expression unusable
+  where the language has no value for the result yet — for example
+  `/posts/1+2` is handed to the template verbatim.
+
+Full reference, including these limits: `docs/20-web-applications.md` in the
+NEXORA repository.
 
 ## The dev-server landing page
 
@@ -83,6 +133,20 @@ reason is printed instead of the app pretending to be healthy.
 The landing page is assembled with string concatenation, which is honest about
 where NXL is today: it has no template type, so `pages/` uses the `.nxlhtml`
 template format instead.
+
+## Security and production
+
+Every response carries `x-content-type-options: nosniff`,
+`referrer-policy: strict-origin-when-cross-origin` and
+`x-frame-options: DENY`. Output through `<nxl expr>` is escaped, and route
+tables and manifests are validated at startup with real error codes and a
+non-zero exit.
+
+`serve` is a **development** server for the pages in `pages/`. It is not
+intended to be exposed directly to the internet: it has no TLS, no rate
+limiting and no authentication. Deployment and environment configuration
+(`NXL_ENV`, `[env.<name>]`, required variables) are covered by
+`docs/21-deployment.md` in the NEXORA repository.
 
 ## Checks
 

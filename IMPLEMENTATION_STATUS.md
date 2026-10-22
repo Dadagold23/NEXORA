@@ -194,7 +194,8 @@ Migration file format: `database/migrations/<name>.sql` with `-- up` / `-- down`
 | --- | --- | --- |
 | HTTP server | IMPLEMENTED | `compiler/src/nuf.rs` (`App::serve`) over axum/hyper/tokio |
 | Routing (verbs, path params, groups via raw_router) | IMPLEMENTED | `App::get/post`, `route`, integration tests on parameterized paths |
-| Middleware (CORS, request logging) | IMPLEMENTED | `cors_headers`, `request_logger` layers in `into_router` |
+| Project pages (`[[route]]` → `.nxlhtml`) | IMPLEMENTED | `web.rs`: pages rendered per request inside the declared layout, with `app_name` from the manifest, path/query/form bindings, escaped output, real-404 page, and `validate` → 422. Rendered end to end through the real `nxlc serve` binary in `cli_smoke_tests.rs` |
+| Middleware (CORS, request logging, safe headers) | IMPLEMENTED | `cors_headers`, `request_logger` layers in `into_router`; `cors_headers` also sets `nosniff`, `referrer-policy: strict-origin-when-cross-origin` and `x-frame-options: DENY` on every response |
 | Controllers / services / DI container | IMPLEMENTED | `ServiceContainer` with typed register/get (downcast tested) |
 | Request validation | IMPLEMENTED | `nuf::validate` required-field rules, error messages (tested) |
 | Responses (JSON, redirect, error) | IMPLEMENTED | `json_response`, `error_response`, `redirect` helpers |
@@ -227,7 +228,7 @@ Migration file format: `database/migrations/<name>.sql` with `-- up` / `-- down`
 | Rate limiting | IMPLEMENTED | `RateLimiter` token bucket per key with refill (tested) |
 | Capability permissions | IMPLEMENTED | `Capabilities` grant/revoke/require (tested) |
 | Secret redaction | IMPLEMENTED | `redact` strips password/token/key/authorization values from logs (tested) |
-| Secure response headers | IMPLEMENTED | `secure_headers()`: CSP, HSTS, X-Frame-Options, nosniff, referrer-policy (tested) |
+| Secure response headers | IMPLEMENTED | Two layers: `secure_headers()` (CSP, HSTS, X-Frame-Options, nosniff, referrer-policy) and the NUF server middleware in `cors_headers`, which adds `x-content-type-options: nosniff`, `referrer-policy: strict-origin-when-cross-origin` and `x-frame-options: DENY` to every served response (pages, 404, `/openapi.json`; tested in `web_tests.rs`) |
 | Vetted crypto only | ENFORCED | argon2 via password-hash; no custom algorithms anywhere |
 | Fuzzing integration | NOT IMPLEMENTED | P23 phase |
 | Dependency vulnerability scanning | PARTIALLY IMPLEMENTED | `pkg::audit` local advisory matching (P13); live DB scanning deferred to P28 |
@@ -380,6 +381,7 @@ Decision: colocate a `docs/` directory with per-phase guides that mirror the act
 | Language Reference (implemented subset) | IMPLEMENTED | `docs/04-language-reference.md` |
 | Compiler & VM reference | IMPLEMENTED | `docs/05-compiler-and-vm.md` (DebugSpan telemetry noted) |
 | NDB / NUF / NUI / NXP / NLS / FFI / Security / Platforms guides | IMPLEMENTED | `docs/06-ndb.md` … `docs/13-platforms.md` |
+| Manifest specification | IMPLEMENTED | `docs/24-nxl-toml.md` — every `nxl.toml` section and key with its default, consumer and refusal code |
 | Testing/perf/CI summary | IMPLEMENTED | `docs/14-testing-performance-ci.md` |
 | Debugger & IDE guide | IMPLEMENTED | `docs/15-debugger-ide.md` |
 | Troubleshooting incl. real error strings | IMPLEMENTED | `docs/16-troubleshooting.md` |
@@ -396,6 +398,7 @@ Decision: colocate a `docs/` directory with per-phase guides that mirror the act
 | Hello World CLI | IMPLEMENTED | `examples/hello` — `compile_to_nir` passes (`hello_example_parses_and_typechecks`) |
 | Database app (migrations+seeds+factories) | IMPLEMENTED | `examples/blog` — migration applies, seed inserts verified (`blog_example_migrations_apply_and_seed`); bad seed fails loudly (`blog_seeders_roll_back_cleanly_on_failure`) |
 | REST-style server demo | IMPLEMENTED | `examples/api` + `nxl serve` (demo routes; NXL-authored route blocks still NOT IMPLEMENTED) |
+| Full web starter (pages, layout, forms, 404, dev server) | IMPLEMENTED | `nxlc new web` template: hero + feature cards, responsive layout, five routes, a validated form with success/error states, a real 404, `app_name` from the manifest in the title and nav, and safe response headers. Rendered and served end to end — `templates_tests::the_generated_pages_render_the_starter_ui` and `cli_smoke_tests::cli_serve_answers_the_generated_routes` run the real `nxlc serve` binary against a generated project |
 | CRUD over NDB models | NOT IMPLEMENTED | Blocked on ORM (P14 deferred track) |
 | Auth example | NOT IMPLEMENTED | Blocked on auth policies (P16 partial) |
 | WebSocket client example | NOT IMPLEMENTED | Server side only today |

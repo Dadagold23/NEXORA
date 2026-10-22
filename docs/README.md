@@ -13,7 +13,7 @@
 | [Compiler & VM](05-compiler-and-vm.md) | P03-P06, P09, P21 |
 | [NDB Database](06-ndb.md) | P14 |
 | [NUF Web Framework](07-nuf.md) | P15 |
-| [Web Applications](20-web-applications.md) | Routes in `nxl.toml`, `.nxlhtml` pages, layouts, forms |
+| [Web Applications](20-web-applications.md) | Routes in `nxl.toml`, `.nxlhtml` pages, bindings, layouts, forms, response headers |
 | [Manifest spec](24-nxl-toml.md) | every `nxl.toml` section, key, default, and refusal |
 | [WebAssembly backend](23-webassembly.md) | `target = "wasm"`, the scalar subset, host imports, VM divergences |
 | [NUI Universal UI](08-nui.md) | P18 |

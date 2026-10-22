@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title><nxl expr='"Nexora app"' /></title>
+<title><nxl expr="app_name" /></title>
+<meta name="description" content="<nxl expr="app_name" /> — a NXL web application: server-rendered pages, routes declared in nxl.toml, escaped output.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/styles.css">
 </head>
@@ -11,19 +12,21 @@
 <!--
   The layout wraps every page. `content` is the already-rendered page, put in
   raw because it is markup this project wrote; values inside the page were
-  escaped when that page rendered.
+  escaped when that page rendered. `app_name` comes from the manifest, so the
+  title and the brand track nxl.toml instead of being hard-coded here.
 -->
 <a class="skip" href="#main">Skip to content</a>
 
 <nav class="nav" aria-label="Main">
   <a class="brand" href="/">
     <img src="/favicon.svg" width="28" height="28" alt="">
-    <span>NEXORA</span>
+    <span><nxl expr="app_name" /></span>
   </a>
   <ul class="nav-links">
     <li><a href="/">Home</a></li>
     <li><a href="/about">About</a></li>
     <li><a href="/posts/1">Posts</a></li>
+    <li><a href="/search">Search</a></li>
     <li><a href="/contact">Contact</a></li>
   </ul>
 </nav>
@@ -33,6 +36,12 @@
 </main>
 
 <footer class="footer">
+  <ul class="footer-links">
+    <li><a href="/">Home</a></li>
+    <li><a href="/about">About</a></li>
+    <li><a href="/search">Search</a></li>
+    <li><a href="/contact">Contact</a></li>
+  </ul>
   <p>Built with NXL. Pages are <code>.nxlhtml</code> templates served by <code>nexora serve</code>.</p>
 </footer>
 </body>
