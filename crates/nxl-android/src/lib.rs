@@ -18,8 +18,10 @@
 //! of it is needed to run a program. Splitting the crate properly is the right
 //! long-term fix and is noted as such in the docs.
 //!
-//! Every module below the JNI surface is std-only, which is what makes a
-//! `cdylib` for `aarch64-linux-android` possible at all.
+//! Every module below the JNI surface is std-only apart from the vetted
+//! `sha2` crate, which the crypto stdlib uses. That is what makes a `cdylib`
+//! for `aarch64-linux-android` possible at all: nothing here pulls in the
+//! server, database or dynamic-linking layers.
 //!
 //! # The JNI surface
 //!
@@ -42,6 +44,8 @@
 pub mod ast;
 #[path = "../../../compiler/src/backend.rs"]
 pub mod backend;
+/// Local stub: FFI is not enabled in the app (see the module docs).
+pub mod cabi;
 #[path = "../../../compiler/src/diagnostic.rs"]
 pub mod diagnostic;
 #[path = "../../../compiler/src/hir.rs"]
@@ -294,5 +298,22 @@ for name in names {
     fn it_type_checks_without_running() {
         assert_eq!(check_source("t.nxl", r#"print("x");"#).unwrap(), ());
         assert!(check_source("bad.nxl", "let = ;").is_err());
+    }
+
+    /// A program that declares `extern` still compiles (the language supports
+    /// the syntax), but calling it fails catchably instead of touching a
+    /// shared object that does not exist in an APK.
+    #[test]
+    fn a_foreign_call_is_refused_rather_than_executed() {
+        let error = cabi::call(
+            "libc.so.6",
+            "puts",
+            &[nir::FfiType::Str],
+            None,
+            vec![vm::Value::String("hi".to_owned())],
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "NXL11017");
+        assert!(error.message.contains("not supported"), "{error:?}");
     }
 }

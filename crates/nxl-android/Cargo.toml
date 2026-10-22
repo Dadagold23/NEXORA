@@ -10,6 +10,11 @@ name = "nxl_android"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# The compiler's crypto stdlib hashes with the vetted `sha2` crate rather than
+# a hand-written implementation. It is pure Rust with no system dependencies,
+# so it links into the Android build; the server, database and FFI crates are
+# still deliberately absent from this dependency list.
+sha2 = "0.10"
 
 [profile.release]
 opt-level = "z"
