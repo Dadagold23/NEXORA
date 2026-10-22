@@ -161,12 +161,13 @@ fn console_template_test_file_runs() {
 #[test]
 fn unknown_targets_are_refused_with_an_explanation() {
     let dir = TempDir::new("unknown_target");
-    let err = cmd_new_from_template_in(dir.path(), "site", "mobile")
+    let err = cmd_new_from_template_in(dir.path(), "site", "ios")
         .expect_err("an unknown target must not invent a project");
     assert_eq!(err.code, "NXL12008", "{err:?}");
     assert!(err.message.contains("unknown target"), "{err:?}");
     assert!(err.message.contains("console"), "{err:?}");
     assert!(err.message.contains("web"), "{err:?}");
+    assert!(err.message.contains("mobile"), "{err:?}");
     assert!(
         !dir.path().join("site").exists(),
         "a refused target must not create anything"
@@ -183,8 +184,8 @@ fn creating_over_an_existing_directory_is_refused() {
 }
 
 #[test]
-fn both_targets_are_advertised() {
-    assert_eq!(TEMPLATES, ["console", "web"]);
+fn all_targets_are_advertised() {
+    assert_eq!(TEMPLATES, ["console", "web", "mobile"]);
 }
 
 #[test]

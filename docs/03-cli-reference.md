@@ -8,21 +8,38 @@ commands. The release installers create only `nxlc`.
 
 | Command | What it does |
 | --- | --- |
-| `new [<target>] <name>` | Create a project from a target. `new hello`, `new console hello`, `new --template console hello`, `new --template=console hello`, `new --target console hello` and `new --target=console hello` are equivalent. Targets: `console`, `web`. Dependencies declared by the new manifest are resolved and locked before the command returns. |
+| `new [<target>] <name>` | Create a project from a target. `new hello`, `new console hello`, `new --template console hello`, `new --template=console hello`, `new --target console hello` and `new --target=console hello` are equivalent. Targets: `console`, `web`, `mobile`. Dependencies declared by the new manifest are resolved and locked before the command returns. |
 | `init` | Create the same project layout in the current directory. |
 | `run [file]` | Run a project entry point or a single `.nxl` file on the VM. The VM is authoritative: a runtime failure (for example, division by zero) is reported with a non-zero exit. The JavaScript runtime is consulted only when the VM cannot compile the module at all, so a program's own error is never masked by re-running it elsewhere. |
-| `build [--release]` | Compile the project into `build/`. |
+| `build [--target android] [--release]` | Compile the project into `build/`. In a mobile project this builds an Android APK instead; see [Mobile](25-mobile.md). Any target other than `android` is refused (`NXL12025`). |
 | `check [file]` | Parse and type-check without producing output. |
-| `test [filter]` | Parse, type-check and run every `.nxl` file in `tests/`. There is no test-block syntax yet. |
+| `test [filter]` | Parse, type-check and run every `.nxl` file in `tests/`. In a mobile project it also compiles every screen asset with the generated prelude. There is no test-block syntax yet. |
 | `clean` | Remove build output. |
 | `fmt [file]`, `lint [file]` | Normalise whitespace; lint delegates to check. |
-| `dev [--port N] [--host H:P] [--no-watch]` | Start the development server: compiles the project to JavaScript, serves it with live reload over SSE, and shows a compile-error page that recovers on the next fix. Binds `127.0.0.1` by default. |
+| `dev [--port N] [--host H:P] [--no-watch]` | Start the development server: compiles the project to JavaScript, serves it with live reload over SSE, and shows a compile-error page that recovers on the next fix. Binds `127.0.0.1` by default. In a mobile project `dev` instead builds the debug APK, installs it on the connected Android device and launches it. |
 | `doctor` | Real environment diagnostics: compiler version and architecture, Node.js availability, `nxl.toml` and its declared entry point. |
 | `debug <file> [--break=N] [--inspect] [--steps=N]` | Statement trace with breakpoint counts; `--inspect` runs a stepping session with a call stack + variables view, `--steps=N` steps N statements from the initial pause. |
 | `docs` | Print the documentation map. |
 | `platforms` | Print the platform support summary. |
 | `version`, `--version`, `help` | Toolchain metadata. |
 | `repl` | Interactive session: evaluates expressions, keeps declarations and side effects available to later inputs, supports multi-line blocks, `.help`, `.clear` and `.exit`. Errors never end the session. |
+
+## Mobile (Android)
+
+`new mobile <name>` scaffolds an Android project. `nxl.toml` carries the app
+name, application id, colours, welcome copy, tab labels/assets, initial tab and
+platform target. `build` regenerates the Android resources from that section,
+compiles every screen, runs Gradle and reports the APK. `dev` builds, installs
+and launches on a connected device or emulator.
+
+Requirements: JDK 17+, Android SDK platform/build-tools 35, and (for `dev`) a
+device in the `device` state. Rust and the NDK are not required to build a
+generated project: it ships prebuilt `x86_64` and `arm64-v8a` NXL runtimes.
+Release signing reads `NXL_ANDROID_KEYSTORE`,
+`NXL_ANDROID_KEYSTORE_PASSWORD`, `NXL_ANDROID_KEY_ALIAS` and
+`NXL_ANDROID_KEY_PASSWORD` from the environment; without them the release
+artifact is unsigned. No credential is written into the project. Full details,
+including limitations and error codes, are in [Mobile](25-mobile.md).
 
 ## Package manager (NXP)
 

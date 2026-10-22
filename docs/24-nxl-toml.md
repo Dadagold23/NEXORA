@@ -13,6 +13,8 @@ typo must fail loudly, not silently change what the project does.
 | `[web]` | `serve`, `dev` | bind address, layout, 404 page |
 | `[env.<name>]` | `serve`, `dev` (via `NXL_ENV`) | per-environment overrides of `[web]` |
 | `[[route]]` | `serve`, `dev` | the HTTP routes the project serves |
+| `[mobile]` | `build`, `dev`, `test` | Android identity, colours, welcome copy, assets, targets |
+| `[[mobile.screens]]` | `build`, `dev`, `test` | ordered tabs and the NXL program behind each one |
 | `[database]` | `db:migrate`, `db:fresh`, `db:seed`, `db:rollback` | NDB connection |
 | `[dependencies]` | `pkg install/add/remove/update`, project resolution | NXP packages |
 
@@ -74,6 +76,50 @@ is active. The environment comes from the `NXL_ENV` variable and defaults to
 error — a typo like `NXL_ENV=productionn` must not quietly serve development
 configuration.
 
+## `[mobile]`
+
+```toml
+[mobile]
+app_name = "Field Notes"                 # default: [package] name
+application_id = "com.example.fieldnotes" # default: com.nexora.<slug>
+primary_color = "#FF8800"                # #RRGGBB
+secondary_color = "#223344"              # #RRGGBB
+welcome_heading = "Welcome to Field Notes"
+welcome_body = "The content of this screen was produced by NXL."
+initial_screen = "Welcome"               # must name a tab below
+logo = "branding/logo.png"               # optional
+splash = "branding/splash.png"           # optional
+version_code = 1
+targets = ["android"]                    # only "android" is implemented
+
+[[mobile.screens]]
+label = "Welcome"
+asset = "welcome.nxl"
+
+[[mobile.screens]]
+label = "Features"
+asset = "features.nxl"
+```
+
+| Key | Default | Rules |
+| --- | --- | --- |
+| `app_name` | `[package] name` | Android launcher label and in-app header. |
+| `application_id` | `com.nexora.<slug>` | At least two dot-separated segments; each starts with a letter and uses letters, digits and underscores. The Java namespace stays `com.nexora.nxl`. |
+| `primary_color`, `secondary_color` | `#5AA9FF`, `#2B4B73` | Exactly `#RRGGBB`; normalised to uppercase. |
+| `welcome_heading`, `welcome_body` | derived / fixed | Bound into every screen as NXL variables by the generated prelude. |
+| `initial_screen` | first screen | Must equal one `[[mobile.screens]] label`. |
+| `logo`, `splash` | — | Project-relative PNG/JPG/JPEG/WebP; logo also accepts Android vector XML. Missing files fail validation. |
+| `version_code` | `1` | Positive Android version code. |
+| `targets` | `["android"]` | Any other value is refused; no iOS scaffold exists. |
+| `[[mobile.screens]]` | 3-tab starter | At least one entry. `label` is the tab text; `asset` is a bare `.nxl` file name under `app/src/main/assets/`. Labels and assets must be unique; paths are refused. |
+
+`build` and `dev` regenerate `app/nxl.gradle`,
+`app/src/main/res/values/nxl.xml`, the splash drawables and
+`app/src/main/assets/mobile.nxl` from this section. Do not edit the generated
+files: the manifest is the source of truth. Validation failures are reported as
+`error[NXL12020]` before Gradle runs. The full workflow, device setup and
+signing variables are in [Mobile](25-mobile.md).
+
 ## `[[route]]`
 
 ```toml
@@ -91,11 +137,13 @@ validate = ["name", "email"]  # POST only: required form fields
 | `page` | Required. A route without a page is an error. |
 | `validate` | List of form field names that must be present. A POST submission missing one is answered with **422** and the page redrawn with `error` set. |
 
-Every problem with a route — unknown key, unknown table (`[[anything]]` other
-than `[[route]]`), missing page — is reported with its line number:
-`line N: unknown route key '...' (method, path, page, validate)`. There is no
-convention that invents routes behind your back; the routes in the manifest
-are the routes the server serves. `GET /openapi.json` describes them.
+Every problem with a route — unknown key, an unknown table while parsing web
+routes (`[[anything]]` other than `[[route]]`), missing page — is reported with
+its line number: `line N: unknown route key '...' (method, path, page,
+validate)`. A mobile project's `[mobile]` and `[[mobile.screens]]` tables are
+handled by the mobile parser, not by web routing. There is no convention that
+invents routes behind your back; the routes in the manifest are the routes the
+server serves. `GET /openapi.json` describes them.
 
 A route whose declared page is missing fails at startup, before anything is
 served: `serve` reports it and exits non-zero rather than answering requests
@@ -131,8 +179,10 @@ it returns. The registry is currently a local directory (`$NXL_REGISTRY` or
 
 - **Build profile** — comes from the command line: `nxlc build --release`
   (default is the debug profile). There is no `profile` key.
-- **Build target on the CLI** — `nxlc build` has no `--target` flag; the
-  artifact is chosen by `target` in `[package]`.
+- **Build target on the CLI for host builds** — an ordinary `nxlc build`
+  chooses its artifact from `target` in `[package]`. The one command-line
+  target is `--target android` for mobile projects (mobile projects default to
+  it); no other CLI target exists.
 - **`driver`/`path` in `[package]`** — they belong in `[database]` and are
   rejected in `[package]` by the unknown-key check.
 
@@ -142,5 +192,7 @@ it returns. The registry is currently a local directory (`$NXL_REGISTRY` or
 | --- | --- |
 | `NXL12012` | Invalid `[package]` key or target value. |
 | `NXL12011` | Startup validation failed (web config, environment). |
+| `NXL12020` | Invalid `[mobile]` key/value, screen, or asset. |
+| `NXL12025` | `build --target` named an unimplemented platform. |
 | `NDB14005` | Unsupported database driver. |
 | line-numbered `SiteError` | Invalid `[[route]]` / `[web]` route table. |

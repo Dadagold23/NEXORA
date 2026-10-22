@@ -61,6 +61,22 @@ Language support does not depend on the host platform, but the *backends* do:
 | `spawn`/`await`, channels, actor mailbox  | yes            | refused (NXL2007)  | refused (NXL2007) |
 | Arrays, structs, enums                    | yes            | yes                | arrays only  |
 
+## Mobile artifacts (Android)
+
+Android is not a host binary and is not in the table above. A generated mobile
+project ships a prebuilt NXL runtime for `x86_64` and `arm64-v8a` and builds an
+APK with Gradle 9.3.1 / AGP 9.1.0:
+
+| Artifact | Status | Evidence |
+| --- | --- | --- |
+| Debug APK | Built and inspected | `aapt2` confirms application id, label, `minSdk 21`, `targetSdk 35`, both ABIs and `com.nexora.nxl.MainActivity` |
+| Unsigned release APK | Built | `nexora build --release --target android` without signing variables |
+| Signed release APK | Built and verified | `apksigner verify --print-certs` with a temporary keystore supplied through environment variables |
+| On-device launch | **Not verified** | The host emulator would not boot; `nexora dev` was exercised to its clean no-device error, not to a launch |
+
+The APK build is real; runtime evidence on Android is not claimed. See
+[Mobile](25-mobile.md) for requirements and limitations.
+
 ## Upgrade policy
 
 Re-running the installer replaces `nxlc.exe` in place and refreshes the PATH

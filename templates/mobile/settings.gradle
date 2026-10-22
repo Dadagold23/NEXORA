@@ -1,0 +1,20 @@
+// Generated from templates/mobile by `nexora new mobile`.
+//
+// Gradle 9.3.1 and AGP 9.1.0 are the versions this starter is verified with.
+// The wrapper is committed, so a first build does not need a Gradle install.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "PROJECT_NAME"
+include ":app"

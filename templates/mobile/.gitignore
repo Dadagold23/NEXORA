@@ -1,0 +1,15 @@
+build/
+app/build/
+.gradle/
+local.properties
+.nxl-cache/
+*.log
+
+# Signing material is never committed.
+*.jks
+*.keystore
+keystore.properties
+
+.idea/
+captures/
+.DS_Store

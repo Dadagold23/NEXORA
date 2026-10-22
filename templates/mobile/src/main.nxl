@@ -1,0 +1,9 @@
+// PROJECT_NAME - console entry point for the mobile starter.
+//
+// The Android app does not run this file. It runs the programs in
+// app/src/main/assets/, one per screen, through the NXL virtual machine over
+// JNI. This file exists so the project is also a normal NXL project: `nexora
+// run`, `nexora check` and `nexora test` keep working on the host.
+fn main() {
+    print("PROJECT_NAME mobile starter. Build the APK with: nexora build --target android");
+}

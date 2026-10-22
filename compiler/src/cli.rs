@@ -175,6 +175,9 @@ pub enum Command {
     },
     Build {
         release: bool,
+        /// `--target android`; `None` chooses the project's own default (the
+        /// host VM for an ordinary project, Android for a mobile project).
+        target: Option<String>,
     },
     Check {
         file: Option<String>,
@@ -401,9 +404,38 @@ pub fn parse_args(args: &[String]) -> CliResult<Command> {
         "run" => Ok(Command::Run {
             file: args.get(1).cloned(),
         }),
-        "build" => Ok(Command::Build {
-            release: args.iter().any(|a| a == "--release"),
-        }),
+        "build" => {
+            let mut target = None;
+            let mut index = 1;
+            while index < args.len() {
+                let argument = &args[index];
+                if let Some(value) = argument.strip_prefix("--target=") {
+                    if value.is_empty() {
+                        return Err(err(
+                            "NXL12002",
+                            "build: --target needs a platform, e.g. --target android",
+                        ));
+                    }
+                    target = Some(value.to_owned());
+                    index += 1;
+                } else if argument == "--target" {
+                    let value = args.get(index + 1).ok_or_else(|| {
+                        err(
+                            "NXL12002",
+                            "build: --target needs a platform, e.g. --target android",
+                        )
+                    })?;
+                    target = Some(value.clone());
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+            }
+            Ok(Command::Build {
+                release: args.iter().any(|a| a == "--release"),
+                target,
+            })
+        }
         "check" => Ok(Command::Check {
             file: args.get(1).cloned(),
         }),
@@ -678,17 +710,19 @@ USAGE:
     nxl <COMMAND> [OPTIONS]
 
 COMMANDS:
-    new [<target>] <name>  Create a project (targets: console, web)
+    new [<target>] <name>  Create a project (targets: console, web, mobile)
     init              Initialise a project in the current directory
     run [file]        Run a NXL program
-    build             Compile the project (debug)
+    build [--target android] [--release]
+                      Compile the project (mobile builds a debug APK)
     build --release   Compile the project (release)
     check [file]      Type-check without producing output
-    dev               Web development server (serves the project's public/)
+    dev               Web development server, or build/install/launch a mobile
+                      project on a connected Android device
     fmt [file]        Format source files
     lint [file]       Lint source files
     clean             Remove build artifacts
-    test [filter]     Run test files
+    test [filter]     Run test files (also compiles mobile screen assets)
     repl              Start an interactive REPL session
     debug <file> [--break=N] [--inspect] [--steps=N]
                       Trace a file's statements and report breakpoint hits;
@@ -726,6 +760,20 @@ COMMANDS:
     platforms         Show platform support matrix
     version           Show version
     help              Show this help
+
+MOBILE (Android):
+    A mobile project is created with `new mobile <name>` and configured by its
+    nxl.toml [mobile] section (app name, application id, colours, screens,
+    welcome copy, initial destination, targets). `build` regenerates the Android
+    resources from that section.
+
+    Requirements: JDK 17+ (JAVA_HOME or Android Studio's JBR) and the Android
+    SDK (ANDROID_HOME or ANDROID_SDK_ROOT). `dev` also needs a connected device
+    or emulator with USB debugging enabled.
+
+    Release signing is read from NXL_ANDROID_KEYSTORE,
+    NXL_ANDROID_KEYSTORE_PASSWORD, NXL_ANDROID_KEY_ALIAS and
+    NXL_ANDROID_KEY_PASSWORD at build time. No secret is written to the project.
 "#
     .to_owned()
 }
@@ -1111,12 +1159,13 @@ fn resolve_file(dir: &Path, file: Option<&str>, cfg: &ProjectConfig) -> PathBuf 
 // ── Project commands ──────────────────────────────────────────────────────────
 
 /// The project templates that ship with the toolchain.
-pub const TEMPLATES: [&str; 2] = ["console", "web"];
+pub const TEMPLATES: [&str; 3] = ["console", "web", "mobile"];
 
 /// What a new project is opened with after it is scaffolded, per template.
-const TEMPLATE_NEXT_HINT: [(&str, &str); 2] = [
+const TEMPLATE_NEXT_HINT: [(&str, &str); 3] = [
     ("console", "cd PROJECT_NAME && nxlc run"),
     ("web", "cd PROJECT_NAME && nexora dev"),
+    ("mobile", "cd PROJECT_NAME && nexora build --target android"),
 ];
 
 /// The files the `console` template creates, used when the on-disk template
@@ -1237,11 +1286,127 @@ pub const WEB_TEMPLATE: [(&str, &str); 19] = [
     ),
 ];
 
+/// The `mobile` template, compiled into the binary so an installed compiler can
+/// scaffold an Android project without a repository checkout.
+///
+/// The Gradle wrapper jar and the two prebuilt JNI libraries are binary and are
+/// carried separately in [`MOBILE_BINARIES`].
+pub const MOBILE_TEMPLATE: [(&str, &str); 23] = [
+    ("nxl.toml", include_str!("../../templates/mobile/nxl.toml")),
+    (
+        "README.md",
+        include_str!("../../templates/mobile/README.md"),
+    ),
+    (
+        ".gitignore",
+        include_str!("../../templates/mobile/.gitignore"),
+    ),
+    (
+        "src/main.nxl",
+        include_str!("../../templates/mobile/src/main.nxl"),
+    ),
+    (
+        "tests/basic.nxl",
+        include_str!("../../templates/mobile/tests/basic.nxl"),
+    ),
+    (
+        "build.gradle",
+        include_str!("../../templates/mobile/build.gradle"),
+    ),
+    (
+        "settings.gradle",
+        include_str!("../../templates/mobile/settings.gradle"),
+    ),
+    (
+        "gradle.properties",
+        include_str!("../../templates/mobile/gradle.properties"),
+    ),
+    (
+        "gradle/wrapper/gradle-wrapper.properties",
+        include_str!("../../templates/mobile/gradle/wrapper/gradle-wrapper.properties"),
+    ),
+    ("gradlew", include_str!("../../templates/mobile/gradlew")),
+    (
+        "gradlew.bat",
+        include_str!("../../templates/mobile/gradlew.bat"),
+    ),
+    (
+        "app/build.gradle",
+        include_str!("../../templates/mobile/app/build.gradle"),
+    ),
+    (
+        "app/nxl.gradle",
+        include_str!("../../templates/mobile/app/nxl.gradle"),
+    ),
+    (
+        "app/src/main/AndroidManifest.xml",
+        include_str!("../../templates/mobile/app/src/main/AndroidManifest.xml"),
+    ),
+    (
+        "app/src/main/java/com/nexora/nxl/MainActivity.java",
+        include_str!("../../templates/mobile/app/src/main/java/com/nexora/nxl/MainActivity.java"),
+    ),
+    (
+        "app/src/main/java/com/nexora/nxl/NxlRuntime.java",
+        include_str!("../../templates/mobile/app/src/main/java/com/nexora/nxl/NxlRuntime.java"),
+    ),
+    (
+        "app/src/main/assets/mobile.nxl",
+        include_str!("../../templates/mobile/app/src/main/assets/mobile.nxl"),
+    ),
+    (
+        "app/src/main/assets/welcome.nxl",
+        include_str!("../../templates/mobile/app/src/main/assets/welcome.nxl"),
+    ),
+    (
+        "app/src/main/assets/features.nxl",
+        include_str!("../../templates/mobile/app/src/main/assets/features.nxl"),
+    ),
+    (
+        "app/src/main/assets/about.nxl",
+        include_str!("../../templates/mobile/app/src/main/assets/about.nxl"),
+    ),
+    (
+        "app/src/main/res/values/nxl.xml",
+        include_str!("../../templates/mobile/app/src/main/res/values/nxl.xml"),
+    ),
+    (
+        "app/src/main/res/values/styles.xml",
+        include_str!("../../templates/mobile/app/src/main/res/values/styles.xml"),
+    ),
+    (
+        "app/src/main/res/drawable/nxl_splash.xml",
+        include_str!("../../templates/mobile/app/src/main/res/drawable/nxl_splash.xml"),
+    ),
+];
+
+/// Binary files in the `mobile` template: the Gradle wrapper and the prebuilt
+/// NXL runtime for the two supported ABIs.
+///
+/// `templates/mobile/` holds the same files; [`collect_template`] skips binary
+/// files and [`cmd_new_from_template_in`] writes these explicitly, so a checkout
+/// and an installed binary produce the same project.
+pub const MOBILE_BINARIES: [(&str, &[u8]); 3] = [
+    (
+        "gradle/wrapper/gradle-wrapper.jar",
+        include_bytes!("../../templates/mobile/gradle/wrapper/gradle-wrapper.jar"),
+    ),
+    (
+        "app/src/main/jniLibs/x86_64/libnxl_android.so",
+        include_bytes!("../../templates/mobile/app/src/main/jniLibs/x86_64/libnxl_android.so"),
+    ),
+    (
+        "app/src/main/jniLibs/arm64-v8a/libnxl_android.so",
+        include_bytes!("../../templates/mobile/app/src/main/jniLibs/arm64-v8a/libnxl_android.so"),
+    ),
+];
+
 /// The template contents to use, preferring the on-disk copy.
 fn embedded_template(template: &str) -> Option<Vec<(String, String)>> {
     let files: Vec<(&str, &str)> = match template {
         "console" => CONSOLE_TEMPLATE.to_vec(),
         "web" => WEB_TEMPLATE.to_vec(),
+        "mobile" => MOBILE_TEMPLATE.to_vec(),
         _ => return None,
     };
     Some(
@@ -1263,7 +1428,12 @@ fn collect_template(root: &Path, dir: &Path, files: &mut Vec<(String, String)>) 
         if path.is_dir() {
             collect_template(root, &path, files);
         } else if let Ok(relative) = path.strip_prefix(root) {
-            let text = fs::read_to_string(&path).unwrap_or_default();
+            // Binary template files (the Gradle wrapper jar and the JNI
+            // libraries) are carried by MOBILE_BINARIES instead; reading them
+            // as text would silently truncate them to an empty file.
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
             files.push((relative.to_string_lossy().replace('\\', "/"), text));
         }
     }
@@ -1305,7 +1475,20 @@ pub fn cmd_new_from_template_in(base: &Path, name: &str, template: &str) -> CliR
             )
         })?
         .into_iter()
-        .map(|(path, text)| (path, text.replace("PROJECT_NAME", name)))
+        .map(|(path, text)| {
+            let text = text
+                .replace("PROJECT_NAME", name)
+                .replace("PROJECT_ID", &crate::mobile::default_application_id(name));
+            // A Windows checkout can turn the wrapper script into CRLF. The
+            // script is run with `sh gradlew` on Unix, where CRLF would make
+            // every line a failed command, so keep this one file LF-only.
+            let text = if path == "gradlew" {
+                text.replace("\r\n", "\n")
+            } else {
+                text
+            };
+            (path, text)
+        })
         .collect::<Vec<_>>();
 
     for (relative, text) in &files {
@@ -1314,6 +1497,25 @@ pub fn cmd_new_from_template_in(base: &Path, name: &str, template: &str) -> CliR
             fs::create_dir_all(parent).map_err(|e| err("NXL12004", e.to_string()))?;
         }
         fs::write(&target, text).map_err(|e| {
+            err(
+                "NXL12004",
+                format!("cannot write {}: {e}", target.display()),
+            )
+        })?;
+    }
+
+    // Binary template files cannot travel through the text pipeline above.
+    let binaries: &[(&str, &[u8])] = if template == "mobile" {
+        &MOBILE_BINARIES
+    } else {
+        &[]
+    };
+    for (relative, bytes) in binaries {
+        let target = project.join(relative);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| err("NXL12004", e.to_string()))?;
+        }
+        fs::write(&target, bytes).map_err(|e| {
             err(
                 "NXL12004",
                 format!("cannot write {}: {e}", target.display()),
@@ -1338,6 +1540,20 @@ pub fn cmd_new_from_template_in(base: &Path, name: &str, template: &str) -> CliR
         .map_err(|e| err("NXL12004", e.to_string()))?;
     }
 
+    // Generate the Android resources from the template's [mobile] section, so
+    // the generated files and the manifest agree before the first build.
+    if template == "mobile" {
+        let config = crate::mobile::MobileConfig::load(&project)?.ok_or_else(|| {
+            err(
+                "NXL12008",
+                format!(
+                    "the mobile template did not produce a [mobile] section in '{name}/nxl.toml'"
+                ),
+            )
+        })?;
+        crate::mobile::sync_android(&project, &config)?;
+    }
+
     // Resolve and lock whatever the manifest declares, so the project is ready
     // to run instead of needing a second command first. A failure here is
     // reported rather than swallowed: a project that cannot install its
@@ -1345,7 +1561,7 @@ pub fn cmd_new_from_template_in(base: &Path, name: &str, template: &str) -> CliR
     let install = cmd_pkg_install_in(&project, false, None);
     let mut report = format!(
         "created {template} project '{name}' ({} files).",
-        files.len()
+        files.len() + binaries.len()
     );
     match install {
         Ok(summary) => {
@@ -1586,6 +1802,12 @@ fn runtime_result_from_vm(vm_result: &crate::vm::VmResult) -> crate::runtime::Ex
 }
 
 pub fn cmd_test(dir: &Path, filter: Option<&str>) -> CliResult<TestReport> {
+    // A mobile project's screen assets are programs too. Compile each one with
+    // the generated prelude before running the host tests, so a broken screen
+    // fails `nexora test` instead of waiting until install time.
+    if let Some(config) = crate::mobile::MobileConfig::load(dir)? {
+        crate::mobile::validate_project(dir, &config)?;
+    }
     let tests_dir = dir.join("tests");
     let mut files: Vec<PathBuf> = Vec::new();
     if tests_dir.is_dir() {
@@ -1707,7 +1929,7 @@ pub fn cmd_debug(file: &str, breakpoints: &[usize], inspect: bool, steps: Option
 }
 
 pub fn cmd_docs() -> String {
-    "NXL docs:\n  docs/01-getting-started.md\n  docs/03-cli-reference.md\n  docs/06-ndb.md\n  docs/07-nuf.md\n  docs/23-webassembly.md\n  docs/24-nxl-toml.md".to_owned()
+    "NXL docs:\n  docs/01-getting-started.md\n  docs/03-cli-reference.md\n  docs/06-ndb.md\n  docs/07-nuf.md\n  docs/23-webassembly.md\n  docs/24-nxl-toml.md\n  docs/25-mobile.md".to_owned()
 }
 
 pub fn cmd_bridge() -> String {
@@ -1940,6 +2162,11 @@ fn pkg_manager(dir: &Path, offline: bool) -> crate::pkg::PackageManager {
 /// real HTTP server, but not a server-side NXL runtime: NXL has no HTTP types
 /// in the language yet, so handlers cannot yet be written in NXL.
 pub async fn cmd_dev(dir: &Path, config: crate::dev::DevConfig) -> CliResult<()> {
+    // A mobile project has no web dev server: `dev` means build the APK,
+    // install it and launch it on the selected device.
+    if crate::mobile::MobileConfig::load(dir)?.is_some() {
+        return crate::mobile::dev_android(dir);
+    }
     validate_startup(dir)?;
     crate::devserver::serve_in(dir.to_path_buf(), config)
         .await

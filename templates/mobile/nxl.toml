@@ -1,0 +1,35 @@
+[package]
+name = "PROJECT_NAME"
+version = "0.1.0"
+edition = "2024"
+entry = "src/main.nxl"
+
+[dependencies]
+
+# ── Android starter ──────────────────────────────────────────────────────────
+#
+# `nexora build --target android` regenerates the Android resources below from
+# this section, then runs Gradle. Edit these values and build again; do not edit
+# app/src/main/res/values/nxl.xml or app/src/main/assets/mobile.nxl by hand.
+
+[mobile]
+app_name = "PROJECT_NAME"
+application_id = "PROJECT_ID"
+primary_color = "#5AA9FF"
+secondary_color = "#2B4B73"
+welcome_heading = "Welcome to PROJECT_NAME"
+welcome_body = "The content of this screen was produced by NXL running on this device."
+initial_screen = "Welcome"
+targets = ["android"]
+
+[[mobile.screens]]
+label = "Welcome"
+asset = "welcome.nxl"
+
+[[mobile.screens]]
+label = "Features"
+asset = "features.nxl"
+
+[[mobile.screens]]
+label = "About"
+asset = "about.nxl"

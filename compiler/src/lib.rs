@@ -12,6 +12,7 @@ pub mod hir;
 pub mod html;
 pub mod ide;
 pub mod lexer;
+pub mod mobile;
 pub mod ndb;
 pub mod nir;
 pub mod nls;

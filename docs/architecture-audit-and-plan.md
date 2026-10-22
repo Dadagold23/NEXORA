@@ -2,6 +2,15 @@
 
 Date: 2026-10-15 · Commit: `5b4d2e0` · Version: `nxlc 0.1.1`
 
+> **Status update, 2026-10-22.** This page is the original Module 1 audit and is
+> kept as a snapshot. Modules 2, 3, 4a and 6 have since been implemented: the
+> web starter is multi-page, and Android projects can be scaffolded,
+> customised, tested and packaged into an APK (`docs/25-mobile.md`). The mobile
+> runtime is prebuilt for `x86_64` and `arm64-v8a`; on-device launch was not
+> verified on this host because its emulator would not boot, so no launch
+> evidence is claimed. Statements below about mobile being absent describe the
+> audited commit, not the current tree.
+
 **Status: audit only. No source code was modified.** This document is the
 Module 1 gate described in the master prompt. It records what exists, what is
 reachable, what is not, and what each subsequent module would actually build on.
@@ -148,8 +157,10 @@ This is the central finding of the audit.
 - **Editor support** with a real language server.
 - **A local package registry** with SHA-256 lockfiles.
 
-It **cannot** support today: a server-side NXL runtime reachable from a command,
-any database-backed application, any mobile target, or multi-page routing.
+It **could not** support at that commit: a server-side NXL runtime reachable
+from a command, any database-backed application, any mobile target, or
+multi-page routing. The mobile gap was closed in Module 6 for Android builds;
+see the status update above and `docs/25-mobile.md`.
 
 ---
 
@@ -160,20 +171,22 @@ any database-backed application, any mobile target, or multi-page routing.
 | G1 | NUF unreachable from the CLI | **High** | The backend runtime already exists and is tested; only the wiring is missing |
 | G2 | `db:*` fabricates success | **High** | Must be fixed before any database-backed claim |
 | G3 | No multi-page routing in generated web projects | High | Module 3 requirement |
-| G4 | No mobile target or SDK | High | NUI mobile adapter is explicitly NOT IMPLEMENTED |
+| G4 | No mobile target or SDK at the audited commit | High | **Resolved for Android in Module 6**; the NUI mobile adapter is still NOT IMPLEMENTED and the starter uses platform views instead |
 | G5 | No HTML escaping helper in the stdlib | Medium | Required by the prompt's security rule for templates |
 | G6 | Array element types untyped | Medium | Limits template expression ergonomics |
 | G7 | No file or HTTP types in the language | Medium | Server-side NXL handlers are not expressible |
 | G8 | Legacy Python prototype and `.pyc` files tracked | Low | Repository hygiene |
 | G9 | No hosted registry | Low | Generated projects have no real dependencies |
 
-**Hard blocker for Modules 4–6.** Nothing mobile exists, and no Android SDK,
-emulator or iOS toolchain is present on this machine or in CI. The master prompt
-requires a mobile app that "launches on at least one explicitly supported and
-tested target" and forbids claiming platform support without verification. I
-cannot produce that evidence here, and I will not simulate it. **This needs your
-decision** on which target comes first, and whether the toolchain can be
-installed.
+**Hard blocker for Modules 4–6 at the audited commit.** Nothing mobile existed,
+and no Android SDK, emulator or iOS toolchain was present on this machine or in
+CI. The master prompt required a mobile app that "launches on at least one
+explicitly supported and tested target" and forbade claiming platform support
+without verification. **Resolution:** Module 4a installed and repaired the
+Android SDK/runtime crate, and Module 6 ships an Android starter whose APK is
+built and whose resources are verified. Launch on a device is still unverified
+here because the emulator would not boot; that remains an honest limitation,
+not a claim of platform maturity.
 
 ---
 
@@ -242,16 +255,22 @@ validation, sessions, CSRF and OpenAPI already exist and are tested.
 layouts correct.
 
 ### Module 4 — Mobile SDK foundation
-*Nothing exists.* NUI's mobile adapters are explicitly NOT IMPLEMENTED.
-Requires a decision on target and toolchain (§4 blocker).
-*Acceptance:* a minimal app launches on one verified target, prerequisites
-documented.
+*Implemented for Android after the audit.* The NXL Android crate compiles to
+`libnxl_android.so` for `x86_64` and `arm64-v8a`, and `nexora new mobile`
+ships those binaries with a Gradle wrapper. NUI's mobile adapter is still not
+implemented; the starter is a native activity with platform views.
+*Acceptance:* the APK builds and packages both ABIs; launch requires a working
+device/emulator and was not verified on this host.
 
 ### Module 5 — Mobile welcome screen
-Depends on Module 4.
+*Implemented.* The welcome screen is an NXL program rendered through the JNI
+bridge, with configurable heading, body and navigation tabs.
 
 ### Module 6 — SDK CLI and customisation
-Depends on Module 4.
+*Implemented.* `new mobile`, `[mobile]` manifest customisation, `build
+--target android`, mobile-aware `test`, device-aware `dev`, generated Android
+resources, logo/splash assets, and environment-only release signing are
+documented in `docs/25-mobile.md`.
 
 ### Module 7 — Testing
 *Partly exists:* `templates_tests` (18) and `dev_tests` (20) already cover

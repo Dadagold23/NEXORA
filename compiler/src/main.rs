@@ -1,4 +1,5 @@
 use nxl_compiler::dev;
+use nxl_compiler::mobile;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -162,35 +163,101 @@ async fn main() -> ExitCode {
             }
         },
 
-        Command::Build { release } => match cmd_build(&cwd, release) {
-            Ok(result) => {
-                let path = result
-                    .artifact_path
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default();
-                if json {
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "status": "ok",
-                            "profile": result.profile.to_string(),
-                            "artifact": path,
-                        })
+        Command::Build { release, target } => {
+            // A mobile project defaults to its own target; an explicit
+            // `--target` overrides, and anything but android is refused rather
+            // than silently ignored.
+            let use_android = match target.as_deref() {
+                Some("android") => true,
+                Some(other) => {
+                    let error = cli::CliError::new(
+                        "NXL12025",
+                        format!(
+                            "unknown build target '{other}'; implemented targets: {}",
+                            mobile::SUPPORTED_TARGETS.join(", ")
+                        ),
                     );
-                } else {
-                    println!("build ({}) → {path}", result.profile);
+                    if json {
+                        eprintln!("{}", cli::json_diagnostics(&[error]));
+                    } else {
+                        eprintln!("{error}");
+                    }
+                    return ExitCode::FAILURE;
                 }
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                if json {
-                    eprintln!("{}", cli::json_diagnostics(&[e]));
-                } else {
-                    eprintln!("{e}");
+                None => match mobile::MobileConfig::load(&cwd) {
+                    Ok(config) => config.is_some(),
+                    Err(error) => {
+                        if json {
+                            eprintln!("{}", cli::json_diagnostics(&[error]));
+                        } else {
+                            eprintln!("{error}");
+                        }
+                        return ExitCode::FAILURE;
+                    }
+                },
+            };
+
+            if use_android {
+                match mobile::build_android(&cwd, release) {
+                    Ok(artifact) => {
+                        let path = artifact.display().to_string();
+                        let profile = if release { "release" } else { "debug" };
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::json!({
+                                    "status": "ok",
+                                    "profile": profile,
+                                    "target": "android",
+                                    "artifact": path,
+                                })
+                            );
+                        } else {
+                            println!("build ({profile}, android) → {path}");
+                        }
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        if json {
+                            eprintln!("{}", cli::json_diagnostics(&[error]));
+                        } else {
+                            eprintln!("{error}");
+                        }
+                        ExitCode::FAILURE
+                    }
                 }
-                ExitCode::FAILURE
+            } else {
+                match cmd_build(&cwd, release) {
+                    Ok(result) => {
+                        let path = result
+                            .artifact_path
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default();
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::json!({
+                                    "status": "ok",
+                                    "profile": result.profile.to_string(),
+                                    "artifact": path,
+                                })
+                            );
+                        } else {
+                            println!("build ({}) → {path}", result.profile);
+                        }
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        if json {
+                            eprintln!("{}", cli::json_diagnostics(&[e]));
+                        } else {
+                            eprintln!("{e}");
+                        }
+                        ExitCode::FAILURE
+                    }
+                }
             }
-        },
+        }
 
         Command::Check { file } => match cmd_check(&cwd, file.as_deref()) {
             Ok(msgs) => {

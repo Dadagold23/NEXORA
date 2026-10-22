@@ -19,11 +19,18 @@ cd site
 nexora dev        # a landing page at http://127.0.0.1:3000
 ```
 
+```bash
+nexora new mobile my-app
+cd my-app
+nexora test
+nexora build --target android   # an APK for a device or emulator
+```
+
 ## Status
 
 Version 0.1.0. The language roadmap (errors and strings, iteration and data,
 objects and methods, modules, concurrency, backend control flow) is implemented
-and covered by 572 automated tests.
+and covered by the automated test suite.
 
 | Area          | State                                                        |
 | ------------- | ------------------------------------------------------------ |
@@ -35,13 +42,15 @@ and covered by 572 automated tests.
 | Package mgr   | Local path dependencies, local registry, SHA-256 lockfile     |
 | REPL          | Persistent session with replay from a transcript file         |
 | Dev server    | `nexora dev` serves a project and live-reloads on change      |
-| Projects      | `new console` and `new web` scaffold a full working tree      |
+| Projects      | `new console`, `new web` and `new mobile` scaffold working trees |
 | Editor        | VS Code extension with NXL highlighting, icon and language server |
 | Releases      | Windows x64 locally; Linux/macOS built and self-tested in CI  |
 
 Not yet available: a hosted package registry, package signing, code-signed
 installers. The development server compiles to JavaScript and serves the
 project's own `public/` directory; it does not yet run NXL on the server side.
+The mobile starter builds Android APKs only; iOS is not implemented, and the
+on-device launch still needs a working device or emulator.
 
 ## Install
 
@@ -78,6 +87,7 @@ also run programs; without it everything runs on the VM.
 | [docs/04-language-reference.md](docs/04-language-reference.md) | Language and phases       |
 | [docs/05-compiler-and-vm.md](docs/05-compiler-and-vm.md) | Compiler and VM internals    |
 | [docs/09-nxp.md](docs/09-nxp.md)                         | Package manager                |
+| [docs/25-mobile.md](docs/25-mobile.md)                   | Android projects and APK builds |
 | [docs/12-security.md](docs/12-security.md)               | Security model                  |
 | [docs/platform-support.md](docs/platform-support.md)     | What is built and tested        |
 | [SECURITY.md](SECURITY.md)                               | Reporting vulnerabilities       |
@@ -91,7 +101,7 @@ compiler/        the compiler and toolchain (Rust)
 dist/            generated release output
 dist-brand/      the generated logo used by this README and the docs
 examples/        runnable examples
-templates/       project targets (`nexora new console`, `nexora new web`)
+templates/       project targets (`nexora new console|web|mobile`)
 install/         installer sources per platform
 editors/         editor integrations (VS Code extension)
 scripts/         packaging, verification and brand-asset scripts

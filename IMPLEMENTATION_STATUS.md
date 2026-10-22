@@ -269,7 +269,7 @@ Migration file format: `database/migrations/<name>.sql` with `-- up` / `-- down`
 | Themes | IMPLEMENTED | `Theme` tokens applied in HTML style (tested) |
 | Animation | DESIGNED | not implemented |
 | HTML adapter | IMPLEMENTED | `render_html` escapes text via `security::encode_html` (tested) |
-| Desktop/mobile/WASM-DOM adapters | NOT IMPLEMENTED | No false universal-UI claims |
+| Desktop/mobile/WASM-DOM adapters | NOT IMPLEMENTED | NUI still has only an HTML adapter; the Android starter (`docs/25-mobile.md`) is a native activity, not a NUI adapter |
 | Test suite | TESTED | `compiler/tests/nui_tests.rs`: 7 tests pass; full suite 322 tests pass, 0 fail |
 
 ## P19 — Cross-Platform
@@ -404,8 +404,23 @@ Decision: colocate a `docs/` directory with per-phase guides that mirror the act
 | WebSocket client example | NOT IMPLEMENTED | Server side only today |
 | Desktop app | NOT IMPLEMENTED | Requires NUI adapter (NOT IMPLEMENTED) |
 | WASM app | PARTIAL | Scalar NXL programs compile to `.wasm` and run under any host providing the documented `env` imports (reference Node host in `wasm_backend_tests.rs`); no browser app template or DOM bridge yet |
-| Android/iOS apps | NOT IMPLEMENTED | Requires Tier 1/2 targets (P19 blocked) |
+| Android/iOS apps | PARTIAL | **Android starter builds and packages** (`new mobile`; debug/release APK, both ABIs, generated resources verified). **On-device launch is NOT VERIFIED here**: the `nxl_api35` emulator would not boot, so `nexora dev` was only exercised up to its clean no-device error. iOS is NOT IMPLEMENTED. |
 | Example runner script | IMPLEMENTED | `scripts/run_examples.sh` |
+
+## Module 6 — Mobile SDK (Android)
+
+| Component | Status | Evidence |
+| --- | --- | --- |
+| Android runtime crate | IMPLEMENTED | `crates/nxl-android` builds `libnxl_android.so` for `x86_64` and `arm64-v8a`; 29 android crate tests pass |
+| `new mobile <name>` | IMPLEMENTED | Scaffolds 26 text/binary files from `templates/mobile`; embedded fallback for an installed binary; verified in a temp directory |
+| `[mobile]` and `[[mobile.screens]]` manifest | IMPLEMENTED | Dedicated parser/validator in `compiler/src/mobile.rs`; documented in `docs/24-nxl-toml.md`; 7 unit tests |
+| Customisation | IMPLEMENTED | App name, application id, primary/secondary colours, welcome heading/body, tab labels/assets, initial tab, version code, targets, optional logo/splash are regenerated from the manifest |
+| APK build | IMPLEMENTED | `nexora build --target android` runs the committed Gradle wrapper; verified `app-debug.apk` (package id/label/ABIs via `aapt2`) and unsigned/signed release APKs |
+| `nexora test` for mobile | IMPLEMENTED | Runs host tests and compiles every screen asset with the generated prelude; missing/broken screens fail before Gradle |
+| `nexora dev` for mobile | PARTIAL | Builds, selects one device/`ANDROID_SERIAL`, installs and launches; clean `NXL12023` with no device. On-device launch NOT VERIFIED on this host |
+| Release signing | IMPLEMENTED | Read from `NXL_ANDROID_*` environment variables only; unsigned release is a valid artifact; no keystore or secret is written into the project |
+| Docs | IMPLEMENTED | `docs/25-mobile.md`; CLI guide, manifest spec, README and this matrix updated |
+| Test suite | TESTED | `mobile_tests`: 11 pass; `mobile` unit tests: 7 pass; full compiler suite green |
 
 ## P30 — Production Release (verdict: BLOCKED)
 
@@ -472,6 +487,7 @@ The repository has a Python prototype (19/19 tests passing) and a production Rus
 - P28 security audit: hard-coded-secret scan clean, all `Command::new` spawn sites re-checked as argv-only, `cargo audit` wired into CI as a dependency-audit job, and `SECURITY_AUDIT_REPORT.md` records the honest state (no live CVE results yet — CI must produce them).
 - P29 release-candidate gate: `PRODUCTION_READINESS.md` and `docs/19-release-candidate.md` define the entry/exit criteria; the repo is P29-ANCHORED but a 1.0 RC1 tag must NOT be cut until the blocker list in the readiness matrix shrinks.
 - P30: release-status verdict recorded as BLOCKED — no 1.0 release cut. Current evidence is green (378 tests); multi-driver NDB (sqlite/postgres/mysql/mariadb) with a driver-agnostic query layer, ORM `Model` CRUD, a bounded connection pool, and a migration audit log is IMPLEMENTED, as are NUF authentication (argon2id + sessions), auth/CSRF middleware, OpenAPI 3.0 generation, and NLS find-references/workspace-index/cross-file rename. Still missing: full native backends, NXL-authored routes, non-HTML NUI adapters. P06 NIR verifier now also double-checks duplicate parameter names at the module level.
+- Module 6 mobile SDK: Android projects can be generated, customised, tested and packaged into debug/release APKs with prebuilt `x86_64`/`arm64-v8a` NXL runtimes. On-device launch was not verified because the host emulator would not boot; iOS and NUI mobile adapters remain NOT IMPLEMENTED.
 
 
 

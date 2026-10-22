@@ -1,0 +1,15 @@
+// PROJECT_NAME - host-side checks, run by `nexora test`.
+//
+// These run on the desktop VM, not on the device. They check the NXL programs
+// that do not depend on Android; the screen assets themselves are compiled by
+// `nexora test` as part of the mobile validation step.
+fn add(a: Int, b: Int) -> Int {
+    return a + b;
+}
+
+fn main() {
+    if add(2, 3) != 5 {
+        throw "add(2, 3) should be 5";
+    }
+    print("tests/basic.nxl: checks passed");
+}

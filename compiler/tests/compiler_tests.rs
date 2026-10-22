@@ -2333,7 +2333,10 @@ mod cli_tests {
     fn cli_parse_build_debug() {
         assert_eq!(
             parse_args(&args(&["build"])).unwrap(),
-            Command::Build { release: false }
+            Command::Build {
+                release: false,
+                target: None,
+            }
         );
     }
 
@@ -2341,7 +2344,10 @@ mod cli_tests {
     fn cli_parse_build_release() {
         assert_eq!(
             parse_args(&args(&["build", "--release"])).unwrap(),
-            Command::Build { release: true }
+            Command::Build {
+                release: true,
+                target: None,
+            }
         );
     }
 
@@ -3202,6 +3208,7 @@ mod cli_tests {
     fn cli_docs_lists_bundled_guides() {
         let msg = cmd_docs();
         assert!(msg.contains("docs/01-getting-started.md"), "{msg}");
+        assert!(msg.contains("docs/25-mobile.md"), "{msg}");
     }
 
     #[test]

@@ -1,0 +1,60 @@
+plugins {
+    id "com.android.application"
+}
+
+// Android application module. This file is yours to edit; values generated
+// from nxl.toml live in nxl.gradle, which is rewritten on every build.
+apply from: "nxl.gradle"
+
+android {
+    // The namespace names the Java package (com.nexora.nxl.MainActivity). The
+    // application id can change independently, so a custom app identity does
+    // not rename the generated activity.
+    namespace = "com.nexora.nxl"
+    compileSdk = 35
+
+    signingConfigs {
+        release {
+            // Secrets are read from the environment at build time. Nothing is
+            // ever written into this project or committed to source control.
+            // See docs/25-mobile.md for the four variables.
+            if (System.getenv("NXL_ANDROID_KEYSTORE") != null) {
+                storeFile file(System.getenv("NXL_ANDROID_KEYSTORE"))
+                storePassword System.getenv("NXL_ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("NXL_ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("NXL_ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
+    defaultConfig {
+        applicationId nxlApplicationId
+        minSdk = 21
+        targetSdk = 35
+        versionCode nxlVersionCode
+        versionName nxlVersionName
+
+        ndk {
+            // x86_64 for emulators; arm64-v8a for physical devices.
+            abiFilters = ["x86_64", "arm64-v8a"]
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = false
+            if (System.getenv("NXL_ANDROID_KEYSTORE") != null) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // No external dependencies; the app uses platform views and JNI.
+}
