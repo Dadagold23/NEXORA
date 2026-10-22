@@ -362,7 +362,7 @@ fn flush_inline(program: &mut String, inline: &mut Vec<String>) {
     if inline.is_empty() {
         return;
     }
-    let joined = inline.drain(..).collect::<Vec<String>>().join(" + ");
+    let joined = std::mem::take(inline).join(" + ");
     program.push_str(&format!("    print({joined});\n"));
 }
 
