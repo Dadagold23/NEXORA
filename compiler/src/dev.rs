@@ -150,6 +150,95 @@ pub fn inject_scripts(html: &str) -> String {
     out
 }
 
+/// Client-side bridge used by the generated host page.
+///
+/// The generated page has no project-authored markup, so it also has no
+/// `bootstrap.js` to turn `print()` (compiled to `console.log`) into visible
+/// text. This bridge runs before `/app.js`, collects program output in `#out`,
+/// and keeps the execution status separate from the live-reload connection
+/// status. It also catches uncaught errors so a failed application cannot look
+/// like a successfully started one.
+fn host_bootstrap() -> &'static str {
+    r#"
+(function () {
+  "use strict";
+  var out = document.getElementById("out");
+  var status = document.getElementById("status");
+  var errorBox = document.getElementById("error");
+  var host = window.__nxlDevHost = { failed: false, ready: false };
+  var originalLog = console.log.bind(console);
+
+  // Execution has not begun yet. Start from a neutral message instead of the
+  // old "connecting" text, which described the page rather than the program.
+  if (status) {
+    status.textContent = "starting the application...";
+    status.className = "";
+  }
+
+  function write(line) {
+    if (!out) {
+      return;
+    }
+    out.textContent += line + "\n";
+    out.scrollTop = out.scrollHeight;
+  }
+
+  function fail(message) {
+    if (host.failed) {
+      return;
+    }
+    host.failed = true;
+    host.ready = false;
+    var detail = String(message || "the application failed to run");
+    if (status) {
+      status.textContent = "the application failed";
+      status.className = "bad";
+    }
+    if (errorBox) {
+      errorBox.hidden = false;
+      errorBox.textContent = detail;
+    }
+    write("error: " + detail);
+  }
+
+  function complete() {
+    if (host.failed) {
+      return;
+    }
+    host.ready = true;
+    if (status) {
+      status.textContent = "app ready";
+      status.className = "ok";
+    }
+  }
+
+  console.log = function () {
+    var parts = [];
+    for (var i = 0; i < arguments.length; i++) {
+      parts.push(typeof arguments[i] === "string" ? arguments[i] : String(arguments[i]));
+    }
+    write(parts.join(" "));
+    if (originalLog) {
+      originalLog.apply(console, arguments);
+    }
+  };
+
+  window.addEventListener("error", function (event) {
+    fail(event && event.message ? event.message : "the application failed to run");
+  });
+
+  window.addEventListener("unhandledrejection", function (event) {
+    fail(event && event.reason ? String(event.reason) : "the application rejected a promise");
+  });
+
+  window.__nxlDevHostLoaded = complete;
+  window.__nxlDevHostFailed = function () {
+    fail("could not load /app.js; the project may not currently compile");
+  };
+})();
+"#
+}
+
 /// The HTML page that loads the compiled program.
 pub fn host_page(project_name: &str, script_path: &str) -> String {
     format!(
@@ -163,7 +252,11 @@ pub fn host_page(project_name: &str, script_path: &str) -> String {
   h1 {{ font-size: 1.1rem; margin: 0 0 .25rem; }}
   p.sub {{ margin: 0 0 1rem; color: #8b94a7; }}
   #out {{ background: #171c26; border: 1px solid #262d3a; border-radius: 8px; padding: 1rem; white-space: pre-wrap; }}
-  #status {{ color: #8b94a7; margin-bottom: 1rem; }}
+  #out:empty::before {{ content: "No output yet."; color: #8b94a7; }}
+  #status {{ color: #8b94a7; margin-bottom: .35rem; }}
+  #reload-status {{ color: #8b94a7; margin-bottom: 1rem; font-size: .85rem; }}
+  #error {{ margin: 1rem 0; padding: 1rem; border: 1px solid #532029; border-radius: 8px; background: #2d1418; color: #ff7b72; white-space: pre-wrap; }}
+  #error[hidden] {{ display: none; }}
   .ok {{ color: #7ee787; }}
   .bad {{ color: #ff7b72; }}
 </style>
@@ -171,15 +264,20 @@ pub fn host_page(project_name: &str, script_path: &str) -> String {
 <body>
 <h1>{name}</h1>
 <p class="sub">Served by <code>nexora dev</code> from the JavaScript backend. Concurrency is VM-only.</p>
-<div id="status">connecting…</div>
-<div id="out"></div>
+<div id="status">starting the application&hellip;</div>
+<div id="reload-status">live reload: connecting&hellip;</div>
+<div id="out" aria-live="polite"></div>
+<pre id="error" role="alert" hidden></pre>
+<script>{bootstrap}</script>
+<script src="{script}" onerror="window.__nxlDevHostFailed && window.__nxlDevHostFailed()"></script>
+<script>if (window.__nxlDevHostLoaded) {{ window.__nxlDevHostLoaded(); }}</script>
 <script src="/reload.js"></script>
-<script src="{script}"></script>
 </body>
 </html>
 "#,
         name = project_name,
-        script = script_path
+        script = script_path,
+        bootstrap = host_bootstrap()
     )
 }
 
@@ -187,16 +285,19 @@ pub fn host_page(project_name: &str, script_path: &str) -> String {
 pub fn reload_script() -> String {
     r#"// Live reload client for the NXL dev server.
 (function () {
-  var status = document.getElementById('status');
+  var reloadStatus = document.getElementById('reload-status');
+  function reportReload(text, className) {
+    if (reloadStatus) { reloadStatus.textContent = 'live reload: ' + text; reloadStatus.className = className; }
+    document.documentElement.setAttribute('data-reload', text);
+  }
   function connect() {
     var source = new EventSource('/reload');
-    source.onopen = function () { status.textContent = 'connected'; status.className = 'ok'; };
+    source.onopen = function () { reportReload('connected', 'ok'); };
     source.onmessage = function (event) {
       if (event.data === 'reload') { source.close(); window.location.reload(); }
     };
     source.onerror = function () {
-      status.textContent = 'disconnected, retrying…';
-      status.className = 'bad';
+      reportReload('disconnected, retrying...', 'bad');
       source.close();
       setTimeout(connect, 1000);
     };

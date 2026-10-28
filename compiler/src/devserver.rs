@@ -261,10 +261,14 @@ async fn reload_events(
     let bundle = state.bundle.clone();
     let error = state.error.clone();
     let interval = dev::poll_interval(&state.config);
+    // Start from the tree as it is when the stream connects. An empty
+    // snapshot deliberately reports no change, so using it here would leave
+    // this stream unable to detect every later edit.
+    let initial = SourceStamp::capture(&state.project);
 
     // `unfold` keeps the poll state in the closure, so no extra crates are
     // needed to build the stream.
-    let stream = futures_util::stream::unfold(SourceStamp::empty(), move |mut previous| {
+    let stream = futures_util::stream::unfold(initial, move |mut previous| {
         let project = project.clone();
         let stamp = stamp.clone();
         let bundle = bundle.clone();

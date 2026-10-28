@@ -138,6 +138,61 @@ fn get(port: u16, path: &str) -> (u16, String) {
     (status, String::from_utf8_lossy(&body).into_owned())
 }
 
+fn open_sse(port: u16) -> BufReader<TcpStream> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    let request = "GET /reload HTTP/1.1\r\n\
+                   Host: localhost\r\n\
+                   Accept: text/event-stream\r\n\
+                   Connection: keep-alive\r\n\r\n";
+    stream.write_all(request.as_bytes()).expect("write");
+    stream.flush().ok();
+
+    let mut reader = BufReader::new(stream);
+    let mut status = String::new();
+    reader.read_line(&mut status).expect("status");
+    assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+
+    let mut content_type = String::new();
+    loop {
+        let mut header = String::new();
+        if reader.read_line(&mut header).unwrap_or(0) == 0 {
+            break;
+        }
+        if header.trim().is_empty() {
+            break;
+        }
+        let lower = header.to_lowercase();
+        if lower.starts_with("content-type:") {
+            content_type = lower;
+        }
+    }
+    assert!(
+        content_type.contains("text/event-stream"),
+        "SSE content type: {content_type}"
+    );
+    reader
+}
+
+/// Wait for the next `reload` event. The read timeout turns a missing event
+/// into a failed test rather than a hang.
+fn wait_for_reload(reader: &mut BufReader<TcpStream>) -> String {
+    let mut seen = String::new();
+    loop {
+        let mut line = String::new();
+        let read = reader.read_line(&mut line).expect("read reload event");
+        if read == 0 {
+            panic!("SSE closed before a reload event; saw:\n{seen}");
+        }
+        seen.push_str(&line);
+        if line.trim() == "data: reload" {
+            return seen;
+        }
+    }
+}
+
 // ── compile ────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -217,13 +272,31 @@ fn host_page_loads_the_compiled_script_and_the_reload_client() {
     assert!(page.contains("/reload.js"), "{page}");
     // It must say what it is, so nobody mistakes it for a server-side runtime.
     assert!(page.contains("JavaScript backend"), "{page}");
+    // The generated page needs its own console-to-DOM bridge: unlike the web
+    // starter, it has no project-authored bootstrap.js.
+    assert!(page.contains("id=\"out\""), "{page}");
+    assert!(page.contains("console.log = function"), "{page}");
+    assert!(page.contains("window.__nxlDevHostLoaded"), "{page}");
+    assert!(
+        page.contains("addEventListener(\"error\""),
+        "runtime errors must be visible: {page}"
+    );
+    let bridge = page.find("console.log = function").expect("bridge");
+    let program = page.find("src=\"/app.js\"").expect("program");
+    assert!(bridge < program, "the bridge must run before the program");
 }
 
 #[test]
-fn reload_script_reconnects_and_reloads() {
+fn reload_script_keeps_transport_status_separate_from_app_status() {
     let script = dev::reload_script();
     assert!(script.contains("EventSource('/reload')"), "{script}");
     assert!(script.contains("window.location.reload()"), "{script}");
+    assert!(script.contains("reload-status"), "{script}");
+    assert!(
+        !script.contains("getElementById('status')"),
+        "the live-reload client must not overwrite app readiness: {script}"
+    );
+    assert!(script.contains("data-reload"), "{script}");
 }
 
 // ── HTTP ───────────────────────────────────────────────────────────────────────
@@ -285,6 +358,50 @@ fn a_broken_project_is_surfaced_and_recovers() {
     assert_eq!(get(port, "/health").0, 200, "the server must recover");
     let (_, script) = get(port, "/app.js");
     assert!(script.contains("function main"), "{script}");
+
+    drop(handle);
+}
+
+#[test]
+fn sse_reloads_after_edits_and_reports_recovery() {
+    let dir = project("sse_reload", "fn main() { print(\"first\"); }");
+    let (port, handle) = serve(dir.path().to_path_buf(), DevConfig::default());
+    let mut events = open_sse(port);
+
+    fs::write(
+        dir.path().join("src/main.nxl"),
+        "fn main() { print(\"second\"); }",
+    )
+    .unwrap();
+    let event = wait_for_reload(&mut events);
+    assert!(event.contains("event: reload"), "{event}");
+    assert!(event.contains("data: reload"), "{event}");
+    let (status, script) = get(port, "/app.js");
+    assert_eq!(status, 200);
+    assert!(script.contains("second"), "{script}");
+
+    // A failed compile must still reach the browser, and the error must remain
+    // visible until the source is corrected.
+    fs::write(dir.path().join("src/main.nxl"), "fn main() { broken").unwrap();
+    let event = wait_for_reload(&mut events);
+    assert!(event.contains("data: reload"), "{event}");
+    assert_eq!(get(port, "/health").0, 503);
+    let (status, page) = get(port, "/");
+    assert_eq!(status, 200);
+    assert!(page.contains("does not compile"), "{page}");
+
+    // The next valid edit clears the error and produces a fresh bundle.
+    fs::write(
+        dir.path().join("src/main.nxl"),
+        "fn main() { print(\"third\"); }",
+    )
+    .unwrap();
+    let event = wait_for_reload(&mut events);
+    assert!(event.contains("data: reload"), "{event}");
+    assert_eq!(get(port, "/health").0, 200, "the server must recover");
+    let (status, script) = get(port, "/app.js");
+    assert_eq!(status, 200);
+    assert!(script.contains("third"), "{script}");
 
     drop(handle);
 }
@@ -476,6 +593,14 @@ fn a_project_without_public_keeps_the_generated_host_page() {
     let (status, body) = get(port, "/");
     assert_eq!(status, 200);
     assert!(body.contains("NXL dev server"), "{body}");
+    assert!(
+        body.contains("console.log = function"),
+        "the host page must capture program output: {body}"
+    );
+    assert!(
+        body.contains("id=\"reload-status\""),
+        "the host page must show transport status separately: {body}"
+    );
 
     drop(handle);
 }
