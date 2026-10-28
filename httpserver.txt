@@ -1,0 +1,470 @@
+My recommendation is to develop NEXORA into a complete application development ecosystem, where NXL is the programming language, the NEXORA Web Framework handles web applications, and the NEXORA Runtime executes application code.
+
+Based on the report you shared, NEXORA already has an initial web-template workflow, a landing page, assets, routing for GET and POST, and documentation. However, it still lacks several capabilities required for a full web framework and backend platform.
+
+The key is not to add features randomly. We need to establish a clear architecture and implement the missing capabilities in a deliberate order, while preserving the existing working code.
+
+# 1. What NEXORA needs to become
+
+## NXL Programming Language
+
+Variables · Types · Functions · Collections · Errors · Modules
+
+### NEXORA Runtime
+
+Execution · Memory · Modules · Async operations · Native interfaces
+
+NEXORA Web Framework
+
+Routing · Middleware · Controllers · Templates
+
+NEXORA Data Layer
+
+Database drivers · Models · Migrations · Transactions
+
+NEXORA Application Tooling
+
+CLI · Package manager · Testing · Configuration · Deployment
+
+This architecture should support three distinct use cases:
+
+- Websites: pages, templates, assets, forms, and content.
+- Web applications: user accounts, dashboards, APIs, validation, sessions, and business logic.
+- Backend services: HTTP APIs, databases, background jobs, authentication, and integrations.
+
+The same language and core tooling should underpin all three, rather than requiring a different language for each.
+
+# 2. The development roadmap: from current prototype to complete framework
+
+I recommend the following implementation sequence. Each module should have acceptance tests and an approval gate before the next module begins.
+
+## 01
+
+Strengthen the NXL language
+
+Critical foundation
+
+Address the language gaps reported by the agent:
+
+- Arrays and collections: append, length, indexing, iteration, and safe bounds handling.
+- Maps or dictionaries for structured request data.
+- Functions, modules, and reusable code.
+- Reliable error handling and useful diagnostics.
+- Strings, conversion, and serialization.
+- Consistent type checking and runtime behavior.
+
+Acceptance test: NXL can collect search results in a collection, iterate through them, and render the complete result set. Existing programs must continue to pass regression tests.
+
+## 02
+
+Build a real HTTP server and request/response API
+
+Critical foundation
+
+NEXORA needs a way to receive requests and return structured responses. Add:
+
+- HTTP methods and route parameters.
+- Request path, query parameters, headers, cookies, and body.
+- Response status codes, headers, and bodies.
+- JSON and HTML responses.
+- 404 and 500 handling.
+- Configurable ports and graceful shutdown.
+- Correct handling of malformed requests and request-size limits.
+
+Acceptance test: A developer can create a JSON API, return a 201 status, set a response header, read a query parameter, and return a proper 404 for an unknown route.
+
+## 03
+
+Implement the web framework
+
+Add a structured application API with:
+
+- Route definitions and route groups.
+- Controllers and reusable handlers.
+- Middleware for request processing.
+- A template engine with layout inheritance, reusable partials, and escaped output.
+- Static assets and public directories.
+- Form handling and validation.
+- Centralized error pages and logging.
+- Environment-based configuration.
+
+Acceptance test: A generated application can render a multi-page website, process a form, validate submitted data, and return correct HTTP status codes.
+
+## 04
+
+Add database and persistence support
+
+Build a database abstraction and implement one well-supported database driver first.
+
+- Database connections and parameterized queries.
+- Models or repositories.
+- Schema migrations and rollback.
+- Seed data.
+- Transactions.
+- Pagination and filtering.
+- Connection and query error handling.
+
+I would evaluate SQLite as the first driver for a simple, testable setup, followed by PostgreSQL and MySQL. The final choice should consider the current runtime and available driver libraries.
+
+Acceptance test: A real record can be created, retrieved, updated, and deleted; migrations can be applied and rolled back; invalid input cannot inject SQL into queries.
+
+## 05
+
+Implement authentication and security
+
+Add secure sessions, password hashing, login and logout, access-control middleware, CSRF protection for browser forms, and safe cookie handling.
+
+API authentication should be designed separately where appropriate. Add rate limiting, input validation, security headers, and secure secret management.
+
+Acceptance test: Unauthenticated requests cannot access protected routes; passwords are never stored in plaintext; session and authorization tests pass.
+
+## 06
+
+Complete the developer tooling
+
+Integrate the features into the actual CLI and package ecosystem:
+
+- Project scaffolding for websites, APIs, and full-stack applications.
+- Dependency manifests and lockfiles.
+- Development server and useful error output.
+- Unit, integration, and HTTP testing tools.
+- Configuration and secrets management.
+- Database migration commands.
+- Production build and deployment guidance.
+
+Acceptance test: A developer can create a project, run it, execute tests, migrate a database, and produce a verified deployment build using documented commands.
+
+## 07
+
+Production readiness
+
+Test performance, concurrency, memory behavior, dependency security, failure recovery, deployment, and upgrade compatibility. Add CI checks and repeatable release builds.
+
+Acceptance test: A clean installation can run a documented sample application with reproducible results, security checks, and a complete set of known limitations.
+
+These are proposed engineering milestones, not claims that the features are already present. The coding agent must inspect the current code before deciding which pieces require implementation and which can be reused.
+
+# 3. What should a finished NEXORA web application look like?
+
+A developer should eventually be able to create a project with commands similar to these:
+
+```
+nexora new web shop
+cd shop
+nexora dev
+```
+
+The generated project might use a structure like this:
+
+```
+shop/
+├── nexora.project
+├── src/
+│   ├── main.nxl
+│   ├── routes/
+│   │   ├── web.nxl
+│   │   └── api.nxl
+│   ├── controllers/
+│   ├── models/
+│   ├── middleware/
+│   └── services/
+├── views/
+│   ├── layouts/
+│   ├── pages/
+│   └── components/
+├── public/
+│   ├── css/
+│   ├── js/
+│   └── images/
+├── database/
+│   ├── migrations/
+│   └── seeds/
+├── tests/
+└── README.md
+```
+
+The exact structure should follow the existing repository conventions where practical.
+
+A future NXL API could look like this, illustratively only:
+
+```
+app.get("/api/products", request => {
+    let products = database.products().all();
+
+    return response.json({
+        "success": true,
+        "data": products
+    });
+});
+```
+
+For this to work, NXL would need genuine implementations of the route API, request and response types, database operations, JSON serialization, and handler execution. The coding agent must not add example syntax that the compiler cannot parse.
+
+# 4. The most important architectural decision
+
+You previously asked about embedding NXL into PHP and Python using a distinctive opening marker. I would support that as an interoperability feature, but I would not make it the foundation of NEXORA's backend.
+
+There are two complementary goals:
+
+| Goal                       | Purpose                                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NXL integration adapters   | Allow existing PHP and Python applications to call NXL code or render NXL templates.                                                              |
+| Independent NEXORA backend | Allow developers to build and run applications with NXL and the NEXORA runtime without requiring PHP or Python as the primary application engine. |
+
+The independent backend is the more important long-term goal if NXL is to compete as a programming language. The adapters offer compatibility and an easier adoption path.
+
+# 5. Master prompt to give your coding agent now
+
+Use this prompt to turn the roadmap into an implementation plan based on the actual repository.
+
+# NEXORA: Complete Web Framework and Backend Development Programme
+
+## Mission
+
+Evolve the existing NEXORA/NXL implementation into a reliable, secure, testable web application framework and backend platform powered by the NXL programming language.
+
+Preserve the existing codebase and working features. Do not perform an unapproved rewrite.
+
+The goal is to support websites, server-rendered web applications, REST APIs, database-backed applications, authentication, and production deployment through an integrated NEXORA developer experience.
+
+## Phase 0 — Repository Audit and Baseline
+
+Inspect the existing repository, including the 16 modified files and 5 new files identified in the latest development report.
+
+Determine:
+
+- Current NXL grammar, lexer, parser, AST, type checking, interpreter/compiler, and runtime.
+- Supported data types, arrays, strings, functions, modules, and error handling.
+- Existing template parser and rendering behavior.
+- Existing GET/POST routing implementation.
+- Whether an HTTP server exists and what it can actually do.
+- Existing CLI, project templates, tests, and documentation.
+- All uncommitted changes and potential regressions.
+
+Run the complete existing test suite and record exact results.
+
+Classify every relevant feature as implemented, partial, missing, experimental, or broken.
+
+Do not modify source code in this phase.
+
+**Approval gate:** Present the findings, risks, dependencies, and proposed sequence. Wait for explicit approval.
+
+## Phase 1 — Language and Runtime Foundations
+
+Implement only the missing language capabilities required by the framework.
+
+Prioritize:
+
+1. Arrays and collection operations.
+2. Maps/dictionaries and structured values.
+3. Indexing, iteration, length, and bounds validation.
+4. Functions and reusable modules where missing.
+5. Consistent errors and runtime diagnostics.
+6. JSON-compatible values and serialization.
+7. Type-safe request and response data representations where compatible with the language architecture.
+
+Do not add arbitrary syntax merely to make a framework example look complete.
+
+Acceptance criteria:
+
+- Search results can be collected and rendered after processing.
+- Collection operations have unit tests and defined error behavior.
+- Existing NXL programs continue to pass regression tests.
+
+Stop for approval.
+
+## Phase 2 — HTTP Server and Protocol APIs
+
+Design and implement the HTTP foundation using an appropriate server library or runtime implementation.
+
+Provide a stable API for:
+
+- Starting and stopping the server.
+- Request methods, paths, query parameters, headers, cookies, and bodies.
+- Route parameters and query parsing.
+- Response status, headers, and body.
+- JSON and HTML responses.
+- Static assets.
+- Unknown routes and server errors.
+- Request-size limits, malformed requests, timeouts, and safe defaults.
+
+Support asynchronous execution or concurrency only when the runtime can safely implement and test it.
+
+Acceptance criteria:
+
+- A test client can request a route and verify its status, headers, and response body.
+- Unknown routes return 404.
+- Application failures produce controlled error responses.
+- Existing web-template behavior remains functional.
+
+Stop for approval.
+
+## Phase 3 — NEXORA Web Framework
+
+Build the framework on the HTTP foundation rather than duplicating the server implementation.
+
+Implement:
+
+- Application bootstrap.
+- Routing and route groups.
+- Request handlers and controllers.
+- Middleware and centralized error handling.
+- Template layouts and partials.
+- Context-aware output escaping.
+- Form processing and validation.
+- Static assets and configurable public directories.
+- Logging and environment configuration.
+
+Ensure that HTML templates are not evaluated as arbitrary system commands and that untrusted values cannot silently become executable code.
+
+Acceptance criteria:
+
+- A multi-page website renders correctly.
+- Forms process and validate submitted values.
+- Correct status codes are returned for successful requests, invalid input, and missing routes.
+- Automated integration tests pass.
+
+Stop for approval.
+
+## Phase 4 — Database and Persistence
+
+Define a database abstraction and choose the first supported driver based on repository compatibility and maintainability.
+
+Evaluate SQLite first, followed by PostgreSQL and MySQL as subsequent drivers.
+
+Implement:
+
+- Safe parameterized queries.
+- Connection management.
+- Repositories or models.
+- Schema migrations and rollback.
+- Seed data.
+- Transactions.
+- Pagination and filtering.
+- Database error handling.
+
+Acceptance criteria:
+
+- Integration tests use a real database engine.
+- CRUD operations and migrations work.
+- SQL injection tests and error-path tests pass.
+- Credentials are supplied securely through configuration.
+
+Stop for approval.
+
+## Phase 5 — Authentication and Application Security
+
+Implement:
+
+- Secure session management.
+- Password hashing using a maintained, appropriate password-hashing implementation.
+- Login, logout, and access-control middleware.
+- CSRF protection for browser-based state-changing forms.
+- Secure cookie configuration.
+- Input validation and output escaping.
+- Rate limiting and security headers where appropriate.
+- Environment-based secrets management.
+
+Acceptance criteria:
+
+- Protected routes reject unauthorized requests.
+- Passwords are not stored in plaintext.
+- Session expiration, authorization, and CSRF tests pass.
+- Security limitations are documented.
+
+Stop for approval.
+
+## Phase 6 — CLI and Application Scaffolding
+
+Integrate the capabilities into the existing CLI without breaking established commands.
+
+Support appropriate equivalents of:
+
+```
+nexora new web my-app
+nexora new api my-api
+nexora dev
+nexora check
+nexora test
+nexora db:migrate
+nexora build
+```
+
+Use the actual existing CLI name if it differs, and document compatibility aliases.
+
+Generate maintainable projects with routes, controllers, views, tests, configuration, and database support when the corresponding modules are implemented.
+
+Do not expose commands that only print success without doing the underlying work.
+
+Acceptance criteria:
+
+- Generated projects run using the documented commands.
+- Invalid configurations and missing dependencies produce useful errors.
+- The project-generation process passes automated smoke tests.
+
+Stop for approval.
+
+## Phase 7 — Package Management and Integrations
+
+Integrate the web framework with the existing NEXORA package-management design.
+
+Define versioned dependencies, lockfiles, compatibility requirements, and secure dependency resolution.
+
+Design PHP and Python adapters for invoking NXL code or rendering NXL templates inside existing applications. Validate the actual interoperability mechanism, error model, data boundary, and installation process.
+
+Keep these adapters optional. The independent NEXORA backend must not depend on PHP or Python as its primary execution engine.
+
+Do not claim a registry or package is available until it is implemented and tested.
+
+Stop for approval.
+
+## Phase 8 — Production Verification
+
+Implement automated tests for:
+
+- Language and runtime regressions.
+- HTTP protocol behavior.
+- Routes and middleware.
+- Template escaping.
+- Forms and validation.
+- Database transactions and migrations.
+- Authentication and access control.
+- Project generation and deployment builds.
+- Error handling, concurrency, and resource limits as supported.
+
+Document supported operating systems, runtime prerequisites, deployment configurations, known limitations, and security considerations.
+
+Do not publish a release without explicit approval.
+
+Stop for approval.
+
+## Global Engineering Rules
+
+- Inspect before implementing.
+- Preserve working features and uncommitted work.
+- Implement one approved phase at a time.
+- Provide a file-change summary and actual test output after each phase.
+- Never fabricate successful builds, tests, or compiler features.
+- Do not suppress failing tests merely to make CI green.
+- Never claim production readiness without evidence.
+- Do not commit or push without authorization.
+- Request explicit approval at every phase boundary.
+
+## Immediate Task
+
+Perform Phase 0 only. Inspect the current repository and report the baseline, including the latest uncommitted changes. Do not modify code until I approve the audit and implementation sequence.
+
+## My final recommendation
+
+Do not measure progress by how many framework features the coding agent has written. Measure it by whether a developer can actually create and run an application that works.
+
+The first major milestone should be:
+
+1. A real HTTP server.
+2. A proper request/response API.
+3. Reliable NXL collection operations.
+4. A working multi-page website.
+5. A database-backed example.
+6. Automated tests demonstrating all five.
+
+Once these are proven, NEXORA will have a credible foundation for a complete web framework and backend. Authentication, advanced developer tooling, package distribution, and broader platform support can then build on top of that foundation.

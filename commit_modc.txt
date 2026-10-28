@@ -1,0 +1,50 @@
+Module C: Web starter gap-fill + serve e2e verification
+
+Summary of changes:
+- Template compiler (html.rs): adjacent Markup+Expression segments now merge into
+  a single `print` with `+` concatenation, so inline substitutions render on the
+  same line as their surrounding markup. Fixes `<title>`, meta description, and
+  attribute values gaining stray newlines. Reverted the `escape_expression`
+  builtin (scope creep, wrong layer).
+- dev.rs: updated pinned rendering test and its comment to reflect the new
+  inline-substitution semantics (block `print`s are still one line each).
+- web.rs: layout rendering unchanged (uses raw content injection).
+- nuf.rs: `cors_headers` middleware now adds security headers
+  (x-content-type-options, referrer-policy, x-frame-options).
+- Templates (templates/web/):
+  * Layout: `<title>` and `<meta description>` use `app_name` binding; brand
+    span uses `app_name`; footer links to Home/About/Search/Contact.
+  * home.nxlhtml: hero with primary/secondary actions, three feature cards.
+  * contact.nxlhtml: success state on valid POST (method=POST && has_error=false).
+  * 404.nxlhtml: shows escaped request path, nav links.
+  * styles.css: .actions, .btn, .btn-secondary, .cards, .footer-links, .success.
+  * README.md: customization table, add-a-page walkthrough, serving limits,
+    security/production section, env/deployment pointers.
+- Tests:
+  * html.rs: new test `an_expression_lands_where_the_author_put_it` pins
+    `<title>value</title>` and `value="value"` exact rendering.
+  * web_tests.rs: +4 tests (openapi for project routes, 404 binds path, escaped
+    404 path, safe-header defaults); `a_path_parameter_reaches_the_page`
+    assertion updated to `<h1>Post 42</h1>` exact match.
+  * templates_tests.rs: `the_generated_pages_render_the_starter_ui` renders
+    generated home/contact/404 via SiteContext and asserts starter UI markers.
+  * cli_smoke_tests.rs: `cli_serve_answers_the_generated_routes` spawns real
+    `nxlc serve` on a free port, asserts home/title/hero/headers, /posts/42,
+    422 on incomplete POST, 200 + success class on complete POST, 404 + nav,
+    escaped path segment.
+- Docs:
+  * docs/20-web-applications.md: documents `app_name` binding, success-state
+    recipe, response-header section.
+  * docs/03-cli-reference.md: web layout, serve vs dev, serve header note.
+  * docs/24-nxl-toml.md: name→app_name, route-startup failure note.
+  * docs/README.md: index row for web-applications.
+  * IMPLEMENTATION_STATUS.md: headers row, middleware row, new "Project pages"
+    row, new "Full web starter" row, manifest spec row.
+
+Evidence:
+- All 36 test suites pass (846 tests).
+- cargo fmt clean.
+- Module C acceptance: generated project compiles, serves, navigates, validates,
+  and the homepage renders correctly (title/brand from manifest, hero actions,
+  feature cards, contact success state, 404 with path, safe headers on every
+  response).

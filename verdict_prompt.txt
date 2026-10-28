@@ -1,0 +1,758 @@
+Yes. You can separate NXL language snippets from the larger NEXORA platform, and I think your idea of using `<!nxl` as a recognizable marker for NXL code embedded in web pages is worth exploring.
+
+My recommendation, however, is to distinguish NXL as a programming language from NEXORA as the development platform. NXL should have its own syntax and file format, while NEXORA can provide the tools to integrate NXL with PHP, Python, JavaScript, databases, and web servers.
+
+## 1. What the language snippet could look like
+
+For example, suppose you want to write NXL code inside an HTML page, in a way that resembles PHP's `<?php` syntax.
+
+PHP example
+
+```
+<?php
+$name = "NEXORA";
+echo "Welcome to " . $name;
+?>
+```
+
+Possible NXL embedded syntax
+
+```
+<!nxl
+let name = "NEXORA";
+print("Welcome to " + name);
+nxl!>
+```
+
+The second example is a proposed syntax, not a claim that the existing NXL compiler supports it. The exact keywords and closing marker must match NXL's real grammar.
+
+You could use this approach to make NXL recognizable within HTML, but there are some important design decisions to make first.
+
+## 2. Should NXL use `<!nxl`?
+
+My honest view: I would not use `<!nxl ... nxl!>` as the primary syntax. I would prefer a distinctive, unambiguous delimiter that does not conflict with HTML or XML.
+
+Here are three options.
+
+Recommended
+
+Option A — Dedicated NXL template syntax
+
+```
+```
+
+Readable and recognizable. However, the server-side NXL template engine must explicitly recognize and process the tag before the browser receives the page.
+
+Alternative
+
+Option B — NXL template delimiters
+
+```
+<h1>Welcome to {{ nxl name }}</h1>
+```
+
+Compact for inserting values into templates. Requires precise rules for expressions, escaping, and statement blocks.
+
+Experimental
+
+Option C — Your proposed syntax
+
+```
+<!nxl
+    let name = "NEXORA";
+    print(name);
+nxl!>
+```
+
+Distinctive, but it resembles markup declarations and could be awkward around HTML tooling. I would reserve it for experimentation rather than commit to it as the official syntax.
+
+PHP's embedded syntax works because the PHP runtime explicitly recognizes its opening and closing tags and switches between PHP code and ordinary markup. The delimiter alone does not make a language executable.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://www.php.net\&sz=32)
+
+Manual
+
++1
+
+
+
+## 3. Can NXL integrate with PHP, Python, and other backends?
+
+Yes. There are two different approaches, and I would support them in this order.
+
+### Approach 1: NXL as an independent backend
+
+Best long-term direction
+
+A developer writes application logic in NXL, and the NEXORA runtime handles HTTP requests, routing, responses, and database integration.
+
+```
+// Illustrative NXL syntax only
+app.get("/welcome", request => {
+    return response.text("Welcome to NEXORA");
+});
+```
+
+This would allow NXL to become a genuine backend development option instead of depending on PHP or Python to execute its code.
+
+### Approach 2: NXL embedded in an existing backend
+
+A PHP or Python application calls an NXL engine to process NXL code or templates.
+
+```
+<?php
+$page = $nxlEngine->render("welcome.nxl", [
+    "name" => "NEXORA"
+]);
+?>
+```
+
+Here, PHP handles the request and passes data to the NXL engine. The example assumes an adapter that would need to be implemented; it is not a built-in PHP API.
+
+Python offers a useful precedent: its official documentation describes embedding the Python interpreter in another application, while web-server integration uses defined interfaces such as WSGI. NXL could similarly expose a documented runtime or adapter interface.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://docs.python.org\&sz=32)
+
+Python 3.13.16 documentation
+
++1
+
+
+
+## 4. My recommended NEXORA design
+
+I would build three separate layers:
+
+NXL Language
+
+`.nxl` source files · Syntax · Types · Compiler
+
+NEXORA Runtime and SDK
+
+HTTP · Templates · Routing · Database adapters · UI
+
+Web
+
+Backend
+
+Mobile
+
+PHP, Python, and other existing systems would connect through adapters. NXL would remain its own language rather than changing syntax depending on which backend hosts it.
+
+### A crucial security rule
+
+If NXL templates render user-supplied data, the template engine must distinguish escaped text from trusted HTML, validate inputs, and prevent arbitrary code execution. Do not implement template evaluation by blindly executing text or replacing strings.
+
+## 5. Prompt to give your coding agent
+
+### NEXORA/NXL Embedded Language and Backend Integration — Architecture Proposal
+
+Inspect the existing NEXORA/NXL repository and prepare a proposal for implementing NXL language snippets, an NXL template engine, and integration adapters for PHP, Python, and other supported backend environments.
+
+**Do not begin implementation until I approve the architecture.**
+
+Requirements:
+
+1. Verify the current NXL grammar, compiler, runtime, CLI, and supported source-file formats.
+2. Keep `.nxl` as the canonical NXL source-file extension unless repository evidence justifies a change.
+3. Design an optional NXL template format for mixing HTML markup with executable NXL expressions and statements.
+4. Compare `<nxl>...</nxl>`, `{{ ... }}`, and `<!nxl ... nxl!>` for parsing ambiguity, HTML compatibility, editor tooling, readability, and security. Recommend one official format based on evidence.
+5. Define how templates are parsed, validated, compiled or interpreted, cached, and rendered. Never execute raw template text as arbitrary system commands.
+6. Design a PHP adapter and a Python adapter that allow an existing backend to pass request data into the NXL engine and receive rendered output or structured results. Identify the actual integration mechanism and dependencies required by each adapter.
+7. Define an independent NEXORA backend runtime as the long-term direction, so NXL applications can eventually run without PHP or Python as their primary execution engine.
+8. Specify routing, HTTP request/response handling, error reporting, environment configuration, database adapter boundaries, and deployment requirements.
+9. Provide secure defaults for output escaping, input validation, secrets, filesystem access, and execution permissions.
+10. Define tests for parsing, compilation, template rendering, adapter interoperability, error handling, and security.
+11. Separate features that already exist from proposed or missing functionality. Do not claim integration is available until a working implementation has been tested.
+
+Return:
+
+- Architecture findings.
+- Syntax comparison and final recommendation.
+- Example source files and expected rendered output.
+- Proposed runtime and adapter APIs.
+- Implementation modules with acceptance criteria.
+- Risks, dependencies, and compatibility considerations.
+
+Stop and request my explicit approval before modifying source code.
+
+My final recommendation: Keep NXL's main programming syntax independent of PHP and Python. Add an optional NXL template syntax and integration adapters, then develop the independent NEXORA backend runtime. This gives you both interoperability with existing web applications and a path toward making NXL a standalone language.
+
+The proposed implementation supports NEXORA's objectives of becoming a practical application-development ecosystem built around NXL. However, it must not turn NEXORA into merely a template generator or a wrapper around other programming languages.
+
+The distinction is important: NEXORA should generate applications, while NXL should progressively become a genuine language capable of powering those applications.
+
+## How well does it align with NEXORA's objectives?
+
+| NEXORA objective                          | Alignment            | Assessment                                                                                                         |
+| ----------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| NXL as a programming language             | Partial              | The prompt requires real NXL integration, but needs a stronger language-first architecture.                        |
+| Generate complete web applications        | Strong               | Covers project generation, UI, routing, testing, and production builds.                                            |
+| Mobile application SDK                    | Strong directionally | A genuine compiler/runtime bridge and at least one verified platform are essential.                                |
+| Unique features beyond existing languages | Weak                 | The prompt does not yet define a distinctive NEXORA capability.                                                    |
+| Package ecosystem and reusable components | Partial              | It mentions dependencies, but does not fully establish an SDK/package ecosystem.                                   |
+| Cross-platform development                | Partial              | It appropriately requires verification, but cross-platform support remains a future capability until demonstrated. |
+| Production-ready releases                 | Strong directionally | Testing and release checks are included, but actual readiness depends on results.                                  |
+
+## What I would add before implementation
+
+I recommend adding these five requirements to the master prompt.
+
+1\. NXL must remain the first-class language
+
+The application logic, component definitions, event handlers, and navigation should use NXL wherever its actual capabilities permit. Generated JavaScript, HTML, CSS, native code, or other target artifacts should be produced through documented compilation or interoperability layers—not by disguising another language as NXL.
+
+2\. Create a shared NEXORA UI framework
+
+Define reusable components, layouts, themes, state handling, and events. Share component concepts across web and mobile where practical, while allowing platform-specific rendering and behavior.
+
+3\. Integrate NXP and the future package ecosystem
+
+Web and mobile projects should be able to declare, resolve, validate, and lock compatible dependencies using NEXORA's package-management architecture. Do not invent a package registry or claim the planned package catalogue is already implemented.
+
+4\. Introduce a distinctive NEXORA capability
+
+For example, a unified project model that can generate web and mobile applications from shared application logic and shared UI definitions, with explicit platform adapters. Validate the feasibility before promising this as a unique feature.
+
+5\. Establish measurable acceptance gates
+
+Require a real compilation or execution test, functional UI tests, reproducible builds, and regression checks. A beautiful screen alone is not proof that the SDK works.
+
+## My recommended long-term architecture
+
+NEXORA CLI and Developer Tools
+
+Project creation · Build · Test · Debug · Package
+
+NXL Language and Compiler Toolchain
+
+Syntax · Types · Diagnostics · IR · Compilation
+
+NEXORA SDK and Shared Framework
+
+Web SDK
+
+Pages, routing, components
+
+Mobile SDK
+
+Screens, navigation, device APIs
+
+Platform Backends and Runtimes
+
+Verified web and mobile targets, each with its own build and test pipeline
+
+Conceptual target architecture—not a claim that these components already exist.
+
+## Final verdict
+
+Proceed, but strengthen the prompt before implementation. The current prompt is a good application-generator roadmap. The additions above make it better aligned with your larger ambition: a Nigerian-origin, open-source programming language and development ecosystem with a real compiler, SDKs, package management, and credible cross-platform capabilities.
+
+I would start with the repository audit, approve the architecture, then build the web path and mobile path in separate approval-gated modules. That protects the existing NXL work while moving toward the broader NEXORA vision.
+
+To make NEXORA/NXL capable of creating complete web applications and mobile applications through its SDK, I recommend giving your AI coding agent a master prompt that directs it to build and verify these capabilities in stages, rather than merely generating attractive templates.
+
+The target outcome is that a developer can use NEXORA/NXL to:
+
+- Generate a complete, responsive web application with a homepage, navigation, functional pages, forms, styling, routing, and a development server.
+- Generate a mobile application with a polished welcome/onboarding screen, navigation, reusable UI components, and a working app entry point.
+- Run, test, build, and package both applications using documented commands.
+- Use real NXL compiler, runtime, SDK, and project-generation features wherever implemented—not mock commands or hard-coded demonstrations.
+
+Important: The coding agent must first inspect the existing NEXORA repository and determine which capabilities are already implemented. It should extend the current architecture instead of assuming NXL already supports everything required.
+
+## Master prompt for NEXORA/NXL Web Application Generator and Mobile SDK
+
+Copy the following prompt and pass it to your coding agent while working in the existing NEXORA GitHub repository.
+
+# NEXORA/NXL — Web Application Generator and Mobile Application SDK Development
+
+## 1. Project Mission
+
+You are the lead compiler engineer, programming-language architect, SDK developer, frontend engineer, mobile engineer, DevOps engineer, and QA engineer responsible for extending the existing **NEXORA/NXL ecosystem**.
+
+Your mission is to make NEXORA/NXL capable of generating, running, testing, building, and packaging complete starter applications for:
+
+1. Modern web applications.
+2. Mobile applications through the NEXORA Mobile SDK.
+3. Future desktop and cross-platform applications through a shared project architecture where technically feasible.
+
+Do not build a disconnected demonstration application. Integrate all new capabilities into the existing repository, compiler, runtime, command-line interface, package manager, and documentation where appropriate.
+
+The final goal is that a developer can create a project, customize its UI and functionality, run it locally, and prepare it for deployment using documented NEXORA/NXL commands.
+
+## 2. Mandatory Repository Audit
+
+Before changing code:
+
+1. Inspect the entire repository structure and relevant source files.
+2. Identify the actual implementation language and build system.
+3. Identify the existing NXL lexer, parser, AST, type checker, semantic analyzer, compiler or interpreter, runtime, CLI, SDKs, and package-management facilities.
+4. Inspect the existing project-generation commands and templates.
+5. Inspect current tests, GitHub Actions workflows, release configuration, and documentation.
+6. Identify implemented, partially implemented, experimental, mocked, missing, and broken features.
+7. Run the existing test suite and record its baseline results.
+8. Determine which application targets the current architecture can genuinely support.
+
+Produce an audit report containing:
+
+- Existing capabilities and source locations.
+- Current test and build results.
+- Architecture gaps.
+- Proposed implementation plan.
+- Dependencies and external SDK requirements.
+- Risks and compatibility considerations.
+
+Do not replace working compiler components with a new implementation simply because a rewrite seems easier. Preserve backward compatibility wherever possible.
+
+**Approval gate:** Stop after the audit and request my explicit approval before implementing Module 1.
+
+## 3. Module-Based Development Rules
+
+Implement the project in the modules below, in order.
+
+At the end of each module:
+
+- Summarize files created, modified, and removed.
+- Explain the architecture and important decisions.
+- Run relevant tests and report the actual results.
+- List known limitations and outstanding defects.
+- Provide exact commands for me to verify the implementation.
+- Request explicit approval before proceeding to the next module.
+
+Do not implement subsequent modules without approval. Do not report a feature as complete if it is only a plan, mockup, placeholder, or untested prototype.
+
+## Module 1 — NEXORA Application Project Architecture
+
+Design a shared application-project architecture with target-specific implementations.
+
+Define appropriate project manifests and directory conventions based on the existing repository. For example:
+
+```
+my-web-app/
+    nexora.project
+    src/
+    pages/
+    components/
+    styles/
+    public/
+    tests/
+    README.md
+
+my-mobile-app/
+    nexora.project
+    src/
+    screens/
+    components/
+    assets/
+    navigation/
+    tests/
+    README.md
+```
+
+These are proposed conventions, not mandatory filenames. Reuse existing conventions where appropriate.
+
+The architecture must support:
+
+- Application name and version.
+- Target platform and supported architectures.
+- Entry points.
+- Dependencies and versions.
+- Build and development configurations.
+- Assets and resources.
+- Environment configuration.
+- Tests.
+- Release metadata.
+
+Create a documented project-manifest specification and validate it. Do not introduce unnecessary configuration formats or duplicate existing functionality.
+
+**Acceptance criteria:** Valid project manifests load correctly; invalid manifests produce clear, actionable errors; existing NXL projects continue to work.
+
+Stop for approval.
+
+## Module 2 — NEXORA CLI Project Generation
+
+Extend the actual CLI with a coherent project-generation interface. Adapt command names to the existing CLI architecture.
+
+Desired user experience:
+
+```
+nexora new web my-web-app
+nexora new mobile my-mobile-app
+nexora dev
+nexora check
+nexora test
+nexora build
+```
+
+If the existing executable is named `nxl` or `nxlc`, preserve that interface or provide documented compatibility aliases rather than arbitrarily renaming it.
+
+Requirements:
+
+- Generate projects from maintained, versioned templates.
+- Validate project names and target options.
+- Prevent accidental overwriting of existing files.
+- Provide a useful `--help` and `--version`.
+- Display clear errors and non-zero exit codes on failure.
+- Support running commands from the project directory.
+- Provide a diagnostic command such as `nexora doctor`, if consistent with the existing CLI.
+- Never claim a build succeeded unless the underlying build process actually succeeded.
+
+**Acceptance criteria:** Both project-generation commands create valid, reproducible project structures and pass automated smoke tests.
+
+Stop for approval.
+
+## Module 3 — Complete Web Application Starter
+
+Create a maintained NEXORA Web Application Starter that generates a polished, responsive web application.
+
+The generated application must include:
+
+### User interface
+
+- Responsive navigation bar.
+- Brand identity and configurable application name.
+- Hero section with heading, description, and primary and secondary actions.
+- Feature sections and content cards.
+- About and contact sections where appropriate.
+- Footer with useful navigation links.
+- Mobile navigation behavior.
+- Responsive layouts for mobile, tablet, and desktop.
+- Accessible typography, contrast, focus states, and semantic markup.
+- Consistent colors, spacing, buttons, forms, and reusable UI components.
+
+### Application functionality
+
+- Page routing and navigation.
+- Reusable components.
+- Form validation and understandable error messages.
+- Working buttons and links.
+- A functional not-found page.
+- Loading, empty, success, and error states where applicable.
+- A documented method for adding pages and components.
+- Asset management and static resource handling.
+- Environment configuration without exposing secrets.
+- Automated tests for key routes and interactions.
+
+### Development and production workflow
+
+- Local development server with clear startup instructions.
+- Build and production-output commands.
+- A preview mechanism where supported.
+- Basic security headers and safe defaults where the serving architecture permits.
+- SEO metadata and a sensible default page title.
+- Accessibility and responsive-layout checks.
+- Deployment instructions for supported hosting environments.
+
+Do not merely generate a static HTML landing page and call it a complete web application. The generated project must have a documented path for adding real application logic and integrating APIs or databases.
+
+### NXL integration
+
+Use NXL source files and NEXORA tools as the primary application layer wherever the existing compiler and runtime can genuinely support them.
+
+If a browser requires JavaScript, WebAssembly, HTML, CSS, or another target-specific artifact, implement and document the real compilation or interoperability mechanism. Do not pretend that browsers execute arbitrary `.nxl` files natively.
+
+If NXL currently lacks the necessary web compilation capabilities, identify the gap and implement the smallest compatible foundation approved for the current module. Do not silently substitute another language as the application's core while presenting it as native NXL.
+
+**Acceptance criteria:** A clean project can be generated, started, navigated, tested, and built. The homepage renders correctly on mobile and desktop, and its core interactions work.
+
+Stop for approval.
+
+## Module 4 — NEXORA Mobile SDK Foundation
+
+Create a real Mobile SDK architecture that can eventually support application screens, navigation, layouts, controls, resources, device integration, and application packaging.
+
+First evaluate the most appropriate technical approach based on the current NXL compiler and runtime:
+
+- Native Android integration.
+- Native iOS integration.
+- A cross-platform rendering/runtime approach.
+- A staged implementation that initially supports one mobile platform.
+
+Do not promise full Android and iOS support unless the architecture and build pipelines genuinely support both.
+
+Define the SDK's public API, component model, lifecycle, project structure, event model, and platform adapter boundaries.
+
+Where NXL cannot yet compile or execute mobile application code, implement the required compiler/runtime bridge as a separately documented capability rather than inventing unsupported NXL syntax.
+
+The SDK should ultimately provide reusable abstractions for:
+
+- Application entry point and lifecycle.
+- Screen and navigation management.
+- Layout containers and spacing.
+- Text, images, icons, buttons, and input fields.
+- Colors, themes, typography, and styling.
+- Touch and interaction events.
+- Assets and fonts.
+- Form validation.
+- Accessibility.
+- Network requests through a supported API.
+- Platform-specific features through documented adapters.
+
+**Acceptance criteria:** A minimal application generated by the SDK can launch on a supported emulator or device, with the supported target and all prerequisites documented.
+
+Stop for approval.
+
+## Module 5 — Complete Mobile Welcome Screen
+
+Create a production-quality welcome screen template using the NEXORA Mobile SDK.
+
+The generated screen must contain:
+
+1. Application logo or configurable brand mark.
+2. Application name and optional tagline.
+3. A polished hero illustration or bundled image asset.
+4. A prominent welcome heading.
+5. A short description of the application's purpose.
+6. A primary **Get Started** button.
+7. A secondary **Sign In** action where appropriate.
+8. Optional onboarding indicators for a multi-screen introduction.
+9. Responsive layouts for supported screen sizes.
+10. Appropriate safe-area, status-bar, and system-navigation handling.
+
+### Visual quality
+
+Use a modern, professional design with:
+
+- A coherent color palette.
+- Readable typography.
+- Balanced spacing.
+- Consistent corner radii and button sizes.
+- Suitable light and dark theme support where implemented.
+- Smooth, restrained transitions where supported.
+- Accessible contrast and touch targets.
+- Appropriate handling of keyboard, screen rotation, and small displays where applicable.
+
+The screen should be customizable through a theme or project configuration, not hard-coded to a single brand.
+
+### Functional behavior
+
+- The Get Started button opens the next onboarding screen or application's initial screen.
+- The Sign In action navigates to an authentication screen if the template includes authentication.
+- Back navigation behaves correctly.
+- Buttons respond to touch.
+- Screen transitions work on the supported target.
+- Missing images and other assets are handled gracefully.
+- The application remains usable without a network connection unless a specific feature requires connectivity.
+
+Do not include fake authentication, simulated API success, or misleading account functionality. If authentication is not implemented, provide a clearly labelled extension point or a real, separately tested sample flow.
+
+### Generated project structure
+
+Use the SDK's established conventions. A possible structure is:
+
+```
+src/
+    main.nxl
+    screens/
+        welcome.nxl
+        onboarding.nxl
+    components/
+        app_button.nxl
+        app_logo.nxl
+    navigation/
+        app_navigation.nxl
+    theme/
+        app_theme.nxl
+assets/
+    images/
+    fonts/
+tests/
+README.md
+```
+
+Do not create `.nxl` source files that the compiler cannot parse. The generated files must use real, supported language syntax.
+
+**Acceptance criteria:** The application launches on the supported emulator or device. The welcome screen renders correctly, and the Get Started and other implemented actions work.
+
+Stop for approval.
+
+## Module 6 — SDK CLI and Project Customization
+
+Provide documented commands to create, configure, run, test, and build mobile projects.
+
+The intended experience should be similar to:
+
+```
+nexora new mobile my-mobile-app
+cd my-mobile-app
+nexora dev
+nexora test
+nexora build
+```
+
+Where platform-specific tooling is required, support explicit targets, for example:
+
+```
+nexora build --target android
+```
+
+Only expose commands when they are implemented. Document required SDKs, environment variables, device/emulator setup, signing configuration, and platform limitations.
+
+Support straightforward customization of:
+
+- Application name.
+- Application identifier.
+- Logo and splash assets.
+- Primary and secondary colors.
+- Welcome text.
+- Button labels.
+- Initial navigation destination.
+- Supported platform targets.
+
+Do not place signing credentials or API secrets in source control.
+
+**Acceptance criteria:** A developer can customize the welcome screen, run the project, execute tests, and build a valid artifact for at least one verified platform.
+
+Stop for approval.
+
+## Module 7 — Web and Mobile Testing
+
+Build an automated verification suite that covers the generated applications and the SDK.
+
+### Web tests
+
+- Project generation.
+- Manifest validation.
+- Development-server startup.
+- Homepage and route rendering.
+- Responsive layout checks.
+- Navigation and form interactions.
+- Production build.
+- Missing asset and invalid configuration errors.
+
+### Mobile tests
+
+- Project generation.
+- SDK initialization.
+- Application startup.
+- Welcome screen rendering.
+- Button interactions and navigation.
+- Theme and asset loading.
+- Supported screen sizes.
+- Build artifact generation.
+- Emulator or device smoke tests where infrastructure permits.
+
+### Cross-cutting tests
+
+- Clean installation.
+- Missing dependencies.
+- Invalid manifests.
+- Unsupported targets.
+- Build failures.
+- Regression tests for existing NXL functionality.
+
+Distinguish automated tests from manual tests. If no emulator or physical device is available, report that limitation explicitly rather than claiming device verification.
+
+Stop for approval.
+
+## Module 8 — Documentation and Developer Experience
+
+Create official documentation covering:
+
+- NEXORA/NXL architecture.
+- Installation and prerequisites.
+- Creating a web application.
+- Creating a mobile application.
+- The welcome-screen component API.
+- Supported NXL syntax and SDK APIs.
+- Project configuration.
+- Adding screens, components, and routes.
+- API integration.
+- Testing and debugging.
+- Building and packaging.
+- Known limitations.
+- Troubleshooting and frequently asked questions.
+
+Provide complete example projects that can be reproduced from documented commands.
+
+Include a beginner-friendly quick start with expected terminal output and instructions for checking that the application actually runs.
+
+Do not document unimplemented features as available.
+
+Stop for approval.
+
+## Module 9 — Release Readiness
+
+Prepare the verified web and mobile starter templates for distribution.
+
+Requirements:
+
+- Versioned SDK and templates.
+- Reproducible build steps.
+- Dependency and license review.
+- Clear error messages.
+- Release notes.
+- Platform-specific build prerequisites.
+- CI checks for supported operating systems.
+- Test reports and checksums for published artifacts where appropriate.
+- A documented upgrade path for generated projects.
+- Compatibility checks against the current NXL compiler.
+
+Do not publish a release or make changes to production infrastructure without explicit approval.
+
+Stop for approval.
+
+## Final Acceptance Criteria
+
+The project is ready for acceptance only when the following have been demonstrated with actual execution:
+
+1. A developer can generate a web application using the NEXORA CLI.
+2. The generated web application runs locally, has responsive pages, and contains working navigation and interactions.
+3. A developer can generate a mobile application using the NEXORA Mobile SDK.
+4. The generated mobile application launches on at least one explicitly supported and tested target.
+5. The mobile welcome screen is visually polished and its implemented buttons and navigation work.
+6. Both project types include maintainable source code, tests, and documentation.
+7. The application workflows integrate with the real NEXORA/NXL architecture.
+8. Existing compiler and CLI functionality passes regression tests.
+9. Build failures, unsupported features, and missing platform dependencies are reported honestly.
+10. The complete process can be reproduced from a clean checkout using the published instructions.
+
+## Non-Negotiable Engineering Rules
+
+- Inspect before implementing.
+- Preserve existing working code.
+- Do not fabricate compiler features or SDK capabilities.
+- Do not substitute static mockups for working applications.
+- Do not hard-code successful build results.
+- Do not silently hide failing tests.
+- Do not swallow errors to make CI appear green.
+- Do not claim Android, iOS, Windows, macOS, or Linux support without verification for the relevant target.
+- Use secure dependency management and avoid committing secrets.
+- Keep modules focused, testable, documented, and reviewable.
+- Ask for explicit approval after each module.
+
+## Your First Action
+
+Begin with **Module 1's repository audit and implementation plan only**.
+
+Do not modify application source code yet. Return the audit findings, the existing architecture, the proposed module plan, the blockers, and the exact baseline test results. Then request my approval before proceeding.
+
+## Recommended execution order
+
+[Responsive web design basics: The essentials](https://images.openai.com/static-rsc-4/LJmuXtMkWo0IRVV9dCzK_vjZ_ikRgKGrmtNx5izkWA2SjgIXHpvYLtuzKkxEsodbiGFY5S9YjzpeN11EAY7eWojpsibmt4zTpSESflO9brOHhWqh-vp0jMtywZn_xCVK_Wo3_q5JCEebqfUTV_bS2shsRaeo2vIk5I0drXniSgk?purpose=inline)
+
+1\. Web application generator
+
+First deliverable: `nexora new web my-web-app`, followed by a working local development server and production build.
+
+[BlueWell | Devpost](https://images.openai.com/static-rsc-4/0FAsnI8hrrFuAKQB80zLUbhdkq3QSF8d6y4bvAG8dUg_cUruQIIldxtA6GVGFST81LMywDInLW29LjXgzJ2e3D_9LheeoTltjgrPEuQ0i074zR6YnICq9-DAflUByZ84Ja2Z5_vULHEaWjm10v_mFj1MHZRp-bJIaTgrU2EvQyo?purpose=inline)
+
+2\. Mobile SDK and welcome screen
+
+Second deliverable: `nexora new mobile my-mobile-app`, producing a launchable app with a branded welcome screen and functional navigation.
+
+[JSON Mode vs Function Calling vs Structured Output: 2026 Guide](https://images.openai.com/static-rsc-4/eed_xGqRHKDgF9cQO03AZeRUPzZAvxIbl12jBTf5BwViZfswmJ_Oor-nqVP1NsxUk19_xTic_GiXKnnzeVcF-SRg3N45ua7xhu94d7dU6z7BLIM58bEv3Z4PEUTmUc0JJMzKsxIgbkcKF0vdPjnIHSC5kaGQ-r61QpNKaV-_AGA?purpose=inline)
+
+3\. Testing and release pipeline
+
+Verify generated projects, compiler compatibility, build artifacts, documentation, and clean-machine installation.
+
+## One strategic recommendation
+
+Treat the web generator and mobile SDK as separate product capabilities that share the NEXORA CLI, project manifests, package management, and tooling. Do not force them into one rendering architecture if the current compiler cannot support it.
+
+The first milestone should be a genuinely working web starter and a genuinely launchable mobile welcome-screen application. Once those are proven, expand the SDK with authentication, API integration, databases, notifications, and additional screens.
+
+That approach will give NEXORA a verifiable foundation instead of a large collection of features that appear complete but cannot actually build or run.
+
