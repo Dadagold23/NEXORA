@@ -1,0 +1,573 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.96s
+     Running unittests src\lib.rs (target\debug\deps\nxl_compiler-a1c329a648da99e8.exe)
+
+running 34 tests
+test dev::devserver_tests::a_plain_nxl_page_still_works ... ok
+test dev::devserver_tests::template_values_cannot_inject_markup_through_the_dev_server ... ok
+test html::parity_tests::the_js_backend_escapes_identically ... ok
+test html::parity_tests::the_vm_escapes ... ok
+test html::tests::a_nxl_syntax_error_inside_a_block_surfaces ... ok
+test html::tests::a_value_that_looks_like_markup_cannot_inject_it ... ok
+test html::tests::an_expression_lands_where_the_author_put_it ... ok
+test html::tests::block_form_is_recognised ... ok
+test html::tests::blocks_can_build_repeated_markup ... ok
+test html::tests::empty_expression_is_an_error ... ok
+test html::tests::escape_covers_every_dangerous_character ... ok
+test html::tests::escape_leaves_ordinary_text_alone ... ok
+test html::tests::expression_form_is_recognised ... ok
+test html::tests::expression_output_is_escaped ... ok
+test html::tests::markup_quotes_survive_the_trip_into_nxl ... ok
+test html::tests::markup_renders_unchanged ... ok
+test html::tests::markup_that_merely_starts_like_a_tag_is_left_alone ... ok
+test html::tests::nested_block_is_an_error ... ok
+test html::tests::plain_markup_is_one_segment ... ok
+test html::tests::stray_close_is_an_error ... ok
+test html::tests::strip_tags_leaves_text ... ok
+test html::tests::unclosed_block_is_an_error ... ok
+test html::tests::unquoted_expression_is_an_error ... ok
+test html::tests::unterminated_self_closing_tag_is_an_error ... ok
+test mobile::tests::a_mobile_section_is_parsed_including_screens_and_initial_destination ... ok
+test mobile::tests::application_ids_are_derived_from_project_names ... ok
+test mobile::tests::defaults_are_complete_and_mobile_is_absent_when_not_declared ... ok
+test mobile::tests::generated_resources_carry_the_configuration_and_escape_values ... ok
+test mobile::tests::invalid_identity_colour_target_and_screens_are_refused ... ok
+test mobile::tests::unknown_keys_are_refused_rather_than_silently_dropped ... ok
+test mobile::tests::welcome_heading_defaults_to_the_final_app_name ... ok
+test dev::devserver_tests::a_broken_template_reports_why ... ok
+test dev::devserver_tests::a_template_page_is_rendered_by_the_dev_server ... ok
+test html::parity_tests::the_rust_backend_escapes_identically ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+
+     Running unittests src\main.rs (target\debug\deps\nxlc-be817199af3f9733.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\backend_wiring_tests.rs (target\debug\deps\backend_wiring_tests-6b1c2123caa559d8.exe)
+
+running 17 tests
+test db_create_reports_the_file_it_made ... ok
+test db_drop_removes_the_database ... ok
+test db_drop_refuses_to_run_without_confirmation ... ok
+test db_fresh_refuses_to_run_without_confirmation ... ok
+test db_migrate_really_applies_the_migration ... ok
+test db_refresh_refuses_to_run_without_confirmation ... ok
+test db_audit_records_what_ran ... ok
+test db_commands_report_real_errors_instead_of_success ... ok
+test db_seed_says_when_there_is_nothing_to_seed ... ok
+test destructive_commands_parse_the_yes_flag ... ok
+test db_migrate_is_not_reported_twice ... ok
+test db_status_tracks_pending_and_applied ... ok
+test db_rollback_reverts_the_migration ... ok
+test serve_404s_an_unknown_route ... ok
+test serve_answers_the_health_route ... ok
+test serve_publishes_an_openapi_document_that_describes_itself ... ok
+test serve_reports_the_real_project_on_disk ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+     Running tests\cabi_tests.rs (target\debug\deps\cabi_tests-49c9b55aba1902b3.exe)
+
+running 15 tests
+test extern_alias_maps_nxl_name_to_symbol ... ok
+test extern_call_is_rejected_by_the_js_backend ... ok
+test extern_duplicate_declaration_is_a_compile_error ... ok
+test extern_call_is_rejected_by_the_rust_backend ... ok
+test extern_excessive_arity_is_a_compile_error ... ok
+test extern_integer_params_promote_widely_on_windows ... ok
+test extern_interior_nul_string_is_a_catchable_error ... ok
+test extern_missing_library_is_a_catchable_error ... ok
+test extern_missing_symbol_is_a_catchable_error ... ok
+test extern_str_param_and_string_return_on_windows ... ok
+test extern_unsupported_type_is_a_compile_error ... ok
+test extern_void_return_never_prints_a_value ... ok
+test extern_wrong_argument_type_is_a_compile_error ... ok
+test extern_wrong_arity_is_a_compile_error ... ok
+test extern_zero_arg_int_call_on_os_library ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests\cli_smoke_tests.rs (target\debug\deps\cli_smoke_tests-bd08429d8ce1113b.exe)
+
+running 4 tests
+test cli_new_console_generates_a_buildable_project ... ok
+test cli_build_refuses_a_manifest_with_a_typo ... ok
+test cli_new_web_generates_a_buildable_testable_project ... ok
+test cli_serve_answers_the_generated_routes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.06s
+
+     Running tests\compiler_tests.rs (target\debug\deps\compiler_tests-7f6bfa4e80e2ce94.exe)
+
+running 339 tests
+test a_wrong_return_type_is_still_rejected ... ok
+test a_wrong_argument_type_is_still_rejected ... ok
+test a_multi_line_string_compiles_to_parseable_javascript ... ok
+test accepts_assignment_to_mutable_binding ... ok
+test actor_clone_shares_mailbox ... ok
+test actor_constructs_and_has_name ... ok
+test actor_drain_with_handles_each_message ... ok
+test accepts_all_paths_returning_value_in_if_else ... ok
+test actor_mailbox_queues_and_drains_fifo ... ok
+test array_parameter_annotation_compiles ... ok
+test array_return_annotation_compiles ... ok
+test backend_generates_js_artifact_for_valid_nir_subset ... ok
+test barrier_synchronizes_threads ... ok
+test bounded_channel_respects_capacity ... ok
+test bounded_channel_send_blocks_until_space_available ... ok
+test bounded_channel_try_send_fails_when_full ... ok
+test await_task_propagates_panic_as_error ... ok
+test cancellation_token_cancel_sets_flag ... ok
+test cancellation_token_clone_shares_state ... ok
+test calling_a_non_callable_value_is_a_catchable_runtime_error ... ok
+test cancellation_token_default_is_uncancelled ... ok
+test cancellation_token_starts_uncancelled ... ok
+test channel_is_closed_reflects_state ... ok
+test channel_cross_thread_producer_consumer ... ok
+test channel_receiver_is_done_when_closed_and_empty ... ok
+test channel_recv_returns_none_after_close_and_drain ... ok
+test channel_recv_timeout_returns_value_before_timeout ... ok
+test channel_send_and_recv ... ok
+test channel_send_multiple_values_in_order ... ok
+test channel_send_on_closed_returns_error ... ok
+test channel_sender_clone_shares_channel ... ok
+test channel_try_recv_returns_none_when_empty ... ok
+test channel_try_recv_returns_value_when_available ... ok
+test channel_recv_timeout_returns_none_on_timeout ... ok
+test cli_tests::cli_bridge_reports_the_real_ffi_table ... ok
+test cli_tests::cli_check_error_resolves_file_line_column ... ok
+test array_annotations_survive_execution ... ok
+test cli_tests::cli_cmd_build_creates_artifact ... ok
+test cli_tests::cli_cmd_build_release_uses_release_profile ... ok
+test cli_tests::cli_check_passes_while_run_fails_for_a_program_that_throws ... ok
+test cli_tests::cli_cmd_check_invalid_file_returns_error ... ok
+test cli_tests::cli_cmd_clean_nothing_to_clean ... ok
+test cli_tests::cli_cmd_clean_removes_build_dir ... ok
+test cli_tests::cli_cmd_check_valid_file ... ok
+test a_multi_line_string_round_trips_through_node ... ok
+test cli_tests::cli_cmd_fmt_normalises_trailing_whitespace ... ok
+test cli_tests::cli_cmd_new_creates_project_structure ... ok
+test cli_tests::cli_cmd_new_fails_if_directory_exists ... ok
+test cli_tests::cli_cmd_test_empty_project_passes ... ok
+test cli_tests::cli_cmd_test_counts_a_runnable_test_as_passed ... ok
+test cli_tests::cli_cmd_test_filter_skips_non_matching ... ok
+test cli_tests::cli_cmd_test_finds_test_files ... ok
+test cli_tests::cli_debug_inspect_reports_variables_and_steps ... ok
+test cli_tests::cli_debug_missing_file_is_reported ... ok
+test cli_tests::cli_debug_reports_trace_and_breakpoints ... ok
+test cli_tests::cli_docs_lists_bundled_guides ... ok
+test cli_tests::cli_doctor_compiler_check_always_ok ... ok
+test cli_tests::cli_doctor_format_report_contains_header ... ok
+test cli_tests::cli_doctor_format_report_shows_all_checks ... ok
+test cli_tests::cli_doctor_runs_without_panic ... ok
+test cli_tests::cli_help_text_contains_all_commands ... ok
+test cli_tests::cli_human_error_output_is_unchanged ... ok
+test cli_tests::cli_json_diagnostic_keeps_unknown_location_as_null ... ok
+test cli_tests::cli_json_diagnostic_populates_fields ... ok
+test cli_tests::cli_json_diagnostics_clean_is_empty_array ... ok
+test cli_tests::cli_parse_build_debug ... ok
+test cli_tests::cli_parse_build_release ... ok
+test cli_tests::cli_parse_check ... ok
+test cli_tests::cli_parse_clean ... ok
+test cli_tests::cli_parse_debug_inspect_and_steps ... ok
+test cli_tests::cli_parse_debug_missing_file_errors ... ok
+test cli_tests::cli_parse_debug_rejects_bad_breakpoint ... ok
+test cli_tests::cli_parse_debug_with_breakpoints ... ok
+test cli_tests::cli_parse_debug_with_file ... ok
+test cli_tests::cli_parse_docs ... ok
+test cli_tests::cli_parse_doctor ... ok
+test cli_tests::cli_parse_fmt ... ok
+test cli_tests::cli_parse_help ... ok
+test cli_tests::cli_parse_init ... ok
+test cli_tests::cli_parse_lint ... ok
+test cli_tests::cli_parse_new ... ok
+test cli_tests::cli_parse_new_missing_name_errors ... ok
+test cli_tests::cli_parse_repl ... ok
+test cli_tests::cli_parse_run_no_file ... ok
+test cli_tests::cli_parse_run_with_file ... ok
+test cli_tests::cli_parse_test_no_filter ... ok
+test cli_tests::cli_parse_test_with_filter ... ok
+test cli_tests::cli_parse_unknown_command_errors ... ok
+test cli_tests::cli_parse_version ... ok
+test cli_tests::cli_platforms_reports_the_evidence_matrix ... ok
+test cli_tests::cli_project_config_accepts_explicit_js_target ... ok
+test cli_tests::cli_project_config_default ... ok
+test cli_tests::cli_project_config_ignores_comments ... ok
+test cli_tests::cli_project_config_parse_dependencies ... ok
+test cli_tests::cli_project_config_parse_full ... ok
+test cli_tests::cli_project_config_parse_minimal ... ok
+test cli_tests::cli_project_config_rejects_unknown_package_key ... ok
+test cli_tests::cli_project_config_rejects_unknown_target ... ok
+test cli_tests::cli_project_config_roundtrip ... ok
+>>> test cli_tests::cli_repl_reports_the_end_of_a_session ... ok
+test cli_tests::cli_version_text_contains_version ... ok
+test cli_tests::cli_cmd_test_executes_tests_and_reports_runtime_failures ... ok
+test concurrency_error_converts_to_diagnostic ... ok
+test control_characters_are_escaped_in_generated_code ... ok
+test execution_result_success_reflects_exit_code ... ok
+test generic_array_return_annotation_compiles ... ok
+test js_backend_compile_native_alias_returns_js_target ... ok
+test js_backend_emits_arithmetic_binary_ops ... ok
+test js_backend_emits_boolean_constants ... ok
+test js_backend_emits_comparison_operators ... ok
+test js_backend_emits_entry_point_call ... ok
+test js_backend_emits_equality_as_strict_equality ... ok
+test js_backend_emits_float_constant_with_decimal ... ok
+test js_backend_emits_function_definition_and_call ... ok
+test js_backend_emits_function_with_return_value ... ok
+test js_backend_emits_if_else_branch ... ok
+test js_backend_emits_integer_constant_and_call ... ok
+test js_backend_emits_logical_and_or ... ok
+test js_backend_emits_mutable_assignment ... ok
+test js_backend_emits_negation_unary ... ok
+test js_backend_emits_source_metadata_comment ... ok
+test js_backend_emits_string_constant ... ok
+test js_backend_emits_valid_header_and_builtin ... ok
+test js_backend_emits_while_loop_as_branch ... ok
+test js_backend_rejects_invalid_source ... ok
+test lowers_for_loop_binding_in_loop_scope ... ok
+test lowers_if_else_blocks ... ok
+test lowers_infinite_loop_with_break ... ok
+test lowers_supported_match_patterns_and_rejects_unsupported_ones ... ok
+test lowers_variables_arithmetic_and_calls ... ok
+test lowers_while_loop_to_branching_basic_blocks ... ok
+test lowers_while_loop_with_break ... ok
+test nir_carries_module_and_type_metadata ... ok
+test nir_memory_and_abi_operations_have_typed_representation ... ok
+test nir_verifier_accepts_valid_loop_metadata ... ok
+test nir_verifier_rejects_branch_on_non_boolean ... ok
+test nir_verifier_rejects_duplicate_value_definition ... ok
+test nir_verifier_rejects_loop_with_invalid_body_block ... ok
+test nir_verifier_rejects_loop_with_invalid_exit_block ... ok
+test nir_verifier_rejects_loop_with_invalid_header_block ... ok
+test nir_verifier_rejects_memory_load_through_non_reference ... ok
+test nir_verifier_rejects_missing_control_flow_target ... ok
+test nir_verifier_rejects_return_type_mismatch ... ok
+test nir_verifier_rejects_undefined_branch_condition ... ok
+test nir_verifier_rejects_undefined_entry_point ... ok
+test nir_verifier_rejects_value_defined_only_in_one_branch_used_after_merge ... ok
+test nir_verifier_rejects_value_less_return_for_non_void ... ok
+test nir_verifier_reports_first_invalid_loop_reference_deterministically ... ok
+test cli_tests::cli_cmd_run_surfaces_a_vm_runtime_error_instead_of_masking_it ... ok
+test pkg_tests::cli_audit_reports_findings_from_the_advisory_set ... ok
+test pkg_tests::load_advisories_reads_the_local_database ... ok
+test commands_outside_a_project_say_so_and_say_what_to_run ... ok
+test pkg_tests::pkg_audit_finds_vulnerable_package ... ok
+test pkg_tests::pkg_audit_no_findings_when_clean ... ok
+test pkg_tests::pkg_audit_skips_unaffected_versions ... ok
+test pkg_tests::pkg_cache_clear ... ok
+test pkg_tests::pkg_cache_fetch_miss_errors ... ok
+test pkg_tests::pkg_cache_store_fetch_evict ... ok
+test pkg_tests::pkg_checksum_deterministic ... ok
+test pkg_tests::pkg_checksum_different_inputs_differ ... ok
+test pkg_tests::pkg_checksum_is_hex_string ... ok
+test pkg_tests::pkg_checksum_matches_sha256_vectors ... ok
+test pkg_tests::load_advisories_tolerates_missing_and_malformed_files ... ok
+test pkg_tests::pkg_cli_add_registry_dependency_fails_honestly ... ok
+test pkg_tests::pkg_cli_add_rejects_a_missing_path_dependency ... ok
+test pkg_tests::pkg_cli_cmd_pkg_install_and_tree ... ok
+test pkg_tests::pkg_cli_parse_pkg_commands ... ok
+test pkg_tests::pkg_cli_publish_needs_a_project ... ok
+test pkg_tests::pkg_dependency_graph_render ... ok
+test pkg_tests::pkg_lockfile_contains ... ok
+test pkg_tests::pkg_lockfile_git_dep_roundtrip ... ok
+test pkg_tests::pkg_lockfile_load_missing_returns_empty ... ok
+test pkg_tests::load_advisories_accepts_a_top_level_array ... ok
+test pkg_tests::pkg_lockfile_serialize_parse_roundtrip ... ok
+test pkg_tests::pkg_manager_add_dep ... ok
+test pkg_tests::pkg_manager_install_no_deps ... ok
+test pkg_tests::pkg_lockfile_save_and_load ... ok
+test pkg_tests::pkg_cli_add_path_dependency_installs_and_removes ... ok
+test pkg_tests::pkg_manager_offline_mode_uncached_fails ... ok
+test pkg_tests::pkg_manager_remove_dep ... ok
+test pkg_tests::pkg_manifest_parse_git_dep ... ok
+test pkg_tests::pkg_manifest_parse_minimal ... ok
+test pkg_tests::pkg_manifest_parse_missing_name_errors ... ok
+test pkg_tests::pkg_manifest_parse_path_dep ... ok
+test pkg_tests::pkg_manifest_parse_with_deps ... ok
+test pkg_tests::pkg_manifest_roundtrip ... ok
+test pkg_tests::pkg_registry_resolve_best_version ... ok
+test pkg_tests::pkg_registry_resolve_missing_errors ... ok
+test pkg_tests::pkg_resolver_detects_version_conflict ... ok
+test pkg_tests::pkg_resolver_resolves_flat_deps ... ok
+test pkg_tests::pkg_version_display ... ok
+test pkg_tests::pkg_version_ordering ... ok
+test pkg_tests::pkg_version_parse_accepts_partial_versions ... ok
+test pkg_tests::pkg_version_parse_invalid ... ok
+test pkg_tests::pkg_version_parse_valid ... ok
+test pkg_tests::pkg_version_parse_with_pre ... ok
+test pkg_tests::pkg_version_parse_with_v_prefix ... ok
+test pkg_tests::pkg_version_req_any ... ok
+test pkg_tests::pkg_version_req_caret ... ok
+test pkg_tests::pkg_version_req_exact ... ok
+test pkg_tests::pkg_version_req_gte ... ok
+test pkg_tests::pkg_version_req_lt ... ok
+test pkg_tests::pkg_version_req_tilde ... ok
+test pkg_tests::pkg_workspace_empty_when_no_section ... ok
+test pkg_tests::pkg_workspace_parse_members ... ok
+test quotes_and_backslashes_still_round_trip ... ok
+test rejects_assigning_void_call_to_value ... ok
+test rejects_assignment_to_immutable_binding ... ok
+test rejects_assignment_to_undeclared_name ... ok
+test rejects_binding_a_void_expression ... ok
+test rejects_break_outside_loop ... ok
+test rejects_continue_outside_loop ... ok
+test rejects_duplicate_declarations ... ok
+test rejects_duplicate_for_loop_binding_in_current_scope ... ok
+test rejects_duplicate_parameter_names ... ok
+test rejects_function_missing_required_return_value ... ok
+test rejects_if_without_else_when_function_requires_return_value ... ok
+test rejects_invalid_operand_types ... ok
+test rejects_non_boolean_if_condition ... ok
+test rejects_return_outside_function ... ok
+test rejects_undeclared_function_calls ... ok
+test rejects_unknown_annotation_types ... ok
+test reports_type_annotation_mismatches ... ok
+test reports_undefined_names_with_source_locations ... ok
+test reports_unexpected_characters ... ok
+test pkg_tests::pkg_manager_install_with_registry_dep ... ok
+test pkg_tests::pkg_manager_offline_mode_cached_succeeds ... ok
+test runtime_config_accepts_custom_timeout ... ok
+test runtime_config_accepts_env_vars ... ok
+test runtime_default_config_has_30s_timeout ... ok
+test runtime_captures_integer_output ... ok
+test runtime_captures_stdout_from_multiple_prints ... ok
+test runtime_executes_function_call_and_prints_return ... ok
+test runtime_new_and_default_are_equivalent ... ok
+test runtime_node_available_returns_bool_without_panic ... ok
+test runtime_executes_arithmetic_and_prints_result ... ok
+test runtime_executes_if_else_branch ... ok
+test runtime_rejects_compilation_error_before_execution ... ok
+test runtime_rejects_undefined_name_before_execution ... ok
+test runtime_with_config_stores_config ... ok
+test semantic_hir_resolves_forward_function_signatures ... ok
+test spawn_and_await_returns_value ... ok
+test spawn_multiple_tasks_run_concurrently ... ok
+test spawn_task_name_is_accessible ... ok
+test stdlib_tests::stdlib_all_modules_count ... ok
+test stdlib_tests::stdlib_crypto_base64_decode_errors ... ok
+test stdlib_tests::stdlib_crypto_base64_known_vectors ... ok
+test stdlib_tests::stdlib_crypto_base64_roundtrip_and_multibyte ... ok
+test stdlib_tests::stdlib_crypto_dispatch_through_call_builtin ... ok
+test stdlib_tests::stdlib_crypto_hex_decode_errors ... ok
+test stdlib_tests::stdlib_crypto_hex_roundtrip_and_multibyte ... ok
+test stdlib_tests::stdlib_crypto_sha256_known_vectors ... ok
+test stdlib_tests::stdlib_http_and_networking_builtins_are_registered ... ok
+test stdlib_tests::stdlib_http_header_lookup_is_case_insensitive ... ok
+test stdlib_tests::stdlib_http_url_parsing ... ok
+test stdlib_tests::stdlib_json_parse_array ... ok
+test stdlib_tests::stdlib_json_parse_invalid ... ok
+test stdlib_tests::stdlib_json_parse_object ... ok
+test stdlib_tests::stdlib_json_parse_primitives ... ok
+test stdlib_tests::stdlib_json_roundtrip ... ok
+test stdlib_tests::stdlib_json_stringify_list ... ok
+test stdlib_tests::stdlib_json_stringify_map ... ok
+test stdlib_tests::stdlib_json_stringify_primitives ... ok
+test stdlib_tests::stdlib_list_contains ... ok
+test stdlib_tests::stdlib_list_get_set ... ok
+test stdlib_tests::stdlib_list_out_of_bounds ... ok
+test stdlib_tests::stdlib_list_push_pop ... ok
+test stdlib_tests::stdlib_list_remove ... ok
+test stdlib_tests::stdlib_map_insert_get ... ok
+test stdlib_tests::stdlib_map_keys ... ok
+test stdlib_tests::stdlib_map_overwrite ... ok
+test stdlib_tests::stdlib_map_remove ... ok
+test stdlib_tests::stdlib_math_basic ... ok
+test stdlib_tests::stdlib_math_clamp ... ok
+test stdlib_tests::stdlib_math_gcd_lcm ... ok
+test stdlib_tests::stdlib_math_predicates ... ok
+test stdlib_tests::stdlib_math_trig ... ok
+test stdlib_tests::stdlib_module_implemented_flag ... ok
+test stdlib_tests::stdlib_module_resolve ... ok
+test stdlib_tests::stdlib_rng_float ... ok
+test runtime_run_succeeds_or_reports_node_missing ... ok
+test stdlib_tests::stdlib_rng_range ... ok
+test stdlib_tests::stdlib_rng_shuffle ... ok
+test stdlib_tests::stdlib_strings_case ... ok
+test stdlib_tests::stdlib_strings_pad ... ok
+test stdlib_tests::stdlib_strings_parse ... ok
+test stdlib_tests::stdlib_strings_reverse ... ok
+test stdlib_tests::stdlib_strings_split_join ... ok
+test stdlib_tests::stdlib_strings_substring ... ok
+test stdlib_tests::stdlib_strings_trim ... ok
+test stdlib_tests::stdlib_testing_assert_eq_fail ... ok
+test stdlib_tests::stdlib_testing_assert_eq_pass ... ok
+test stdlib_tests::stdlib_testing_run_test ... ok
+test stdlib_tests::stdlib_time_now ... ok
+test stdlib_tests::stdlib_vm_only_builtin_classification ... ok
+test task_cleanup_on_cancellation_does_not_leak ... ok
+test stdlib_tests::stdlib_time_stopwatch ... ok
+test task_group_collects_all_results ... ok
+test task_group_default_is_empty ... ok
+test task_group_returns_error_if_any_task_panics ... ok
+test task_group_structured_concurrency_all_complete ... ok
+test task_with_cancellation_token_stops_early ... ok
+test unused_array_function_still_has_to_satisfy_its_contract ... ok
+test task_is_finished_after_join ... ok
+test validates_while_condition_type ... ok
+test vm_bytecode_magic_and_version_are_stable ... ok
+test vm_chunk_emits_and_patches_jump ... ok
+test vm_closure_captures_enclosing_variable ... ok
+test vm_closure_result_can_be_bound_and_reused ... ok
+test vm_closure_without_parameters ... ok
+test vm_compiles_nir_module_to_program ... ok
+test vm_constant_pool_interns_and_deduplicates ... ok
+test vm_constant_pool_stores_all_types ... ok
+test vm_deserialize_rejects_wrong_magic ... ok
+test vm_deserialize_rejects_wrong_version ... ok
+test vm_deserialized_program_executes_correctly ... ok
+test vm_display_shows_disassembly ... ok
+test vm_eval_binary_add_integers ... ok
+test vm_executes_arithmetic ... ok
+test vm_executes_boolean_print ... ok
+test vm_executes_closure_with_argument ... ok
+test vm_executes_comparison_producing_boolean ... ok
+test vm_executes_equality_check ... ok
+test vm_executes_function_call_and_returns_value ... ok
+test vm_executes_if_else_false_branch ... ok
+test vm_executes_if_else_true_branch ... ok
+test vm_executes_integer_print ... ok
+test vm_executes_multiple_prints ... ok
+test vm_executes_mutable_assignment ... ok
+test vm_executes_negation ... ok
+test vm_executes_string_print ... ok
+test vm_executes_subtraction_and_multiplication ... ok
+test vm_rejects_compilation_error ... ok
+test vm_program_has_entry_point_chunk ... ok
+test vm_result_captures_return_value ... ok
+test vm_serializes_and_deserializes_program ... ok
+test vm_two_closures_are_independent ... ok
+test serve_builds_a_real_nuf_application ... ok
+test cli_tests::cli_bench_runs_the_real_benchmarks has been running for over 60 seconds
+test cli_tests::cli_bench_runs_the_real_benchmarks ... ok
+
+test result: ok. 339 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 135.65s
+
+     Running tests\concurrency_tests.rs (target\debug\deps\concurrency_tests-ba3b6465d03be8d5.exe)
+
+running 9 tests
+test js_backend_rejects_the_concurrency_module_loudly ... ok
+test channel_is_closed_reflects_the_close_signal ... ok
+test await_timeout_returns_the_value_when_the_task_finishes_first ... ok
+test sleep_validates_its_argument_and_then_sleeps ... ok
+test task_failure_is_catchable_and_the_run_continues ... ok
+test task_is_done_is_false_while_blocked_and_true_after_await ... ok
+test recv_timeout_times_out_on_an_empty_channel_and_passes_on_a_full_one ... ok
+test worker_pool_fan_out_stops_cooperatively_on_cancel ... ok
+test await_timeout_fails_catchably_then_cooperative_cancel_cleans_up ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests\debugger_tests.rs (target\debug\deps\debugger_tests-cb681bad01d59fa7.exe)
+
+running 15 tests
+test compile_error_becomes_report ... ok
+test breakpoints_track_hits_in_order ... ok
+test compiled_chunks_carry_local_names ... ok
+test format_report_includes_trace_and_hits ... ok
+test line_of_maps_offsets_to_lines ... ok
+test local_names_survive_bytecode_roundtrip ... ok
+test loop_hits_breakpoint_each_iteration ... ok
+test session_locals_hold_values_before_the_print ... ok
+test session_reports_runtime_failure_and_stays_ended ... ok
+test session_starts_at_the_first_statement_with_named_locals ... ok
+test session_breakpoint_stops_mid_loop_with_iter_state ... ok
+test session_step_into_shows_callee_locals_and_step_out_returns ... ok
+test session_step_over_stays_out_of_callees ... ok
+test session_step_walks_statements_in_order_and_completes ... ok
+test trace_contains_executed_lines ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests\deploy_tests.rs (target\debug\deps\deploy_tests-fd4bc0e0bf9e5b4a.exe)
+
+running 16 tests
+test deploy_section_lists_required_variables ... ok
+test empty_host_is_rejected ... ok
+test malformed_port_is_an_error_not_a_silent_default ... ok
+test missing_reports_unset_variables_by_name_only ... ok
+test plain_parse_applies_no_overlay ... ok
+test port_zero_is_rejected ... ok
+test production_overlay_replaces_base_web_settings ... ok
+test redact_masks_secret_lines ... ok
+test set_variables_are_not_missing ... ok
+test test_overlay_applies_only_to_its_environment ... ok
+test validate_reports_every_problem_at_once ... ok
+test validate_startup_accepts_a_missing_manifest ... ok
+test serve_stops_when_the_shutdown_signal_completes ... ok
+test validate_startup_lists_missing_variables ... ok
+test validate_startup_passes_when_config_and_env_are_sane ... ok
+test a_clean_manifest_produces_no_startup_problems ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests\dev_tests.rs (target\debug\deps\dev_tests-ce712f484f725c57.exe)
+
+running 21 tests
+test a_missing_project_is_reported ... ok
+test a_broken_nxl_page_says_why_instead_of_falling_back ... ok
+test a_broken_project_is_surfaced_and_recovers ... ok
+test a_page_written_in_nxl_is_rendered_on_the_server ... ok
+test a_page_without_the_program_gets_it_injected ... ok
+test an_empty_snapshot_does_not_report_a_change ... ok
+test builds_a_project_into_a_bundle ... ok
+test default_config_binds_loopback_only ... ok
+test host_page_loads_the_compiled_script_and_the_reload_client ... ok
+test build_output_is_not_watched ... ok
+test reload_script_keeps_transport_status_separate_from_app_status ... ok
+test a_project_without_public_keeps_the_generated_host_page ... ok
+test script_injection_leaves_a_page_that_already_has_them ... ok
+test compiler_source_is_not_served_as_a_web_asset ... ok
+test reports_a_compile_error_instead_of_a_bundle ... ok
+test serves_the_host_page_the_script_and_health ... ok
+test source_changes_are_detected ... ok
+test public_files_cannot_escape_their_directory ... ok
+test static_assets_are_served_from_public ... ok
+test the_projects_own_page_is_served_instead_of_the_host_page ... ok
+test sse_reloads_after_edits_and_reports_recovery ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.54s
+
+     Running tests\example_tests.rs (target\debug\deps\example_tests-95539e74c7a0423f.exe)
+
+running 3 tests
+test hello_example_parses_and_typechecks ... ok
+test blog_seeders_roll_back_cleanly_on_failure ... ok
+test blog_example_migrations_apply_and_seed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests\ffi_tests.rs (target\debug\deps\ffi_tests-813fbdec86ba3d42.exe)
+
+running 6 tests
+test bridge_table_lists_honest_status ... ok
+test guest_error_propagates ... FAILED
+test unknown_language_is_honest_error ... ok
+test python_bridge_calls_functions ... FAILED
+test node_bridge_calls_functions ... ok
+test php_bridge_calls_functions ... ok
+
+failures:
+
+---- guest_error_propagates stdout ----
+
+thread 'guest_error_propagates' (10352) panicked at tests\ffi_tests.rs:89:67:
+called `Result::unwrap()` on an `Err` value: Spawn("'python': program not found")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- python_bridge_calls_functions stdout ----
+
+thread 'python_bridge_calls_functions' (8352) panicked at tests\ffi_tests.rs:21:67:
+called `Result::unwrap()` on an `Err` value: Spawn("'python': program not found")
+
+
+failures:
+    guest_error_propagates
+    python_bridge_calls_functions
+
+test result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.25s
+
+error: test failed, to rerun pass `--test ffi_tests`
+EXIT:101

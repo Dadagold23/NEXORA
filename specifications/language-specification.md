@@ -144,20 +144,57 @@ const PI = 3.14159
 
 ## 6. Ownership and References
 
-NXL includes explicit ownership-aware semantics, but they are designed to remain approachable.
+NXL keeps ordinary assignment simple: values are copied unless ownership is
+transferred explicitly. References are also explicit and are never implicitly
+dereferenced.
 
 ```nxl
-let x = value
-let y = ref x
-let z = borrow x
+let x = value          // owned binding
+let y = move x         // explicit ownership transfer; `x` is unusable afterwards
+let a = borrow x       // immutable reference (&T)
+let b = ref x          // immutable reference (&T)
+let c = borrow mut x   // mutable reference (&mut T)
+let d = ref mut x      // mutable reference (&mut T)
+
+print(*a)              // read through a reference
+*c = new_value         // write through a reference
 ```
 
 Rules:
 
-- values have ownership semantics
-- references may be borrowed temporarily
-- unsafe code is explicitly marked with `unsafe`
-- the compiler enforces ownership/lifetime rules in safe code
+- Assignment copies the value. `move x` transfers ownership out of `x`; using
+  `x` before it is reassigned is an error (`NXL2016`).
+- A reference is non-owning. It may be read with `*r`, written with `*r = v`,
+  held in a local binding, and passed to a function parameter typed `&T` or
+  `&mut T`. Direct place updates through a mutable reference
+  (`(*r).field = v`, `(*r)[i] = v`) update the owner; deeper paths such as
+  `(*r).inner.field = v` are rejected rather than silently dropped.
+- Borrows are lexical: a borrow lasts until the end of the block that created
+  it. There is no non-lexical lifetime inference.
+- Several immutable borrows of the same binding may coexist. A mutable borrow
+  is exclusive: no other borrow, read, write, or move of the owner is allowed
+  while it is active. Conflicts are reported as `NXL2015`.
+- The owner must be mutable to be borrowed mutably (`let mut`).
+- A reference may not escape the borrow scope. Returning a reference, storing
+  one in a struct field, enum payload, array literal or array element, or
+  capturing one in a closure or `async` block is reported as `NXL2017`. This
+  applies to reference annotations as well as to inferred reference values.
+- Borrowing is limited to plain variable bindings. Borrowing a field, an array
+  element, or a temporary is intentionally unsupported and produces a
+  diagnostic.
+- Reference parameters are borrowed for the duration of the call, so the
+  lexical borrow at the call site lasts until the end of the enclosing block.
+  Return values are owned values; returning a reference is rejected.
+- There are no lifetime parameters and no unsafe escape hatch in the current
+  type checker. Unsafe code is parsed as syntax only and has no semantics yet.
+
+Passing these checks is not, by itself, a proof of memory safety. The checker
+reasons about lexical scopes and binding names; it does not perform alias
+analysis through aggregates, FFI, or concurrent shared state. Type-erased
+dynamic paths (channel sends through an `Unknown`-typed receiver, FFI calls,
+`Unknown`-typed builtins) are outside the escape analysis: the runtime keeps a
+borrowed cell alive, so this cannot dangle, but it is not covered by the lexical
+guarantee above.
 
 ## 7. Functions and Closures
 

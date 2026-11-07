@@ -699,6 +699,21 @@ fn analyze_instruction(
                         "references have no scalar representation",
                     ))
                 }
+                UnaryOperator::BorrowMut => {
+                    return Err(unsupported(
+                        "mutable borrow operator",
+                        *span,
+                        "references have no scalar representation",
+                    ))
+                }
+                UnaryOperator::Deref => {
+                    return Err(unsupported(
+                        "dereference operator",
+                        *span,
+                        "references have no scalar representation",
+                    ))
+                }
+                UnaryOperator::Move => val,
             };
             define(analysis, *result, result_type);
         }
@@ -1923,6 +1938,23 @@ impl<'a> Emitter<'a> {
                             *span,
                             "references have no scalar representation",
                         ));
+                    }
+                    UnaryOperator::BorrowMut => {
+                        return Err(unsupported(
+                            "mutable borrow operator",
+                            *span,
+                            "references have no scalar representation",
+                        ));
+                    }
+                    UnaryOperator::Deref => {
+                        return Err(unsupported(
+                            "dereference operator",
+                            *span,
+                            "references have no scalar representation",
+                        ));
+                    }
+                    UnaryOperator::Move => {
+                        self.local_get(*operand, *span)?;
                     }
                 }
                 self.local_set(*result, *span)

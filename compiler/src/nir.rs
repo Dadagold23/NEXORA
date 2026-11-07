@@ -25,7 +25,16 @@ pub enum Type {
     Channel(TypeId),
     Optional(TypeId),
     Result(TypeId, TypeId),
+    /// A named user type, or the uninstantiated base of a generic type
+    /// (`Box` in `Box<Int>`). The id is the hash of the (qualified) name.
     Generic(TypeId),
+    /// An unsubstituted type parameter (`T` inside `fn id<T>` or
+    /// `struct Box<T>`). It behaves like `Unknown` for body checking while
+    /// the declaration keeps it visible in HIR/NIR signatures.
+    Param(TypeId),
+    /// An instantiated generic user type: `Box<Int>`. The first id is the
+    /// base type, the second is a fingerprint of the argument types.
+    Instance(TypeId, TypeId),
     Function(TypeId),
     ForeignHandle(TypeId),
 }
@@ -225,6 +234,15 @@ pub struct FunctionSignature {
     pub name: String,
     pub parameters: Vec<(String, Type)>,
     pub return_type: Type,
+    /// Declared type parameters (`T` in `fn id<T>`), in source order.
+    pub type_parameters: Vec<String>,
+    /// Written parameter annotations, canonicalized against the declaring
+    /// file's type aliases. Kept so explicit instantiation can substitute
+    /// type arguments into structural types (`Array<T>`, `Box<T>`) that the
+    /// hash-based `Type` representation cannot rewrite.
+    pub parameter_annotations: Vec<Option<String>>,
+    /// Written return annotation, canonicalized like `parameter_annotations`.
+    pub return_annotation: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -327,6 +345,10 @@ pub enum Instruction {
         result: ValueId,
         callee: String,
         arguments: Vec<ValueId>,
+        /// Concrete type arguments for an explicitly instantiated generic
+        /// call; empty for ordinary calls. Retained so NIR verification can
+        /// check the call against the instantiated signature.
+        type_arguments: Vec<Type>,
         return_type: Type,
         span: Span,
     },
@@ -349,6 +371,9 @@ pub enum Instruction {
         result: ValueId,
         object: ValueId,
         index: ValueId,
+        /// Statically inferred element type (`Unknown` when the array
+        /// element type could not be recovered).
+        ty: Type,
         span: Span,
     },
     /// Copy-on-write element update; `result` aliases the new array.
@@ -360,9 +385,12 @@ pub enum Instruction {
         span: Span,
     },
     /// Build a struct value; fields must match the declaration exactly.
+    /// `ty` is the constructed type, including instantiation identity
+    /// (`Box<Int>`), so callers and verification see the same type.
     StructNew {
         result: ValueId,
         type_name: String,
+        ty: Type,
         fields: Vec<(String, ValueId)>,
         span: Span,
     },
@@ -371,6 +399,9 @@ pub enum Instruction {
         result: ValueId,
         object: ValueId,
         field: String,
+        /// Statically inferred field type (`Unknown` when the object type
+        /// or field declaration could not be resolved).
+        ty: Type,
         span: Span,
     },
     /// Copy-on-write field update; `result` aliases the new object.
@@ -386,6 +417,9 @@ pub enum Instruction {
         result: ValueId,
         type_name: String,
         variant: String,
+        /// Static type of the constructed value (`Generic` for a raw enum,
+        /// `Instance` for an explicitly instantiated generic enum).
+        ty: Type,
         arguments: Vec<ValueId>,
         span: Span,
     },
@@ -719,6 +753,7 @@ pub fn lower_hir(hir: &crate::hir::HirModule) -> Result<Module, Diagnostic> {
 /// Lower several files (dependency order) into one module. The entry file
 /// keeps the root namespace; every other file owns its dotted path.
 pub fn lower_project_files(files: &[ProjectFile]) -> Result<Module, Diagnostic> {
+    validate_ownership_declarations(files)?;
     let mut lowerer = Lowerer {
         functions: Vec::new(),
         signatures: files
@@ -733,6 +768,8 @@ pub fn lower_project_files(files: &[ProjectFile]) -> Result<Module, Diagnostic> 
         next_value: 0,
         in_function: false,
         current_function_return_type: None,
+        current_return_types: Vec::new(),
+        current_type_parameters: Vec::new(),
         in_loop: false,
         loop_depth: 0,
         try_stack: Vec::new(),
@@ -743,6 +780,10 @@ pub fn lower_project_files(files: &[ProjectFile]) -> Result<Module, Diagnostic> 
             .flat_map(|file| file.hir.type_names.iter().cloned())
             .collect(),
         value_types: HashMap::new(),
+        value_field_types: HashMap::new(),
+        instance_arguments: HashMap::new(),
+        identity_types: HashMap::new(),
+        conditional_counter: 0,
         program: Program {
             statements: files
                 .iter()
@@ -755,6 +796,9 @@ pub fn lower_project_files(files: &[ProjectFile]) -> Result<Module, Diagnostic> 
         async_counter: 0,
         closure_counter: 0,
         externs: HashMap::new(),
+        closure_parameters: HashMap::new(),
+        borrow_scopes: vec![HashMap::new()],
+        binding_states: vec![HashMap::new()],
     };
 
     // Register every `extern` block before lowering so calls resolve
@@ -766,6 +810,10 @@ pub fn lower_project_files(files: &[ProjectFile]) -> Result<Module, Diagnostic> 
             lowerer.register_externs(statement, &mut foreign_table)?;
         }
     }
+
+    // Resolve unannotated return types before lowering bodies, so calls made
+    // earlier in the file see the same inferred result as later calls.
+    lowerer.infer_return_types(files);
 
     for file in files {
         lowerer.current_module = file.path.clone();
@@ -984,6 +1032,84 @@ fn collect_concurrency_metadata(instructions: &[Instruction]) -> Vec<Concurrency
         .collect()
 }
 
+/// True when a written type annotation denotes a reference (`&T` / `&mut T`).
+fn is_reference_annotation(annotation: &str) -> bool {
+    annotation.trim_start().starts_with('&')
+}
+
+/// Reject reference types in positions that would let a reference outlive the
+/// borrow scope. NXL borrows are lexical: a reference may be read and written,
+/// passed to a function, and held in a local binding, but it may not be
+/// returned, stored in a field or enum payload, or captured by a closure.
+fn validate_ownership_declarations(files: &[ProjectFile]) -> Result<(), Diagnostic> {
+    for file in files {
+        for statement in &file.hir.program.statements {
+            validate_ownership_statement(statement)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_ownership_statement(statement: &Statement) -> Result<(), Diagnostic> {
+    match statement {
+        Statement::Export(inner) => validate_ownership_statement(inner),
+        Statement::Function(function) => validate_function_ownership(function),
+        Statement::ImplBlock(block) => {
+            for method in &block.methods {
+                validate_function_ownership(method)?;
+            }
+            Ok(())
+        }
+        Statement::TypeDeclaration(declaration) => {
+            for method in &declaration.methods {
+                validate_function_ownership(method)?;
+            }
+            for field in &declaration.fields {
+                if is_reference_annotation(&field.annotation) {
+                    return Err(Diagnostic::error(
+                        "NXL2017",
+                        format!(
+                            "field '{}' cannot hold a reference: references may not escape the scope of the value they borrow",
+                            field.name
+                        ),
+                        field.span,
+                    ));
+                }
+            }
+            for variant in &declaration.variants {
+                for payload in &variant.payload {
+                    if is_reference_annotation(payload) {
+                        return Err(Diagnostic::error(
+                            "NXL2017",
+                            format!(
+                                "enum payload of '{}' cannot hold a reference: references may not escape the scope of the value they borrow",
+                                variant.name
+                            ),
+                            variant.span,
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_function_ownership(function: &crate::ast::Function) -> Result<(), Diagnostic> {
+    if let Some(return_type) = &function.return_type {
+        if is_reference_annotation(return_type) {
+            return Err(Diagnostic::error(
+                "NXL2017",
+                "a function cannot return a reference: the borrow ends when the function returns",
+                function.span,
+            )
+            .with_help("return the owned value, or let the caller borrow it"));
+        }
+    }
+    Ok(())
+}
+
 fn module_declarations(program: &Program) -> (Vec<TypeDefinition>, Vec<String>, Vec<String>) {
     let mut type_definitions = Vec::new();
     let mut imports = Vec::new();
@@ -999,25 +1125,27 @@ fn module_declarations(program: &Program) -> (Vec<TypeDefinition>, Vec<String>, 
                     crate::ast::DeclarationKind::Interface => TypeDefinitionKind::Interface,
                     crate::ast::DeclarationKind::Trait => TypeDefinitionKind::Trait,
                 };
+                let parameters = declaration
+                    .type_parameters
+                    .iter()
+                    .map(|parameter| stable_type_id(parameter))
+                    .collect::<Vec<_>>();
                 type_definitions.push(TypeDefinition {
                     id: stable_type_id(&declaration.name),
                     name: declaration.name.clone(),
                     kind,
-                    parameters: declaration
-                        .type_parameters
-                        .iter()
-                        .map(|parameter| stable_type_id(parameter))
-                        .collect(),
+                    parameters,
                     fields: declaration
                         .fields
                         .iter()
                         .map(|field| {
-                            (
-                                field.name.clone(),
-                                type_from_name(&field.annotation, &HashMap::new()).unwrap_or_else(
-                                    || Type::Generic(stable_type_id(&field.annotation)),
-                                ),
+                            let ty = type_from_name_with(
+                                &field.annotation,
+                                &HashMap::new(),
+                                &declaration.type_parameters,
                             )
+                            .unwrap_or_else(|| Type::Generic(stable_type_id(&field.annotation)));
+                            (field.name.clone(), ty)
                         })
                         .collect(),
                     variants: declaration
@@ -1030,8 +1158,12 @@ fn module_declarations(program: &Program) -> (Vec<TypeDefinition>, Vec<String>, 
                                     .payload
                                     .iter()
                                     .map(|ty| {
-                                        type_from_name(ty, &HashMap::new())
-                                            .unwrap_or_else(|| Type::Generic(stable_type_id(ty)))
+                                        type_from_name_with(
+                                            ty,
+                                            &HashMap::new(),
+                                            &declaration.type_parameters,
+                                        )
+                                        .unwrap_or_else(|| Type::Generic(stable_type_id(ty)))
                                     })
                                     .collect(),
                             )
@@ -1591,7 +1723,7 @@ fn verify_function(
                 )?;
                 if value_types
                     .get(condition)
-                    .is_some_and(|ty| *ty != Type::Bool && *ty != Type::Unknown)
+                    .is_some_and(|ty| *ty != Type::Bool && !is_dynamic(*ty))
                 {
                     return Err(Diagnostic::error(
                         "NXL3001",
@@ -1642,6 +1774,48 @@ fn verify_function(
                 }
             }
             Terminator::Jump { .. } | Terminator::Unreachable { .. } => {}
+        }
+    }
+
+    // Validate loop metadata if present.
+    if !function.loops.is_empty() {
+        let block_ids: std::collections::HashSet<BasicBlockId> =
+            function.basic_blocks.iter().map(|b| b.id).collect();
+        for (index, loop_info) in function.loops.iter().enumerate() {
+            if !block_ids.contains(&loop_info.header) {
+                return Err(Diagnostic::error(
+                    "NXL3001",
+                    format!(
+                        "function '{}' loop {}: header bb{} is not a valid block",
+                        function.name, index, loop_info.header
+                    ),
+                    Span::default(),
+                ));
+            }
+            if !block_ids.contains(&loop_info.body) {
+                return Err(Diagnostic::error(
+                    "NXL3001",
+                    format!(
+                        "function '{}' loop {}: body bb{} is not a valid block",
+                        function.name, index, loop_info.body
+                    ),
+                    Span::default(),
+                ));
+            }
+            if !block_ids.contains(&loop_info.exit) {
+                return Err(Diagnostic::error(
+                    "NXL3001",
+                    format!(
+                        "function '{}' loop {}: exit bb{} is not a valid block",
+                        function.name, index, loop_info.exit
+                    ),
+                    Span::default(),
+                ));
+            }
+            // Strict dominance (header dominates body, body dominates exit) is
+            // deliberately not required: `break`/`continue` lowering can make a
+            // body block reachable from outside the natural loop nest, and the
+            // backends only use this metadata as a reconstruction hint.
         }
     }
 
@@ -1834,8 +2008,8 @@ fn verify_instruction_types(
                         matches!((&left_ty, &right_ty), (Type::Array(_), Type::Array(_)));
                     if !both_arrays
                         && left_ty != right_ty
-                        && left_ty != Type::Unknown
-                        && right_ty != Type::Unknown
+                        && !is_dynamic(left_ty)
+                        && !is_dynamic(right_ty)
                     {
                         return Err(mismatch(format!(
                             "binary operands have incompatible types {left_ty:?} and {right_ty:?}"
@@ -1855,8 +2029,8 @@ fn verify_instruction_types(
                     if (boolean_result && *ty != Type::Bool)
                         || (!boolean_result
                             && *ty != left_ty
-                            && *ty != Type::Unknown
-                            && left_ty != Type::Unknown)
+                            && !is_dynamic(*ty)
+                            && !is_dynamic(left_ty))
                     {
                         return Err(mismatch(
                             "binary instruction result type is inconsistent".to_owned(),
@@ -1865,31 +2039,44 @@ fn verify_instruction_types(
                 }
                 Instruction::Call {
                     callee,
+                    type_arguments,
                     arguments,
                     return_type,
                     ..
                 } => {
                     if let Some(signature) = signatures.iter().find(|sig| sig.name == *callee) {
-                        if arguments.len() != signature.parameters.len()
-                            || (*return_type != signature.return_type
-                                && *return_type != Type::Unknown)
-                        {
-                            return Err(mismatch(format!(
-                                "call to '{callee}' does not match its NIR signature"
-                            )));
-                        }
-                        for (argument, (_, expected)) in arguments.iter().zip(&signature.parameters)
-                        {
-                            let actual = types.get(argument).copied().unwrap_or(Type::Unknown);
-                            // Same reasoning as the return contract: an array
-                            // literal is `Array(0)`, and a parameter declared as
-                            // `[T]` is `Array(<id>)`, so a raw comparison
-                            // rejected every call passing an array literal.
-                            if !types_compatible(actual, *expected) {
+                        if signature.type_parameters.is_empty() {
+                            if arguments.len() != signature.parameters.len()
+                                || (*return_type != signature.return_type
+                                    && !is_dynamic(*return_type))
+                            {
                                 return Err(mismatch(format!(
-                                    "call argument has type {actual:?}, expected {expected:?}"
+                                    "call to '{callee}' does not match its NIR signature"
                                 )));
                             }
+                            for (argument, (_, expected)) in
+                                arguments.iter().zip(&signature.parameters)
+                            {
+                                let actual = types.get(argument).copied().unwrap_or(Type::Unknown);
+                                // Same reasoning as the return contract: an array
+                                // literal is `Array(0)`, and a parameter declared as
+                                // `[T]` is `Array(<id>)`, so a raw comparison
+                                // rejected every call passing an array literal.
+                                if !types_compatible(actual, *expected) {
+                                    return Err(mismatch(format!(
+                                        "call argument has type {actual:?}, expected {expected:?}"
+                                    )));
+                                }
+                            }
+                        } else if type_arguments.len() != signature.type_parameters.len()
+                            || arguments.len() != signature.parameters.len()
+                        {
+                            // The lowerer substitutes explicit arguments into the
+                            // signature, so the erased `Param` contract cannot be
+                            // compared here; arity consistency still can.
+                            return Err(mismatch(format!(
+                                "generic call to '{callee}' does not match its NIR signature"
+                            )));
                         }
                     }
                     if let Some(foreign) = foreign_functions
@@ -1916,20 +2103,9 @@ fn verify_instruction_types(
                     }
                 }
                 Instruction::Allocate { ty, .. } => {
-                    if !matches!(
-                        ty,
-                        Type::Unknown
-                            | Type::Int
-                            | Type::Float
-                            | Type::Bool
-                            | Type::String
-                            | Type::Struct(_)
-                            | Type::Enum(_)
-                            | Type::Generic(_)
-                            | Type::Array(_)
-                            | Type::Tuple(_)
-                            | Type::Map(_)
-                    ) {
+                    // Any value type may be placed in a borrow cell; only a
+                    // reference-to-reference would be meaningless here.
+                    if matches!(ty, Type::Reference(..)) {
                         return Err(mismatch(format!("cannot allocate value of type {ty:?}")));
                     }
                 }
@@ -1953,7 +2129,11 @@ fn verify_instruction_types(
                     match pointer_type {
                         Type::Reference(target, true)
                             if value_type == Type::Unknown
-                                || target == type_identity(value_type) => {}
+                                || target == type_identity(value_type)
+                                // An array literal carries the placeholder
+                                // `Array(0)` until its element type is pinned;
+                                // it is compatible with any array cell.
+                                || matches!(value_type, Type::Array(0)) => {}
                         Type::Reference(_, false) => {
                             return Err(mismatch(
                                 "cannot store through an immutable reference".to_owned(),
@@ -1976,11 +2156,19 @@ fn verify_instruction_types(
                     value, mutable, ty, ..
                 } => {
                     let value_type = types.get(value).copied().unwrap_or(Type::Unknown);
+                    // The source is normally an allocated cell (`Allocate`
+                    // yields a mutable reference to the slot), but a plain
+                    // value or an existing reference is also accepted as long
+                    // as the recorded target agrees.
+                    let source_target = match value_type {
+                        Type::Unknown => None,
+                        Type::Reference(target, _) => Some(target),
+                        other => Some(type_identity(other)),
+                    };
                     match ty {
                         Type::Reference(target, is_mutable)
                             if *is_mutable == *mutable
-                                && (value_type == Type::Unknown
-                                    || *target == type_identity(value_type)) => {}
+                                && source_target.is_none_or(|source| *target == source) => {}
                         _ => {
                             return Err(mismatch(
                                 "borrow result type does not match its source".to_owned(),
@@ -2099,11 +2287,103 @@ fn push_flattened<'a>(instruction: &'a Instruction, out: &mut Vec<&'a Instructio
     }
 }
 
+/// Types that carry no checkable identity: unknown inference results and
+/// unsubstituted generic parameters. Both act as wildcards for body checks.
+fn is_dynamic(ty: Type) -> bool {
+    matches!(ty, Type::Unknown | Type::Param(_))
+}
+
+/// Erase an unsubstituted generic parameter to the dynamic type for body
+/// checks. The concrete type is supplied at the instantiation site.
+fn erased_for_check(ty: Type) -> Type {
+    if is_dynamic(ty) {
+        Type::Unknown
+    } else {
+        ty
+    }
+}
+
+/// Unify two inferred types into the most precise type that describes both.
+/// `Err(())` means inference is ambiguous or the two types are incompatible.
+/// Used by return-type inference and by conditional expressions so that each
+/// branch agrees on a single result type.
+fn unify_inferred_types(left: Type, right: Type) -> Result<Type, ()> {
+    if left == right {
+        return Ok(left);
+    }
+    if is_dynamic(left) && is_dynamic(right) {
+        return Ok(Type::Unknown);
+    }
+    if is_dynamic(left) {
+        return Ok(right);
+    }
+    if is_dynamic(right) {
+        return Ok(left);
+    }
+    match (left, right) {
+        (Type::Array(0), Type::Array(other)) | (Type::Array(other), Type::Array(0)) => {
+            Ok(Type::Array(other))
+        }
+        (Type::Generic(base), Type::Instance(instance, _))
+        | (Type::Instance(instance, _), Type::Generic(base))
+            if base == instance =>
+        {
+            Ok(if matches!(left, Type::Instance(_, _)) {
+                left
+            } else {
+                right
+            })
+        }
+        _ => Err(()),
+    }
+}
+
+/// Infer a single result type from the observed `return` types of a function.
+/// A bare `return;` (or `return void`) cannot be mixed with a value return.
+fn infer_return_type(returns: &[Option<Type>]) -> Result<Type, ()> {
+    let mut has_bare = false;
+    let mut inferred: Option<Type> = None;
+    for result in returns {
+        match result {
+            None => has_bare = true,
+            Some(Type::Void) => has_bare = true,
+            Some(ty) => {
+                inferred = Some(match inferred {
+                    None => *ty,
+                    Some(existing) => unify_inferred_types(existing, *ty)?,
+                });
+            }
+        }
+    }
+    if has_bare {
+        if inferred.is_some() {
+            return Err(());
+        }
+        return Ok(Type::Void);
+    }
+    Ok(inferred.unwrap_or(Type::Void))
+}
+
+/// Combine two type identities into one, order-dependently. Used to build a
+/// stable fingerprint for a sequence of generic arguments without needing to
+/// reverse a hash back into a name.
+fn mix_type_id(left: TypeId, right: TypeId) -> TypeId {
+    left.wrapping_mul(16_777_619) ^ right.rotate_left(7)
+}
+
+/// A stable fingerprint for the argument list of an instantiated generic type.
+fn argument_fingerprint(arguments: &[Type]) -> TypeId {
+    arguments.iter().fold(1, |hash, argument| {
+        mix_type_id(hash, type_identity(*argument))
+    })
+}
+
 /// Whether a produced value may flow into an expected type.
 /// `Type::Array(0)` (empty or fully dynamic array) unifies with any array
-/// element type; precise element types must otherwise agree.
+/// element type; precise element types must otherwise agree. An erased
+/// unsubstituted parameter (`Type::Param`) is treated like `Unknown`.
 fn types_compatible(actual: Type, expected: Type) -> bool {
-    if actual == expected || actual == Type::Unknown || expected == Type::Unknown {
+    if actual == expected || is_dynamic(actual) || is_dynamic(expected) {
         return true;
     }
     match (actual, expected) {
@@ -2113,7 +2393,30 @@ fn types_compatible(actual: Type, expected: Type) -> bool {
                 (Type::Array(0), _) | (_, Type::Array(0))
             )
         }
+        // An uninstantiated generic (`Box`) accepts any instantiation of the
+        // same base type (`Box<Int>`), and vice versa.
+        (Type::Generic(base), Type::Instance(instance, _))
+        | (Type::Instance(instance, _), Type::Generic(base)) => base == instance,
         _ => false,
+    }
+}
+
+/// Tag mixed into an array's element identity. `Type::Array` stores the
+/// identity of its element; without a tag, `Array<Int>` and `Int` would have
+/// the same id and `&Int` would accept a borrow of `[Int]`.
+const ARRAY_ID_TAG: TypeId = 0x9E37_79B9;
+
+/// The identity of an array type: its element identity, mixed with a tag so
+/// it cannot collide with the element type itself.
+fn array_identity(element: Type) -> TypeId {
+    array_identity_from_id(type_identity(element))
+}
+
+fn array_identity_from_id(element: TypeId) -> TypeId {
+    if element == 0 {
+        0
+    } else {
+        mix_type_id(ARRAY_ID_TAG, element)
     }
 }
 
@@ -2134,9 +2437,11 @@ fn type_identity(ty: Type) -> TypeId {
         | Type::Channel(id)
         | Type::Optional(id)
         | Type::Generic(id)
+        | Type::Param(id)
         | Type::Function(id)
         | Type::ForeignHandle(id) => id,
         Type::Result(ok, error) => ok ^ error.rotate_left(1),
+        Type::Instance(base, arguments) => mix_type_id(base, arguments),
         Type::Unknown => 0,
     }
 }
@@ -2225,16 +2530,12 @@ fn instruction_value_types(instruction: &Instruction) -> Vec<(ValueId, Type)> {
             vec![(*has_next, Type::Bool), (*item, Type::Unknown)]
         }
         Instruction::ArrayNew { result, .. } => vec![(*result, Type::Array(0))],
-        Instruction::IndexGet { result, .. } => vec![(*result, Type::Unknown)],
+        Instruction::IndexGet { result, ty, .. } => vec![(*result, *ty)],
         Instruction::IndexSet { result, .. } => vec![(*result, Type::Unknown)],
-        Instruction::StructNew {
-            result, type_name, ..
-        } => vec![(*result, Type::Generic(stable_type_id(type_name)))],
-        Instruction::FieldGet { result, .. } => vec![(*result, Type::Unknown)],
+        Instruction::StructNew { result, ty, .. } => vec![(*result, *ty)],
+        Instruction::FieldGet { result, ty, .. } => vec![(*result, *ty)],
         Instruction::FieldSet { result, .. } => vec![(*result, Type::Unknown)],
-        Instruction::EnumNew {
-            result, type_name, ..
-        } => vec![(*result, Type::Generic(stable_type_id(type_name)))],
+        Instruction::EnumNew { result, ty, .. } => vec![(*result, *ty)],
         Instruction::VariantName { result, .. } => vec![(*result, Type::String)],
         Instruction::PatternIndex { result, .. } => vec![(*result, Type::Unknown)],
         Instruction::PatternField { result, .. } => vec![(*result, Type::Unknown)],
@@ -2403,6 +2704,7 @@ fn terminator_span(terminator: &Terminator) -> Span {
     }
 }
 
+#[derive(Clone)]
 struct Lowerer {
     functions: Vec<Function>,
     signatures: Vec<FunctionSignature>,
@@ -2414,6 +2716,14 @@ struct Lowerer {
     next_value: ValueId,
     in_function: bool,
     current_function_return_type: Option<Type>,
+    /// Types of every `return` expression seen in the function body being
+    /// lowered. `None` records a bare `return;`. Used to infer the return
+    /// type of functions declared without an annotation.
+    current_return_types: Vec<Option<Type>>,
+    /// Type parameters of the function body currently being lowered. Used to
+    /// resolve generic-body annotations and to reject non-concrete explicit
+    /// type arguments with a clear diagnostic.
+    current_type_parameters: Vec<String>,
     in_loop: bool,
     loop_depth: u32,
     /// Stack of loop depths captured at each lexically enclosing `try`.
@@ -2423,6 +2733,16 @@ struct Lowerer {
     source_name: String,
     type_names: std::collections::HashSet<String>,
     value_types: HashMap<ValueId, Type>,
+    /// Per-value struct field types for generic instantiations, whose
+    /// `Type::Instance` fingerprint cannot be decoded back into arguments.
+    value_field_types: HashMap<ValueId, HashMap<String, Type>>,
+    /// Concrete arguments behind each `Type::Instance` fingerprint, so an
+    /// inferred generic argument can be written back as an annotation.
+    instance_arguments: HashMap<(TypeId, TypeId), Vec<Type>>,
+    /// Concrete types behind `Type::Array`/`Type::Tuple` element ids.
+    identity_types: HashMap<TypeId, Type>,
+    /// Monotonic counter for synthesized conditional-expression temporaries.
+    conditional_counter: u32,
     /// Full program, for resolving struct/enum declarations by name.
     program: Program,
     /// Dotted path of the file currently being lowered ("" for the entry).
@@ -2438,6 +2758,43 @@ struct Lowerer {
     type_aliases: HashMap<String, String>,
     /// Registered `extern` (C ABI) declarations, keyed by NXL-visible name.
     externs: HashMap<String, ForeignFunction>,
+    /// Parameter types of each closure *value*, keyed by the `MakeClosure`
+    /// result. `CallIndirect` has no callee name, so this is the only way to
+    /// see a closure's declared parameters at its call site.
+    closure_parameters: HashMap<ValueId, Vec<Type>>,
+    /// Lexical borrow state: for each scope, the owner bindings currently
+    /// borrowed, the kind of borrow, and the scope that declared the owner.
+    /// The owner scope distinguishes shadowed bindings with the same name.
+    /// A borrow lasts until the end of the scope that created it.
+    borrow_scopes: Vec<HashMap<String, (BorrowKind, usize)>>,
+    /// Per-scope binding state, so shadowing restores the outer binding.
+    binding_states: Vec<HashMap<String, BindingState>>,
+}
+
+/// Ownership-related state of a binding.
+#[derive(Clone, Debug, Default)]
+struct BindingState {
+    /// Backed by an allocated cell because it was borrowed.
+    boxed: bool,
+    /// When the binding holds a reference: its target and mutability.
+    reference: Option<(Type, bool)>,
+    /// Explicitly moved out and not reassigned since.
+    moved: bool,
+}
+
+/// The kind of an active borrow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BorrowKind {
+    Immutable,
+    Mutable,
+}
+
+/// How a binding is being used, for borrow-conflict checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BindingUse {
+    Read,
+    Write,
+    Move,
 }
 
 /// One file of a multi-file lowering unit: its HIR plus module context.
@@ -2773,6 +3130,59 @@ impl Lowerer {
                 current_scope.insert(name.clone(), value_id);
                 let current_mutability = self.mutability_stack.last_mut().unwrap();
                 current_mutability.insert(name.clone(), *is_mut);
+                // Track whether the new binding is a reference; a borrow was
+                // registered by the initializer (if any).
+                self.declare_binding(name);
+                let declared_type = match annotation.as_deref() {
+                    Some(annotation) => match self.resolve_type(annotation) {
+                        Some(ty) => {
+                            self.register_annotation_type(annotation, ty);
+                            ty
+                        }
+                        None => self.value_type(value_id),
+                    },
+                    None => self.value_type(value_id),
+                };
+                if let Type::Reference(target, mutable) = declared_type {
+                    match self.value_type(value_id) {
+                        Type::Reference(value_target, value_mutable) => {
+                            if mutable && !value_mutable {
+                                return Err(Diagnostic::error(
+                                    "NXL2015",
+                                    format!(
+                                        "binding '{name}' is declared as a mutable reference but is initialised with an immutable borrow"
+                                    ),
+                                    *span,
+                                )
+                                .with_help("borrow the owner mutably with 'borrow mut' or 'ref mut'"));
+                            }
+                            if target != value_target {
+                                return Err(Diagnostic::error(
+                                    "NXL2001",
+                                    format!(
+                                        "binding '{name}' borrows a different type than its annotation"
+                                    ),
+                                    *span,
+                                ));
+                            }
+                        }
+                        Type::Unknown => {}
+                        other => {
+                            return Err(Diagnostic::error(
+                                "NXL2001",
+                                format!(
+                                    "binding '{name}' is declared as a reference but is initialised with {other:?}"
+                                ),
+                                *span,
+                            ));
+                        }
+                    }
+                    let target = self.type_by_identity(target).unwrap_or(Type::Unknown);
+                    self.record_identity(target);
+                    if let Some(state) = self.binding_state_mut(name) {
+                        state.reference = Some((target, mutable));
+                    }
+                }
                 Ok(())
             }
             Statement::Return { value, span } => {
@@ -2798,6 +3208,24 @@ impl Lowerer {
                     .as_ref()
                     .map(|value| self.expression(value))
                     .transpose()?;
+                // Record the observed return types so an unannotated function
+                // can infer its result type after the body is lowered.
+                self.current_return_types
+                    .push(value.map(|value| self.value_type(value)));
+
+                // References may not escape through a return value: the
+                // borrowed owner ends before the caller resumes.
+                if let Some(value_id) = value {
+                    let actual = self.value_type(value_id);
+                    if self.type_contains_reference(actual, 0) {
+                        return Err(Diagnostic::error(
+                            "NXL2017",
+                            "cannot return a reference: it would outlive the value it borrows",
+                            *span,
+                        )
+                        .with_help("return the owned value instead, or let the caller borrow it"));
+                    }
+                }
 
                 // Validate return type matches function's declared return type
                 if let Some(expected_return_type) = self.current_function_return_type {
@@ -2864,7 +3292,7 @@ impl Lowerer {
             } => {
                 let condition_value = self.expression(condition)?;
                 let condition_type = self.value_type(condition_value);
-                if condition_type != Type::Bool && condition_type != Type::Unknown {
+                if condition_type != Type::Bool && !is_dynamic(condition_type) {
                     return Err(Diagnostic::error(
                         "NXL2001",
                         format!("if condition has type {condition_type:?}, expected Bool"),
@@ -2875,6 +3303,8 @@ impl Lowerer {
                 let saved_instructions = std::mem::take(&mut self.instructions);
                 let then_saved_scope = self.scope_stack.clone();
                 let then_saved_mutability = self.mutability_stack.clone();
+                let then_saved_borrow = self.borrow_scopes.clone();
+                let then_saved_binding = self.binding_states.clone();
                 let then_saved_values = self.values.clone();
                 let then_saved_mutability_map = self.mutability.clone();
                 self.push_scope();
@@ -2886,6 +3316,8 @@ impl Lowerer {
                 self.instructions = saved_instructions.clone();
                 self.scope_stack = then_saved_scope;
                 self.mutability_stack = then_saved_mutability;
+                self.borrow_scopes = then_saved_borrow;
+                self.binding_states = then_saved_binding;
                 self.values = then_saved_values;
                 self.mutability = then_saved_mutability_map;
 
@@ -2893,6 +3325,8 @@ impl Lowerer {
                     Some(branch) => {
                         let else_saved_scope = self.scope_stack.clone();
                         let else_saved_mutability = self.mutability_stack.clone();
+                        let else_saved_borrow = self.borrow_scopes.clone();
+                        let else_saved_binding = self.binding_states.clone();
                         let else_saved_values = self.values.clone();
                         let else_saved_mutability_map = self.mutability.clone();
                         self.push_scope();
@@ -2911,6 +3345,8 @@ impl Lowerer {
                         self.instructions = saved_instructions;
                         self.scope_stack = else_saved_scope;
                         self.mutability_stack = else_saved_mutability;
+                        self.borrow_scopes = else_saved_borrow;
+                        self.binding_states = else_saved_binding;
                         self.values = else_saved_values;
                         self.mutability = else_saved_mutability_map;
                         Some(else_instructions)
@@ -2956,6 +3392,8 @@ impl Lowerer {
                         )
                     })?;
                 let param_types = signature.parameters;
+                let parameter_annotations = signature.parameter_annotations.clone();
+                let return_annotation = signature.return_annotation.clone();
                 let return_type = signature.return_type;
 
                 // Validate function body can be lowered
@@ -2980,8 +3418,16 @@ impl Lowerer {
                 let saved_mutability = std::mem::take(&mut self.mutability);
                 let saved_function_has_return = self.function_has_return;
                 let saved_value_types = std::mem::take(&mut self.value_types);
+                let saved_return_types =
+                    std::mem::replace(&mut self.current_return_types, Vec::new());
                 let saved_try_stack = std::mem::take(&mut self.try_stack);
                 let saved_loop_depth = self.loop_depth;
+                let saved_borrow_scopes = std::mem::take(&mut self.borrow_scopes);
+                let saved_binding_states = std::mem::take(&mut self.binding_states);
+                let saved_type_parameters = std::mem::replace(
+                    &mut self.current_type_parameters,
+                    function.type_parameters.clone(),
+                );
                 // A nested function body is a fresh control-flow region: handler
                 // boundaries and loop nesting of the enclosing scope do not apply.
                 self.loop_depth = 0;
@@ -2990,6 +3436,8 @@ impl Lowerer {
                 self.instructions = Vec::new();
                 self.scope_stack = vec![HashMap::new()];
                 self.mutability_stack = vec![HashMap::new()];
+                self.borrow_scopes = vec![HashMap::new()];
+                self.binding_states = vec![HashMap::new()];
                 self.values = HashMap::new();
                 self.mutability = HashMap::new();
                 self.in_function = true;
@@ -3011,12 +3459,26 @@ impl Lowerer {
                         span,
                     };
                     self.record_value_type(&param_instruction);
+                    if let Some(annotation) = parameter_annotations
+                        .get(index)
+                        .and_then(|annotation| annotation.as_deref())
+                    {
+                        self.register_annotation_type(annotation, *param_type);
+                    }
                     parameter_instructions.push(param_instruction);
                     self.values.insert(param_name.clone(), value_id);
                     self.scope_stack
                         .last_mut()
                         .unwrap()
                         .insert(param_name.clone(), value_id);
+                    self.declare_binding(param_name);
+                    if let Type::Reference(target, mutable) = *param_type {
+                        let target = self.type_by_identity(target).unwrap_or(Type::Unknown);
+                        self.record_identity(target);
+                        if let Some(state) = self.binding_state_mut(param_name) {
+                            state.reference = Some((target, mutable));
+                        }
+                    }
                     // Parameters are immutable by default
                     self.mutability.insert(param_name.clone(), false);
                     self.mutability_stack
@@ -3026,20 +3488,51 @@ impl Lowerer {
                 }
                 self.instructions = parameter_instructions;
 
+                // Register the declared contract before the body: field
+                // lookup and inference read instance arguments back from it.
+                if let Some(annotation) = return_annotation.as_deref() {
+                    self.register_annotation_type(annotation, return_type);
+                }
+
                 // Lower function body
                 for stmt in &body.statements {
                     self.lower_statement(stmt)?;
                 }
 
+                // Infer the result type for functions declared without a
+                // return annotation. Annotated functions keep their contract.
+                let effective_return_type = if signature.return_annotation.is_none() {
+                    infer_return_type(&self.current_return_types).map_err(|()| {
+                        Diagnostic::error(
+                            "NXL2001",
+                            format!(
+                                "function '{function_name}' returns values of inconsistent types"
+                            ),
+                            function.span,
+                        )
+                    })?
+                } else {
+                    return_type
+                };
+                if signature.return_annotation.is_none() {
+                    if let Some(stored) = self
+                        .signatures
+                        .iter_mut()
+                        .find(|stored| stored.name == *function_name)
+                    {
+                        stored.return_type = effective_return_type;
+                    }
+                }
+
                 if matches!(
-                    return_type,
+                    effective_return_type,
                     Type::Int | Type::Float | Type::Bool | Type::String
                 ) && !Self::block_returns_on_all_paths(body)
                 {
                     return Err(Diagnostic::error(
                         "NXL2001",
                         format!(
-                            "function '{function_name}' declared to return {return_type:?} must return a value on all paths"
+                            "function '{function_name}' returns {effective_return_type:?} and must return a value on all paths"
                         ),
                         function.span,
                     ));
@@ -3050,7 +3543,7 @@ impl Lowerer {
                 self.functions.push(create_function(
                     function_name.clone(),
                     param_types,
-                    return_type,
+                    effective_return_type,
                     func_instructions,
                     function.span,
                     &self.source_name,
@@ -3066,8 +3559,12 @@ impl Lowerer {
                 self.current_function_return_type = None;
                 self.function_has_return = saved_function_has_return;
                 self.value_types = saved_value_types;
+                self.current_return_types = saved_return_types;
                 self.try_stack = saved_try_stack;
                 self.loop_depth = saved_loop_depth;
+                self.borrow_scopes = saved_borrow_scopes;
+                self.binding_states = saved_binding_states;
+                self.current_type_parameters = saved_type_parameters;
 
                 Ok(())
             }
@@ -3094,6 +3591,8 @@ impl Lowerer {
                 let saved_instructions = std::mem::take(&mut self.instructions);
                 let saved_scope = self.scope_stack.clone();
                 let saved_mutability_scope = self.mutability_stack.clone();
+                let saved_borrow_scope = self.borrow_scopes.clone();
+                let saved_binding_scope = self.binding_states.clone();
                 let saved_values = self.values.clone();
                 let saved_mutability = self.mutability.clone();
                 self.push_scope();
@@ -3104,6 +3603,7 @@ impl Lowerer {
                     .last_mut()
                     .unwrap()
                     .insert(binding.clone(), binding_id);
+                self.declare_binding(binding);
                 self.mutability.insert(binding.clone(), false);
                 self.mutability_stack
                     .last_mut()
@@ -3134,6 +3634,8 @@ impl Lowerer {
                 self.instructions = saved_instructions;
                 self.scope_stack = saved_scope;
                 self.mutability_stack = saved_mutability_scope;
+                self.borrow_scopes = saved_borrow_scope;
+                self.binding_states = saved_binding_scope;
                 self.values = saved_values;
                 self.mutability = saved_mutability;
                 self.in_loop = saved_in_loop;
@@ -3164,7 +3666,7 @@ impl Lowerer {
                 let saved_instructions = std::mem::take(&mut self.instructions);
                 let condition_value = self.expression(condition)?;
                 let condition_type = self.value_type(condition_value);
-                if condition_type != Type::Bool && condition_type != Type::Unknown {
+                if condition_type != Type::Bool && !is_dynamic(condition_type) {
                     return Err(Diagnostic::error(
                         "NXL2001",
                         format!("while condition has type {condition_type:?}, expected Bool"),
@@ -3176,6 +3678,8 @@ impl Lowerer {
 
                 let saved_in_loop = self.in_loop;
                 let saved_loop_depth = self.loop_depth;
+                let saved_borrow_scope = self.borrow_scopes.clone();
+                let saved_binding_scope = self.binding_states.clone();
                 self.in_loop = true;
                 self.loop_depth += 1;
                 let saved_instructions = std::mem::take(&mut self.instructions);
@@ -3184,6 +3688,8 @@ impl Lowerer {
                 }
                 let loop_body = std::mem::take(&mut self.instructions);
                 self.instructions = saved_instructions;
+                self.borrow_scopes = saved_borrow_scope;
+                self.binding_states = saved_binding_scope;
                 self.in_loop = saved_in_loop;
                 self.loop_depth = saved_loop_depth;
                 self.instructions.push(Instruction::Loop {
@@ -3197,6 +3703,8 @@ impl Lowerer {
             Statement::Loop { body, span } => {
                 let saved_in_loop = self.in_loop;
                 let saved_loop_depth = self.loop_depth;
+                let saved_borrow_scope = self.borrow_scopes.clone();
+                let saved_binding_scope = self.binding_states.clone();
                 self.in_loop = true;
                 self.loop_depth += 1;
                 let saved_instructions = std::mem::take(&mut self.instructions);
@@ -3205,6 +3713,8 @@ impl Lowerer {
                 }
                 let loop_body = std::mem::take(&mut self.instructions);
                 self.instructions = saved_instructions;
+                self.borrow_scopes = saved_borrow_scope;
+                self.binding_states = saved_binding_scope;
                 self.in_loop = saved_in_loop;
                 self.loop_depth = saved_loop_depth;
                 self.instructions.push(Instruction::Loop {
@@ -3229,16 +3739,19 @@ impl Lowerer {
                 // no match runs nothing.
                 let mut else_branch: Option<Vec<Instruction>> = None;
                 for case in cases.iter().rev() {
-                    self.push_scope();
-                    // Sibling cases must not see each other's bindings.
+                    // Sibling cases must not see each other's bindings or
+                    // borrows: snapshot before the case scope and restore after.
                     let saved_values = self.values.clone();
                     let saved_mutability = self.mutability.clone();
+                    let saved_borrow = self.borrow_scopes.clone();
+                    let saved_binding = self.binding_states.clone();
+                    self.push_scope();
                     let mut test_id = self.lower_pattern_test(&case.pattern, value_id)?;
 
                     if let Some(guard) = &case.guard {
                         let guard_id = self.expression(guard)?;
                         let guard_type = self.value_type(guard_id);
-                        if guard_type != Type::Bool && guard_type != Type::Unknown {
+                        if guard_type != Type::Bool && !is_dynamic(guard_type) {
                             return Err(Diagnostic::error(
                                 "NXL2001",
                                 format!("match guard has type {guard_type:?}, expected Bool"),
@@ -3272,6 +3785,8 @@ impl Lowerer {
                     self.values = saved_values;
                     self.mutability = saved_mutability;
                     self.pop_scope();
+                    self.borrow_scopes = saved_borrow;
+                    self.binding_states = saved_binding;
                 }
                 // Emit the outermost if; a trailing bare fallthrough needs no
                 // code (no match runs nothing).
@@ -3347,6 +3862,8 @@ impl Lowerer {
                 let saved_instructions = std::mem::take(&mut self.instructions);
                 let saved_scope = self.scope_stack.clone();
                 let saved_mutability_scope = self.mutability_stack.clone();
+                let saved_borrow_scope = self.borrow_scopes.clone();
+                let saved_binding_scope = self.binding_states.clone();
                 let saved_values = self.values.clone();
                 let saved_mutability = self.mutability.clone();
 
@@ -3375,6 +3892,8 @@ impl Lowerer {
                     }
                     self.scope_stack = saved_scope.clone();
                     self.mutability_stack = saved_mutability_scope.clone();
+                    self.borrow_scopes = saved_borrow_scope.clone();
+                    self.binding_states = saved_binding_scope.clone();
                     self.values = saved_values.clone();
                     self.mutability = saved_mutability.clone();
                     self.push_scope();
@@ -3383,6 +3902,7 @@ impl Lowerer {
                         .last_mut()
                         .unwrap()
                         .insert(catch.name.clone(), tmp);
+                    self.declare_binding(&catch.name);
                     self.mutability.insert(catch.name.clone(), false);
                     self.mutability_stack
                         .last_mut()
@@ -3411,6 +3931,8 @@ impl Lowerer {
                     Some(block) => {
                         self.scope_stack = saved_scope.clone();
                         self.mutability_stack = saved_mutability_scope.clone();
+                        self.borrow_scopes = saved_borrow_scope.clone();
+                        self.binding_states = saved_binding_scope.clone();
                         self.values = saved_values.clone();
                         self.mutability = saved_mutability.clone();
                         self.push_scope();
@@ -3426,6 +3948,8 @@ impl Lowerer {
                 self.instructions = saved_instructions;
                 self.scope_stack = saved_scope;
                 self.mutability_stack = saved_mutability_scope;
+                self.borrow_scopes = saved_borrow_scope;
+                self.binding_states = saved_binding_scope;
                 self.values = saved_values;
                 self.mutability = saved_mutability;
                 self.try_stack.pop();
@@ -3491,10 +4015,23 @@ impl Lowerer {
     fn push_scope(&mut self) {
         self.scope_stack.push(HashMap::new());
         self.mutability_stack.push(HashMap::new());
+        self.borrow_scopes.push(HashMap::new());
+        self.binding_states.push(HashMap::new());
     }
 
     fn resolve_type(&self, annotation: &str) -> Option<Type> {
-        type_from_name(annotation, &self.type_aliases).or_else(|| {
+        type_from_name_with(
+            annotation,
+            &self.type_aliases,
+            &self.current_type_parameters,
+        )
+        .or_else(|| {
+            self.current_type_parameters
+                .iter()
+                .any(|parameter| parameter == annotation)
+                .then(|| Type::Param(stable_type_id(annotation)))
+        })
+        .or_else(|| {
             let qualified = self.resolve_type_alias(annotation);
             self.type_names
                 .contains(&qualified)
@@ -3579,6 +4116,234 @@ impl Lowerer {
             return own;
         }
         name.to_owned()
+    }
+
+    /// Resolve a fully substituted annotation to a concrete type. Used for
+    /// instantiated generic signatures, whose annotations were canonicalized
+    /// by HIR in the declaring file's namespace.
+    fn resolve_concrete_annotation(&self, annotation: &str) -> Option<Type> {
+        type_from_name_with(annotation, &self.type_aliases, &[])
+            .or_else(|| {
+                self.type_names
+                    .contains(annotation)
+                    .then(|| Type::Generic(stable_type_id(annotation)))
+            })
+            .or_else(|| {
+                let qualified = self.resolve_type_alias(annotation);
+                self.type_names
+                    .contains(&qualified)
+                    .then(|| Type::Generic(stable_type_id(&qualified)))
+            })
+    }
+
+    /// Validate and resolve one explicitly supplied type argument.
+    fn resolve_type_argument(&self, written: &str, span: Span) -> Result<Type, Diagnostic> {
+        let written = written.trim();
+        if written.is_empty() {
+            return Err(Diagnostic::error(
+                "NXL2001",
+                "empty generic type argument",
+                span,
+            ));
+        }
+        if self
+            .current_type_parameters
+            .iter()
+            .any(|parameter| parameter == written)
+        {
+            return Err(Diagnostic::error(
+                "NXL2014",
+                format!(
+                    "type parameter '{written}' cannot be used as an explicit type argument yet"
+                ),
+                span,
+            )
+            .with_help("explicit type arguments must name concrete types in this phase"));
+        }
+        if let Some(open) = written.find('<') {
+            if !written.ends_with('>') {
+                return Err(Diagnostic::error(
+                    "NXL2004",
+                    format!("unknown type '{written}' in generic argument"),
+                    span,
+                ));
+            }
+            let base = &written[..open];
+            let arguments = split_type_arguments(&written[open + 1..written.len() - 1]);
+            if arguments.iter().any(|argument| argument.trim().is_empty()) {
+                return Err(Diagnostic::error(
+                    "NXL2001",
+                    format!("type '{written}' has an empty type argument"),
+                    span,
+                ));
+            }
+            if let Some(expected) = builtin_type_arity(base) {
+                if expected != arguments.len() {
+                    return Err(Diagnostic::error(
+                        "NXL2001",
+                        format!(
+                            "type '{base}' expects {expected} type argument(s), found {}",
+                            arguments.len()
+                        ),
+                        span,
+                    ));
+                }
+            } else if is_primitive_type_name(base) {
+                return Err(Diagnostic::error(
+                    "NXL2001",
+                    format!("type '{base}' is not generic"),
+                    span,
+                ));
+            } else {
+                let qualified = self.resolve_type_alias(base);
+                match find_type_declaration(&self.program, &qualified) {
+                    Some(declaration) => {
+                        let expected = declaration.type_parameters.len();
+                        if expected == 0 {
+                            return Err(Diagnostic::error(
+                                "NXL2001",
+                                format!("type '{base}' is not generic"),
+                                span,
+                            ));
+                        }
+                        if expected != arguments.len() {
+                            return Err(Diagnostic::error(
+                                "NXL2001",
+                                format!(
+                                    "type '{base}' expects {expected} type argument(s), found {}",
+                                    arguments.len()
+                                ),
+                                span,
+                            ));
+                        }
+                    }
+                    None => {
+                        return Err(Diagnostic::error(
+                            "NXL2004",
+                            format!("unknown type '{base}' in generic argument"),
+                            span,
+                        ));
+                    }
+                }
+            }
+            for argument in &arguments {
+                self.resolve_type_argument(argument, span)?;
+            }
+            return self.resolve_concrete_annotation(written).ok_or_else(|| {
+                Diagnostic::error(
+                    "NXL2004",
+                    format!("unknown type '{written}' in generic argument"),
+                    span,
+                )
+            });
+        }
+
+        if let Some(expected) = builtin_type_arity(written) {
+            return Err(Diagnostic::error(
+                "NXL2001",
+                format!("type '{written}' expects {expected} type argument(s), found 0"),
+                span,
+            ));
+        }
+        let qualified = self.resolve_type_alias(written);
+        if let Some(declaration) = find_type_declaration(&self.program, &qualified) {
+            if !declaration.type_parameters.is_empty() {
+                return Err(Diagnostic::error(
+                    "NXL2001",
+                    format!(
+                        "type '{written}' expects {} type argument(s), found 0",
+                        declaration.type_parameters.len()
+                    ),
+                    span,
+                ));
+            }
+        }
+        self.resolve_concrete_annotation(written).ok_or_else(|| {
+            Diagnostic::error(
+                "NXL2004",
+                format!("unknown type '{written}' in generic argument"),
+                span,
+            )
+        })
+    }
+
+    /// Substitute explicit type arguments into a generic function signature.
+    /// Returns the instantiated parameter types, the instantiated return
+    /// type, and the resolved type arguments (stored on the NIR call).
+    fn instantiate_generic_signature(
+        &self,
+        signature: &FunctionSignature,
+        type_arguments: &[String],
+        display: &str,
+        span: Span,
+    ) -> Result<(Vec<Type>, Type, Vec<Type>), Diagnostic> {
+        let expected = signature.type_parameters.len();
+        if type_arguments.len() != expected {
+            return Err(Diagnostic::error(
+                "NXL2001",
+                format!(
+                    "generic function '{display}' expects {expected} type argument(s), found {}",
+                    type_arguments.len()
+                ),
+                span,
+            ));
+        }
+        let resolved_arguments = type_arguments
+            .iter()
+            .map(|argument| self.resolve_type_argument(argument, span))
+            .collect::<Result<Vec<_>, _>>()?;
+        let bindings = signature
+            .type_parameters
+            .iter()
+            .cloned()
+            .zip(type_arguments.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        let erased_bindings = signature
+            .type_parameters
+            .iter()
+            .zip(type_arguments.iter())
+            .zip(resolved_arguments.iter())
+            .map(|((parameter, written), ty)| (stable_type_id(parameter), (*ty, written.clone())))
+            .collect::<HashMap<_, _>>();
+
+        let mut parameters = Vec::with_capacity(signature.parameters.len());
+        for (index, (_, erased)) in signature.parameters.iter().enumerate() {
+            let ty =
+                match signature
+                    .parameter_annotations
+                    .get(index)
+                    .and_then(|annotation| annotation.as_deref())
+                {
+                    Some(annotation) => {
+                        let substituted = substitute_type_parameters(annotation, &bindings);
+                        self.resolve_concrete_annotation(&substituted)
+                            .ok_or_else(|| {
+                                Diagnostic::error(
+                            "NXL2004",
+                            format!("unknown type '{substituted}' in the signature of '{display}'"),
+                            span,
+                        )
+                            })?
+                    }
+                    None => substitute_erased_type_parameters(*erased, &erased_bindings),
+                };
+            parameters.push(ty);
+        }
+        let return_type = match signature.return_annotation.as_deref() {
+            Some(annotation) => {
+                let substituted = substitute_type_parameters(annotation, &bindings);
+                self.resolve_concrete_annotation(&substituted)
+                    .ok_or_else(|| {
+                        Diagnostic::error(
+                            "NXL2004",
+                            format!("unknown type '{substituted}' in the signature of '{display}'"),
+                            span,
+                        )
+                    })?
+            }
+            None => substitute_erased_type_parameters(signature.return_type, &erased_bindings),
+        };
+        Ok((parameters, return_type, resolved_arguments))
     }
 
     /// Resolve a bare function name to the qualified callee: a visible
@@ -3669,6 +4434,7 @@ impl Lowerer {
             result,
             callee: callee.to_owned(),
             arguments: lowered_arguments,
+            type_arguments: Vec::new(),
             return_type,
             span,
         };
@@ -3680,15 +4446,515 @@ impl Lowerer {
     fn pop_scope(&mut self) {
         self.scope_stack.pop();
         self.mutability_stack.pop();
+        self.borrow_scopes.pop();
+        self.binding_states.pop();
+    }
+
+    /// Ownership state of the innermost binding called `name`.
+    fn binding_state(&self, name: &str) -> Option<&BindingState> {
+        self.binding_states
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+    }
+
+    fn binding_state_mut(&mut self, name: &str) -> Option<&mut BindingState> {
+        for scope in self.binding_states.iter_mut().rev() {
+            if scope.contains_key(name) {
+                return scope.get_mut(name);
+            }
+        }
+        None
+    }
+
+    fn declare_binding(&mut self, name: &str) {
+        self.binding_states
+            .last_mut()
+            .expect("a scope is always active")
+            .insert(name.to_owned(), BindingState::default());
+    }
+
+    /// Whether `ty` is, or structurally contains, a reference type. References
+    /// are lexical: they may be read, written and passed as arguments, but
+    /// never returned or stored somewhere that outlives their borrow.
+    fn type_contains_reference(&self, ty: Type, depth: usize) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        match ty {
+            Type::Reference(..) => true,
+            Type::Array(id)
+            | Type::Tuple(id)
+            | Type::Map(id)
+            | Type::Optional(id)
+            | Type::Task(id)
+            | Type::Channel(id)
+            | Type::Function(id) => self
+                .type_by_identity(id)
+                .map(|inner| self.type_contains_reference(inner, depth + 1))
+                .unwrap_or(false),
+            Type::Result(ok, error) => {
+                let check = |id| {
+                    self.type_by_identity(id)
+                        .map(|inner| self.type_contains_reference(inner, depth + 1))
+                        .unwrap_or(false)
+                };
+                check(ok) || check(error)
+            }
+            _ => false,
+        }
+    }
+
+    /// Reject a reference argument whose destination slot cannot carry the
+    /// borrow's provenance.
+    ///
+    /// Reference tracking is by type: a parameter declared `&T`/`&mut T` keeps
+    /// the borrow visible to the checks on the callee's `return`, field,
+    /// element and closure paths. An unannotated (`Unknown`) or type-parameter
+    /// (`Param`) slot does not, and a call whose target cannot be resolved
+    /// statically has no signature at all, so in those cases the reference
+    /// would leave the caller's tracking and the program is rejected rather
+    /// than silently accepted. This is a lexical constraint, not a lifetime
+    /// analysis.
+    fn check_reference_argument(
+        &self,
+        display: &str,
+        index: usize,
+        argument_type: Type,
+        parameter_type: Option<Type>,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        if !self.type_contains_reference(argument_type, 0) {
+            return Ok(());
+        }
+        if matches!(parameter_type, Some(Type::Reference(..))) {
+            return Ok(());
+        }
+        let reason = match parameter_type {
+            Some(parameter_type) => format!(
+                "parameter {} of '{display}' is {parameter_type:?}, which does not name a reference type",
+                index + 1
+            ),
+            None => format!("'{display}' has no statically known parameter types"),
+        };
+        Err(Diagnostic::error(
+            "NXL2017",
+            format!("cannot pass a reference where it cannot be tracked: {reason}"),
+            span,
+        )
+        .with_help("declare the parameter as `&T` (or `&mut T` with `borrow mut`), or pass the owned value"))
+    }
+
+    /// The signature of `method` for a receiver whose static type names a
+    /// declared type. `None` when the receiver type or the method cannot be
+    /// resolved, which is the normal case for dynamic dispatch.
+    fn method_signature(&self, receiver_type: Type, method: &str) -> Option<&FunctionSignature> {
+        let base = match receiver_type {
+            Type::Generic(id) | Type::Struct(id) | Type::Enum(id) => id,
+            Type::Instance(base, _) => base,
+            _ => return None,
+        };
+        let name = self
+            .program
+            .statements
+            .iter()
+            .find_map(|statement| {
+                let declaration = match statement {
+                    Statement::TypeDeclaration(declaration) => declaration,
+                    Statement::Export(inner) => match inner.as_ref() {
+                        Statement::TypeDeclaration(declaration) => declaration,
+                        _ => return None,
+                    },
+                    _ => return None,
+                };
+                (stable_type_id(&declaration.name) == base).then(|| declaration.name.clone())
+            })?;
+        let qualified = format!("{name}#{method}");
+        self.signatures
+            .iter()
+            .find(|signature| signature.name == qualified)
+    }
+
+    /// Check the arguments of a call through a method or a closure value, whose
+    /// parameter types are known only when the target resolves statically.
+    fn check_dynamic_arguments(
+        &mut self,
+        display: &str,
+        receiver_type: Type,
+        method: &str,
+        arguments: &[Expression],
+        lowered: &[ValueId],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let parameters: Option<Vec<Type>> = self
+            .method_signature(receiver_type, method)
+            .map(|signature| signature.parameters.iter().map(|(_, ty)| *ty).collect());
+        for (index, (argument, value)) in arguments.iter().zip(lowered.iter()).enumerate() {
+            let parameter_type = parameters.as_ref().and_then(|list| list.get(index).copied());
+            self.check_reference_argument(
+                display,
+                index,
+                self.value_type(*value),
+                parameter_type,
+                argument.span,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Check the arguments of a call through a function *value* (`f(..)` where
+    /// `f` is a closure, not a named function). The parameter types are known
+    /// when the value was produced by a closure literal in this unit; anything
+    /// else is an unresolved target.
+    fn check_indirect_arguments(
+        &mut self,
+        display: &str,
+        callee: ValueId,
+        arguments: &[Expression],
+        lowered: &[ValueId],
+    ) -> Result<(), Diagnostic> {
+        let parameters = self.closure_parameters.get(&callee).cloned();
+        for (index, (argument, value)) in arguments.iter().zip(lowered.iter()).enumerate() {
+            let parameter_type = parameters.as_ref().and_then(|list| list.get(index).copied());
+            self.check_reference_argument(
+                display,
+                index,
+                self.value_type(*value),
+                parameter_type,
+                argument.span,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Active borrow kind for `name`, if any. A mutable borrow wins. Borrows
+    /// recorded for a shadowed binding of the same name are ignored.
+    fn active_borrow(&self, name: &str) -> Option<BorrowKind> {
+        let owner_scope = self.binding_scope_index(name)?;
+        let mut found = None;
+        for scope in &self.borrow_scopes {
+            match scope.get(name) {
+                Some((BorrowKind::Mutable, borrowed_scope)) if *borrowed_scope == owner_scope => {
+                    return Some(BorrowKind::Mutable)
+                }
+                Some((BorrowKind::Immutable, borrowed_scope)) if *borrowed_scope == owner_scope => {
+                    found = Some(BorrowKind::Immutable)
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
+    /// Index of the innermost active scope that declares `name`.
+    fn binding_scope_index(&self, name: &str) -> Option<usize> {
+        self.scope_stack
+            .iter()
+            .rposition(|scope| scope.contains_key(name))
+    }
+
+    /// Record a new borrow of `name`, rejecting conflicting borrows.
+    fn register_borrow(
+        &mut self,
+        name: &str,
+        kind: BorrowKind,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        if self
+            .binding_state(name)
+            .map(|state| state.moved)
+            .unwrap_or(false)
+        {
+            return Err(Diagnostic::error(
+                "NXL2016",
+                format!("cannot borrow '{name}' after it was moved"),
+                span,
+            ));
+        }
+        match (self.active_borrow(name), kind) {
+            (Some(BorrowKind::Mutable), _) => {
+                return Err(Diagnostic::error(
+                    "NXL2015",
+                    format!("cannot borrow '{name}' while it is mutably borrowed"),
+                    span,
+                ));
+            }
+            (Some(BorrowKind::Immutable), BorrowKind::Mutable) => {
+                return Err(Diagnostic::error(
+                    "NXL2015",
+                    format!("cannot mutably borrow '{name}' while it is already borrowed"),
+                    span,
+                ));
+            }
+            _ => {}
+        }
+        let owner_scope = self.binding_scope_index(name).unwrap_or(0);
+        self.borrow_scopes
+            .last_mut()
+            .expect("a scope is always active")
+            .insert(name.to_owned(), (kind, owner_scope));
+        Ok(())
+    }
+
+    /// Reject uses that conflict with an active borrow or a previous move.
+    fn check_binding_use(
+        &self,
+        name: &str,
+        usage: BindingUse,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        if self
+            .binding_state(name)
+            .map(|state| state.moved)
+            .unwrap_or(false)
+        {
+            return Err(
+                Diagnostic::error("NXL2016", format!("use of moved value '{name}'"), span)
+                    .with_help("reassign the binding or avoid moving it"),
+            );
+        }
+        self.check_borrow_conflict(name, usage, span)
+    }
+
+    /// Borrow-only half of `check_binding_use`. Assignment uses this so that
+    /// reassigning a moved binding is allowed: it reinitialises the binding.
+    fn check_borrow_conflict(
+        &self,
+        name: &str,
+        usage: BindingUse,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        match (self.active_borrow(name), usage) {
+            (Some(BorrowKind::Mutable), _) => Err(Diagnostic::error(
+                "NXL2015",
+                format!("cannot use '{name}' while it is mutably borrowed"),
+                span,
+            )),
+            (Some(BorrowKind::Immutable), BindingUse::Write) => Err(Diagnostic::error(
+                "NXL2015",
+                format!("cannot assign to '{name}' while it is borrowed"),
+                span,
+            )),
+            (Some(BorrowKind::Immutable), BindingUse::Move) => Err(Diagnostic::error(
+                "NXL2015",
+                format!("cannot move '{name}' while it is borrowed"),
+                span,
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// The logical type of a binding (the target type when the binding is
+    /// backed by a borrow cell).
+    fn binding_type(&self, name: &str) -> Type {
+        if let Some((target, mutable)) = self.binding_state(name).and_then(|state| state.reference)
+        {
+            return Type::Reference(type_identity(target), mutable);
+        }
+        let Some(value) = self.lookup_value(name) else {
+            return Type::Unknown;
+        };
+        if self
+            .binding_state(name)
+            .map(|state| state.boxed)
+            .unwrap_or(false)
+        {
+            if let Type::Reference(target, _) = self.value_type(value) {
+                return self.type_by_identity(target).unwrap_or(Type::Unknown);
+            }
+        }
+        self.value_type(value)
+    }
+
+    /// Ensure `name` is backed by an allocated cell so a borrow can alias the
+    /// binding rather than a copy. Returns the cell value.
+    fn ensure_boxed(&mut self, name: &str, span: Span) -> Result<ValueId, Diagnostic> {
+        let value = self.lookup_value(name).ok_or_else(|| {
+            Diagnostic::error("NXL2002", format!("use of undeclared name '{name}'"), span)
+        })?;
+        if self
+            .binding_state(name)
+            .map(|state| state.boxed)
+            .unwrap_or(false)
+        {
+            return Ok(value);
+        }
+        let ty = self.value_type(value);
+        let cell = self.allocate();
+        let allocate = Instruction::Allocate {
+            result: cell,
+            ty,
+            span,
+        };
+        self.record_value_type(&allocate);
+        self.instructions.push(allocate);
+        self.instructions.push(Instruction::StoreMemory {
+            pointer: cell,
+            value,
+            span,
+        });
+        self.instructions.push(Instruction::Store {
+            name: name.to_owned(),
+            value: cell,
+            span,
+        });
+        self.values.insert(name.to_owned(), cell);
+        for scope in self.scope_stack.iter_mut().rev() {
+            if scope.contains_key(name) {
+                scope.insert(name.to_owned(), cell);
+                break;
+            }
+        }
+        if let Some(state) = self.binding_state_mut(name) {
+            state.boxed = true;
+        }
+        Ok(cell)
+    }
+
+    /// Record the top-level type behind an identity so reference targets can
+    /// be recovered later.
+    fn record_identity(&mut self, ty: Type) -> TypeId {
+        let id = type_identity(ty);
+        self.identity_types.entry(id).or_insert(ty);
+        id
+    }
+
+    /// Resolve the target of a reference type.
+    fn reference_target(&self, ty: Type) -> Option<(Type, bool)> {
+        match ty {
+            Type::Reference(id, mutable) => {
+                let target = self.type_by_identity(id)?;
+                Some((target, mutable))
+            }
+            _ => None,
+        }
+    }
+
+    /// Type of a `*reference` read.
+    fn deref_type(&self, reference: ValueId, span: Span) -> Result<Type, Diagnostic> {
+        let ty = self.value_type(reference);
+        if let Some((target, _)) = self.reference_target(ty) {
+            return Ok(target);
+        }
+        if is_dynamic(ty) {
+            return Ok(Type::Unknown);
+        }
+        Err(Diagnostic::error(
+            "NXL2001",
+            format!("cannot dereference a value of type {ty:?}"),
+            span,
+        ))
+    }
+
+    /// Emit a read through a reference value.
+    fn lower_reference_read(
+        &mut self,
+        reference: ValueId,
+        span: Span,
+    ) -> Result<ValueId, Diagnostic> {
+        let ty = self.deref_type(reference, span)?;
+        let result = self.allocate();
+        let instruction = Instruction::LoadMemory {
+            result,
+            pointer: reference,
+            ty,
+            span,
+        };
+        self.record_value_type(&instruction);
+        self.instructions.push(instruction);
+        Ok(result)
+    }
+
+    /// Lower `borrow x`, `ref x`, `borrow mut x`, or `ref mut x`.
+    fn lower_borrow(
+        &mut self,
+        operand: &Expression,
+        mutable: bool,
+        span: Span,
+    ) -> Result<ValueId, Diagnostic> {
+        let ExpressionKind::Name(name) = &operand.kind else {
+            return Err(Diagnostic::error(
+                "NXL2015",
+                "a borrow must target a variable; borrowing fields, elements, and temporaries is not supported",
+                operand.span,
+            ));
+        };
+        if self.lookup_value(name).is_none() {
+            return Err(Diagnostic::error(
+                "NXL2002",
+                format!("use of undeclared name '{name}'"),
+                operand.span,
+            ));
+        }
+        if self
+            .binding_state(name)
+            .and_then(|state| state.reference)
+            .is_some()
+        {
+            return Err(Diagnostic::error(
+                "NXL2015",
+                format!("'{name}' is already a reference; pass it directly instead of borrowing it again"),
+                span,
+            ));
+        }
+        if mutable && name != "self" && !self.mutability.get(name).copied().unwrap_or(false) {
+            return Err(Diagnostic::error(
+                "NXL2015",
+                format!("cannot mutably borrow immutable binding '{name}'"),
+                span,
+            )
+            .with_help("declare it with 'let mut'"));
+        }
+        self.check_binding_use(name, BindingUse::Read, span)?;
+        let target = self.binding_type(name);
+        let kind = if mutable {
+            BorrowKind::Mutable
+        } else {
+            BorrowKind::Immutable
+        };
+        self.register_borrow(name, kind, span)?;
+        let cell = self.ensure_boxed(name, span)?;
+        let target_id = self.record_identity(target);
+        let result = self.allocate();
+        let instruction = Instruction::Borrow {
+            result,
+            value: cell,
+            mutable,
+            ty: Type::Reference(target_id, mutable),
+            span,
+        };
+        self.record_value_type(&instruction);
+        self.instructions.push(instruction);
+        Ok(result)
+    }
+
+    /// Lower `move x`: read the value and invalidate the source binding.
+    fn lower_move(&mut self, operand: &Expression, span: Span) -> Result<ValueId, Diagnostic> {
+        let ExpressionKind::Name(name) = &operand.kind else {
+            return Err(Diagnostic::error(
+                "NXL2016",
+                "ownership can only be moved out of a variable",
+                operand.span,
+            ));
+        };
+        self.check_binding_use(name, BindingUse::Move, span)?;
+        let value = self.expression(operand)?;
+        // A reference binding cannot outlive its owner; moving it is allowed
+        // but the binding is dead afterwards either way.
+        if let Some(state) = self.binding_state_mut(name) {
+            state.moved = true;
+        }
+        Ok(value)
     }
 
     /// Emit a struct/array field read for an already-lowered object.
-    fn lower_field_get(&mut self, object: ValueId, field: &str, span: Span) -> ValueId {
+    fn lower_field_get(&mut self, object: ValueId, field: &str, ty: Type, span: Span) -> ValueId {
         let result = self.allocate();
         let instruction = Instruction::FieldGet {
             result,
             object,
             field: field.to_owned(),
+            ty,
             span,
         };
         self.record_value_type(&instruction);
@@ -3718,12 +4984,19 @@ impl Lowerer {
     }
 
     /// Emit an element read for an already-lowered object and index.
-    fn lower_index_get(&mut self, object: ValueId, index: ValueId, span: Span) -> ValueId {
+    fn lower_index_get(
+        &mut self,
+        object: ValueId,
+        index: ValueId,
+        ty: Type,
+        span: Span,
+    ) -> ValueId {
         let result = self.allocate();
         let instruction = Instruction::IndexGet {
             result,
             object,
             index,
+            ty,
             span,
         };
         self.record_value_type(&instruction);
@@ -4063,97 +5336,39 @@ impl Lowerer {
         }
     }
 
-    /// Lower an assignment whose target is a member or index expression.
-    /// The object evaluates once; the result is written back when the root
-    /// is a plain variable. The assignment evaluates to the right-hand value.
-    fn assign_to_place(
+    /// Lower `*r = v` / `*r op= v`: write through a mutable reference.
+    fn assign_through_reference(
         &mut self,
-        target: &Expression,
+        reference: &Expression,
         operator: crate::ast::AssignmentOperator,
         value: &Expression,
         span: Span,
     ) -> Result<ValueId, Diagnostic> {
-        enum Place<'a> {
-            Field { object: ValueId, field: &'a str },
-            Index { object: ValueId, index: ValueId },
-        }
-        let (place, root) = match &target.kind {
-            ExpressionKind::Member {
-                target: object,
-                name: field,
-                null_safe,
-            } => {
-                if *null_safe {
-                    return Err(Diagnostic::error(
-                        "NXL2007",
-                        "safe navigation (?.) is not supported yet",
-                        target.span,
-                    ));
-                }
-                let object_id = self.expression(object)?;
-                (
-                    Place::Field {
-                        object: object_id,
-                        field,
-                    },
-                    Self::place_root_name(object),
-                )
-            }
-            ExpressionKind::Index {
-                target: object,
-                index,
-            } => {
-                let object_id = self.expression(object)?;
-                let index_id = self.expression(index)?;
-                let index_type = self.value_type(index_id);
-                if index_type != Type::Int && index_type != Type::Unknown {
-                    return Err(Diagnostic::error(
-                        "NXL2001",
-                        format!("array index has type {index_type:?}, expected Int"),
-                        index.span,
-                    ));
-                }
-                (
-                    Place::Index {
-                        object: object_id,
-                        index: index_id,
-                    },
-                    Self::place_root_name(object),
-                )
-            }
-            _ => {
+        let pointer = self.expression(reference)?;
+        let pointer_type = self.value_type(pointer);
+        let mutable = match pointer_type {
+            Type::Reference(_, mutable) => mutable,
+            ty if is_dynamic(ty) => true,
+            ty => {
                 return Err(Diagnostic::error(
-                    "NXL2008",
-                    "assignment target must be a variable, field, or index",
-                    target.span,
+                    "NXL2015",
+                    format!("cannot assign through a value of type {ty:?}; expected a reference"),
+                    reference.span,
                 ));
             }
         };
-        if let Some(root) = root {
-            // `self` is passed by mutable reference into every method: field
-            // writes through it are always allowed (rebinding it is not).
-            if root != "self" {
-                let is_mutable = self.mutability.get(root).copied().unwrap_or(false);
-                if !is_mutable {
-                    return Err(Diagnostic::error(
-                        "NXL2008",
-                        format!("cannot assign through immutable binding '{root}'"),
-                        target.span,
-                    ));
-                }
-            }
+        if !mutable {
+            return Err(Diagnostic::error(
+                "NXL2015",
+                "cannot write through an immutable reference",
+                reference.span,
+            )
+            .with_help("borrow the owner mutably with 'borrow mut' or 'ref mut'"));
         }
         let assigned = match operator {
             crate::ast::AssignmentOperator::Assign => self.expression(value)?,
             _ => {
-                let read = match place {
-                    Place::Field { object, field } => {
-                        self.lower_field_get(object, field, target.span)
-                    }
-                    Place::Index { object, index } => {
-                        self.lower_index_get(object, index, target.span)
-                    }
-                };
+                let read = self.lower_reference_read(pointer, reference.span)?;
                 let rhs = self.expression(value)?;
                 let binary = match operator {
                     crate::ast::AssignmentOperator::Add => BinaryOperator::Add,
@@ -4165,8 +5380,8 @@ impl Lowerer {
                     crate::ast::AssignmentOperator::Or => BinaryOperator::Or,
                     crate::ast::AssignmentOperator::Assign => unreachable!(),
                 };
-                let left_type = self.value_type(read);
-                let right_type = self.value_type(rhs);
+                let left_type = erased_for_check(self.value_type(read));
+                let right_type = erased_for_check(self.value_type(rhs));
                 if left_type != right_type
                     && left_type != Type::Unknown
                     && right_type != Type::Unknown
@@ -4197,17 +5412,325 @@ impl Lowerer {
                 result
             }
         };
+        // A write through `&mut T` must store a `T`; report that at the
+        // assignment rather than leaving it to the NIR verifier.
+        if let Some((target, _)) = self.reference_target(pointer_type) {
+            let assigned_type = self.value_type(assigned);
+            if !types_compatible(assigned_type, target) {
+                return Err(Diagnostic::error(
+                    "NXL2001",
+                    format!(
+                        "cannot store a value of type {assigned_type:?} through a reference to {target:?}"
+                    ),
+                    span,
+                ));
+            }
+        }
+        self.instructions.push(Instruction::StoreMemory {
+            pointer,
+            value: assigned,
+            span,
+        });
+        Ok(assigned)
+    }
+
+    /// Lower the object of a member/index assignment. When the object is a
+    /// dereference (`(*r).field = v`), return the reference value as well so
+    /// the updated container can be written back through it.
+    fn lower_place_object(
+        &mut self,
+        object: &Expression,
+    ) -> Result<(ValueId, Option<ValueId>), Diagnostic> {
+        if let ExpressionKind::Unary {
+            operator: UnaryOperator::Deref,
+            operand,
+        } = &object.kind
+        {
+            let pointer = self.expression(operand)?;
+            let mutable = match self.value_type(pointer) {
+                Type::Reference(_, mutable) => mutable,
+                ty if is_dynamic(ty) => true,
+                ty => {
+                    return Err(Diagnostic::error(
+                        "NXL2015",
+                        format!(
+                            "cannot assign through a value of type {ty:?}; expected a reference"
+                        ),
+                        object.span,
+                    ));
+                }
+            };
+            if !mutable {
+                return Err(Diagnostic::error(
+                    "NXL2015",
+                    "cannot write through an immutable reference",
+                    object.span,
+                )
+                .with_help("borrow the owner mutably with 'borrow mut' or 'ref mut'"));
+            }
+            let read = self.lower_reference_read(pointer, object.span)?;
+            return Ok((read, Some(pointer)));
+        }
+        // Deeper paths through a reference would need path-sensitive
+        // write-back; reject them instead of silently dropping the update.
+        if Self::place_contains_deref(object) {
+            return Err(Diagnostic::error(
+                "NXL2007",
+                "nested assignment through a reference is not supported yet; assign a direct field or dereference the owner",
+                object.span,
+            ));
+        }
+        Ok((self.expression(object)?, None))
+    }
+
+    /// Whether a place expression dereferences anywhere along its path.
+    fn place_contains_deref(expression: &Expression) -> bool {
+        match &expression.kind {
+            ExpressionKind::Unary {
+                operator: UnaryOperator::Deref,
+                ..
+            } => true,
+            ExpressionKind::Member { target, .. } | ExpressionKind::Index { target, .. } => {
+                Self::place_contains_deref(target)
+            }
+            _ => false,
+        }
+    }
+
+    /// Lower an assignment whose target is a member or index expression.
+    /// The object evaluates once; the result is written back when the root
+    /// is a plain variable or a dereferenced mutable reference. The assignment
+    /// evaluates to the right-hand value.
+    fn assign_to_place(
+        &mut self,
+        target: &Expression,
+        operator: crate::ast::AssignmentOperator,
+        value: &Expression,
+        span: Span,
+    ) -> Result<ValueId, Diagnostic> {
+        enum Place<'a> {
+            Field { object: ValueId, field: &'a str },
+            Index { object: ValueId, index: ValueId },
+        }
+        /// Where the updated container is written back to.
+        #[derive(Clone, Copy)]
+        enum Root<'a> {
+            /// A plain binding (which may itself live in a borrow cell).
+            Name(&'a str),
+            /// Through a mutable reference: `(*r).field = v`.
+            Deref(ValueId),
+        }
+        let (place, root) = match &target.kind {
+            ExpressionKind::Member {
+                target: object,
+                name: field,
+                null_safe,
+            } => {
+                if *null_safe {
+                    return Err(Diagnostic::error(
+                        "NXL2007",
+                        "safe navigation (?.) is not supported yet",
+                        target.span,
+                    ));
+                }
+                let (object_id, deref) = self.lower_place_object(object)?;
+                (
+                    Place::Field {
+                        object: object_id,
+                        field,
+                    },
+                    deref
+                        .map(Root::Deref)
+                        .or_else(|| Self::place_root_name(object).map(Root::Name)),
+                )
+            }
+            ExpressionKind::Index {
+                target: object,
+                index,
+            } => {
+                let (object_id, deref) = self.lower_place_object(object)?;
+                let index_id = self.expression(index)?;
+                let index_type = self.value_type(index_id);
+                if index_type != Type::Int && !is_dynamic(index_type) {
+                    return Err(Diagnostic::error(
+                        "NXL2001",
+                        format!("array index has type {index_type:?}, expected Int"),
+                        index.span,
+                    ));
+                }
+                (
+                    Place::Index {
+                        object: object_id,
+                        index: index_id,
+                    },
+                    deref
+                        .map(Root::Deref)
+                        .or_else(|| Self::place_root_name(object).map(Root::Name)),
+                )
+            }
+            _ => {
+                return Err(Diagnostic::error(
+                    "NXL2008",
+                    "assignment target must be a variable, field, or index",
+                    target.span,
+                ));
+            }
+        };
+        if let Some(Root::Name(root)) = root {
+            // `self` is passed by mutable reference into every method: field
+            // writes through it are always allowed (rebinding it is not).
+            if root != "self" {
+                let is_mutable = self.mutability.get(root).copied().unwrap_or(false);
+                if !is_mutable {
+                    return Err(Diagnostic::error(
+                        "NXL2008",
+                        format!("cannot assign through immutable binding '{root}'"),
+                        target.span,
+                    ));
+                }
+                if self
+                    .binding_state(root)
+                    .and_then(|state| state.reference)
+                    .is_some()
+                {
+                    return Err(Diagnostic::error(
+                        "NXL2015",
+                        format!(
+                            "cannot assign through reference binding '{root}'; dereference it first with '*{root}'"
+                        ),
+                        target.span,
+                    ));
+                }
+                self.check_binding_use(root, BindingUse::Write, target.span)?;
+            }
+        }
+        let assigned = match operator {
+            crate::ast::AssignmentOperator::Assign => self.expression(value)?,
+            _ => {
+                let read = match place {
+                    Place::Field { object, field } => {
+                        let ty = self.inferred_field_type(object, &field);
+                        self.lower_field_get(object, &field, ty, target.span)
+                    }
+                    Place::Index { object, index } => {
+                        let ty = self.inferred_element_type(object);
+                        self.lower_index_get(object, index, ty, target.span)
+                    }
+                };
+                let rhs = self.expression(value)?;
+                let binary = match operator {
+                    crate::ast::AssignmentOperator::Add => BinaryOperator::Add,
+                    crate::ast::AssignmentOperator::Subtract => BinaryOperator::Subtract,
+                    crate::ast::AssignmentOperator::Multiply => BinaryOperator::Multiply,
+                    crate::ast::AssignmentOperator::Divide => BinaryOperator::Divide,
+                    crate::ast::AssignmentOperator::Remainder => BinaryOperator::Remainder,
+                    crate::ast::AssignmentOperator::And => BinaryOperator::And,
+                    crate::ast::AssignmentOperator::Or => BinaryOperator::Or,
+                    crate::ast::AssignmentOperator::Assign => unreachable!(),
+                };
+                let left_type = erased_for_check(self.value_type(read));
+                let right_type = erased_for_check(self.value_type(rhs));
+                if left_type != right_type
+                    && left_type != Type::Unknown
+                    && right_type != Type::Unknown
+                {
+                    return Err(Diagnostic::error(
+                        "NXL2001",
+                        format!(
+                            "operator operands have incompatible types: {left_type:?} and {right_type:?}"
+                        ),
+                        span,
+                    ));
+                }
+                let result = self.allocate();
+                let ty = match binary {
+                    BinaryOperator::And | BinaryOperator::Or => Type::Bool,
+                    _ => left_type,
+                };
+                let instruction = Instruction::Binary {
+                    result,
+                    operator: binary,
+                    left: read,
+                    right: rhs,
+                    ty,
+                    span,
+                };
+                self.record_value_type(&instruction);
+                self.instructions.push(instruction);
+                result
+            }
+        };
+        if self.type_contains_reference(self.value_type(assigned), 0) {
+            return Err(Diagnostic::error(
+                "NXL2017",
+                "a reference cannot be stored in a field or element: references may not escape the borrow scope",
+                span,
+            ));
+        }
+        // The place keeps the type it already had: reject a value that does
+        // not match instead of storing an ill-typed field or element.
+        let place_type = match &place {
+            Place::Field { object, field } => {
+                let object_type = self.value_type(*object);
+                self.field_type_of(object_type, field)
+            }
+            Place::Index { object, .. } => {
+                let object_type = self.value_type(*object);
+                self.array_element_type(object_type)
+            }
+        };
+        if let Some(expected) = place_type {
+            let assigned_type = self.value_type(assigned);
+            if !types_compatible(assigned_type, expected) {
+                return Err(Diagnostic::error(
+                    "NXL2001",
+                    format!(
+                        "cannot assign a value of type {assigned_type:?} to a place of type {expected:?}"
+                    ),
+                    span,
+                ));
+            }
+        }
         // Write the updated container back to the root binding.
         let updated = match place {
             Place::Field { object, field } => self.lower_field_set(object, field, assigned, span),
             Place::Index { object, index } => self.lower_index_set(object, index, assigned, span),
         };
         if let Some(root) = root {
-            self.instructions.push(Instruction::Store {
-                name: root.to_owned(),
-                value: updated,
-                span,
-            });
+            match root {
+                // A borrowed binding lives in a cell: update the cell so live
+                // references observe the change, instead of replacing the slot.
+                Root::Name(root)
+                    if self
+                        .binding_state(root)
+                        .map(|state| state.boxed)
+                        .unwrap_or(false) =>
+                {
+                    let cell = self
+                        .lookup_value(root)
+                        .expect("binding exists, checked above");
+                    self.instructions.push(Instruction::StoreMemory {
+                        pointer: cell,
+                        value: updated,
+                        span,
+                    });
+                }
+                Root::Name(root) => {
+                    self.instructions.push(Instruction::Store {
+                        name: root.to_owned(),
+                        value: updated,
+                        span,
+                    });
+                }
+                // Write the whole updated value back through the reference.
+                Root::Deref(pointer) => {
+                    self.instructions.push(Instruction::StoreMemory {
+                        pointer,
+                        value: updated,
+                        span,
+                    });
+                }
+            }
         }
         Ok(assigned)
     }
@@ -4282,6 +5805,13 @@ impl Lowerer {
                 name: mangled,
                 parameters,
                 return_type,
+                type_parameters: method.type_parameters.clone(),
+                parameter_annotations: method
+                    .parameters
+                    .iter()
+                    .map(|parameter| parameter.annotation.clone())
+                    .collect(),
+                return_annotation: method.return_type.clone(),
             });
         }
         Ok(())
@@ -4355,6 +5885,7 @@ impl Lowerer {
             let base_instruction = Instruction::StructNew {
                 result: base,
                 type_name: type_name.to_owned(),
+                ty: Type::Generic(stable_type_id(type_name)),
                 fields: Vec::new(),
                 span,
             };
@@ -4447,15 +5978,22 @@ impl Lowerer {
             }
         }
         let mut fields = Vec::with_capacity(declaration.fields.len());
+        let mut field_types = HashMap::new();
         for field in &declaration.fields {
             if let Some(argument_id) = bound.get(&field.name).copied() {
                 let actual = self.value_type(argument_id);
                 self.check_field_value(display, &field.name, &field.annotation, actual, span)?;
+                if let Some(ty) = self.resolve_type(&field.annotation) {
+                    field_types.insert(field.name.clone(), ty);
+                }
                 fields.push((field.name.clone(), argument_id));
             } else if let Some(default) = field.value.clone() {
                 let default_id = self.expression(&default)?;
                 let actual = self.value_type(default_id);
                 self.check_field_value(display, &field.name, &field.annotation, actual, span)?;
+                if let Some(ty) = self.resolve_type(&field.annotation) {
+                    field_types.insert(field.name.clone(), ty);
+                }
                 fields.push((field.name.clone(), default_id));
             } else {
                 return Err(Diagnostic::error(
@@ -4472,21 +6010,25 @@ impl Lowerer {
         let instruction = Instruction::StructNew {
             result,
             type_name: type_name.to_owned(),
+            ty: Type::Generic(stable_type_id(type_name)),
             fields,
             span,
         };
         self.record_value_type(&instruction);
         self.instructions.push(instruction);
+        self.value_field_types.insert(result, field_types);
         Ok(result)
     }
 
     /// Lower a call to an already-resolved (possibly qualified) function.
     /// `display` is the source-written name used in diagnostics. With
     /// `concurrent`, the call spawns a worker thread instead of running now.
+    #[allow(clippy::too_many_arguments)]
     fn lower_direct_call(
         &mut self,
         qualified: &str,
         display: &str,
+        type_arguments: &[String],
         arguments: &[Expression],
         callee_span: Span,
         span: Span,
@@ -4495,6 +6037,13 @@ impl Lowerer {
         // An `extern` (C ABI) function: emit a self-contained ForeignCall that
         // carries its library, symbol, and scalar signature inline.
         if let Some(foreign) = self.externs.get(qualified).cloned() {
+            if !type_arguments.is_empty() {
+                return Err(Diagnostic::error(
+                    "NXL2014",
+                    format!("extern function '{display}' is not generic"),
+                    span,
+                ));
+            }
             if arguments.len() != foreign.parameters.len() {
                 return Err(Diagnostic::error(
                     "NXL2009",
@@ -4543,59 +6092,187 @@ impl Lowerer {
         }
 
         // Check for user-defined function signature
-        let (param_types, return_type) = {
-            let signature = self
-                .signatures
-                .iter()
-                .find(|sig| sig.name == qualified)
-                .ok_or_else(|| {
-                    Diagnostic::error(
-                        "NXL2002",
-                        format!("use of undeclared function '{display}'"),
-                        callee_span,
-                    )
-                })?;
-
-            (
-                signature
-                    .parameters
-                    .iter()
-                    .map(|(_, ty)| *ty)
-                    .collect::<Vec<_>>(),
-                signature.return_type,
-            )
-        };
-
-        // Validate argument count
-        if arguments.len() != param_types.len() {
-            return Err(Diagnostic::error(
-                "NXL2009",
-                format!(
-                    "function '{display}' expects {} argument(s), found {}",
-                    param_types.len(),
-                    arguments.len()
-                ),
-                span,
-            ));
-        }
-
+        let signature = self
+            .signatures
+            .iter()
+            .find(|sig| sig.name == qualified)
+            .cloned()
+            .ok_or_else(|| {
+                Diagnostic::error(
+                    "NXL2002",
+                    format!("use of undeclared function '{display}'"),
+                    callee_span,
+                )
+            })?;
         let mut lowered_arguments = Vec::with_capacity(arguments.len());
-        for (arg, param_type) in arguments.iter().zip(param_types.iter()) {
-            let arg_value = self.expression(arg)?;
-            let arg_type = self.value_type(arg_value);
-
-            // Validate argument type compatibility
-            if !types_compatible(arg_type, *param_type) {
+        let (_param_types, return_type, resolved_type_arguments) = if signature
+            .type_parameters
+            .is_empty()
+        {
+            if !type_arguments.is_empty() {
                 return Err(Diagnostic::error(
-                    "NXL2001",
-                    format!(
-                        "argument to '{display}' has type {arg_type:?}, expected {param_type:?}"
-                    ),
-                    arg.span,
+                    "NXL2014",
+                    format!("'{display}' is not generic and takes no type arguments"),
+                    span,
                 ));
             }
-            lowered_arguments.push(arg_value);
-        }
+            let param_types = signature
+                .parameters
+                .iter()
+                .map(|(_, ty)| *ty)
+                .collect::<Vec<_>>();
+            if arguments.len() != param_types.len() {
+                return Err(Diagnostic::error(
+                    "NXL2009",
+                    format!(
+                        "function '{display}' expects {} argument(s), found {}",
+                        param_types.len(),
+                        arguments.len()
+                    ),
+                    span,
+                ));
+            }
+            for (index, (arg, param_type)) in arguments.iter().zip(param_types.iter()).enumerate()
+            {
+                let arg_value = self.expression(arg)?;
+                let arg_type = self.value_type(arg_value);
+                if !types_compatible(arg_type, *param_type) {
+                    return Err(Diagnostic::error(
+                        "NXL2001",
+                        format!(
+                            "argument to '{display}' has type {arg_type:?}, expected {param_type:?}"
+                        ),
+                        arg.span,
+                    ));
+                }
+                self.check_reference_argument(
+                    display,
+                    index,
+                    arg_type,
+                    Some(*param_type),
+                    arg.span,
+                )?;
+                lowered_arguments.push(arg_value);
+            }
+            (param_types, signature.return_type, Vec::new())
+        } else if !type_arguments.is_empty() {
+            let (param_types, return_type, resolved) =
+                self.instantiate_generic_signature(&signature, type_arguments, display, span)?;
+            if arguments.len() != param_types.len() {
+                return Err(Diagnostic::error(
+                    "NXL2009",
+                    format!(
+                        "function '{display}' expects {} argument(s), found {}",
+                        param_types.len(),
+                        arguments.len()
+                    ),
+                    span,
+                ));
+            }
+            for (index, (arg, param_type)) in arguments.iter().zip(param_types.iter()).enumerate()
+            {
+                let arg_value = self.expression(arg)?;
+                let arg_type = self.value_type(arg_value);
+                if !types_compatible(arg_type, *param_type) {
+                    return Err(Diagnostic::error(
+                        "NXL2001",
+                        format!(
+                            "argument to '{display}' has type {arg_type:?}, expected {param_type:?}"
+                        ),
+                        arg.span,
+                    ));
+                }
+                self.check_reference_argument(
+                    display,
+                    index,
+                    arg_type,
+                    Some(*param_type),
+                    arg.span,
+                )?;
+                lowered_arguments.push(arg_value);
+            }
+            (param_types, return_type, resolved)
+        } else {
+            // Infer type arguments from the lowered argument types.
+            for arg in arguments {
+                lowered_arguments.push(self.expression(arg)?);
+            }
+            if arguments.len() != signature.parameters.len() {
+                return Err(Diagnostic::error(
+                    "NXL2009",
+                    format!(
+                        "function '{display}' expects {} argument(s), found {}",
+                        signature.parameters.len(),
+                        arguments.len()
+                    ),
+                    span,
+                ));
+            }
+            let mut inferred = HashMap::new();
+            for (index, value) in lowered_arguments.iter().enumerate() {
+                let Some(Some(annotation)) = signature.parameter_annotations.get(index) else {
+                    continue;
+                };
+                if self
+                    .bind_annotation_to_type(
+                        annotation,
+                        self.value_type(*value),
+                        &signature.type_parameters,
+                        &mut inferred,
+                    )
+                    .is_err()
+                {
+                    return Err(Diagnostic::error(
+                        "NXL2001",
+                        format!(
+                            "cannot infer consistent type argument(s) for '{display}': arguments disagree"
+                        ),
+                        span,
+                    ));
+                }
+            }
+            let written = self.inferred_arguments(
+                display,
+                &signature.type_parameters,
+                &inferred,
+                &format!(
+                    "add <{}> after the name",
+                    signature.type_parameters.join(", ")
+                ),
+                span,
+            )?;
+            let ordered = signature
+                .type_parameters
+                .iter()
+                .map(|parameter| written[parameter].clone())
+                .collect::<Vec<_>>();
+            let (param_types, return_type, resolved) =
+                self.instantiate_generic_signature(&signature, &ordered, display, span)?;
+            for (index, (arg, (value, param_type))) in arguments
+                .iter()
+                .zip(lowered_arguments.iter().zip(param_types.iter()))
+                .enumerate()
+            {
+                let arg_type = self.value_type(*value);
+                if !types_compatible(arg_type, *param_type) {
+                    return Err(Diagnostic::error(
+                        "NXL2001",
+                        format!(
+                            "argument to '{display}' has type {arg_type:?}, expected {param_type:?}"
+                        ),
+                        arg.span,
+                    ));
+                }
+                self.check_reference_argument(
+                    display,
+                    index,
+                    arg_type,
+                    Some(*param_type),
+                    arg.span,
+                )?;
+            }
+            (param_types, return_type, resolved)
+        };
 
         let result = self.allocate();
         if concurrent {
@@ -4612,6 +6289,7 @@ impl Lowerer {
                 result,
                 callee: qualified.to_owned(),
                 arguments: lowered_arguments,
+                type_arguments: resolved_type_arguments,
                 return_type,
                 span,
             };
@@ -4625,7 +6303,12 @@ impl Lowerer {
     /// worker thread; method calls too (receiver evaluated eagerly); anything
     /// else evaluates now and wraps in a completed task.
     fn lower_spawn(&mut self, inner: &Expression, span: Span) -> Result<ValueId, Diagnostic> {
-        if let ExpressionKind::Call { callee, arguments } = &inner.kind {
+        if let ExpressionKind::Call {
+            callee,
+            type_arguments,
+            arguments,
+        } = &inner.kind
+        {
             // Plain function calls spawn concurrently (unknown names and
             // builtins like `print` fall through to eager evaluation, which
             // reports the same diagnostics as a direct call).
@@ -4634,6 +6317,7 @@ impl Lowerer {
                     return self.lower_direct_call(
                         &resolved,
                         name,
+                        type_arguments,
                         arguments,
                         callee.span,
                         span,
@@ -4654,6 +6338,7 @@ impl Lowerer {
                             return self.lower_direct_call(
                                 &qualified,
                                 name,
+                                type_arguments,
                                 arguments,
                                 callee.span,
                                 span,
@@ -4670,12 +6355,28 @@ impl Lowerer {
                 null_safe: false,
             } = &callee.kind
             {
+                if !type_arguments.is_empty() {
+                    return Err(Diagnostic::error(
+                        "NXL2014",
+                        format!("method '{method}' does not accept type arguments"),
+                        callee.span,
+                    ));
+                }
                 if self.split_module_access(callee).is_none() {
                     let receiver_id = self.expression(target)?;
+                    let receiver_type = self.value_type(receiver_id);
                     let mut lowered = Vec::with_capacity(arguments.len());
                     for argument in arguments {
                         lowered.push(self.expression(argument)?);
                     }
+                    self.check_dynamic_arguments(
+                        method,
+                        receiver_type,
+                        method,
+                        arguments,
+                        &lowered,
+                        span,
+                    )?;
                     let result = self.allocate();
                     let instruction = Instruction::SpawnMethod {
                         result,
@@ -4741,6 +6442,26 @@ impl Lowerer {
             let value = self.lookup_value(name).ok_or_else(|| {
                 Diagnostic::error("NXL2002", format!("use of undeclared name '{name}'"), span)
             })?;
+            let active = self
+                .scope_stack
+                .iter()
+                .any(|scope| scope.contains_key(name));
+            if active {
+                self.check_binding_use(name, BindingUse::Read, span)?;
+                let state = self.binding_state(name);
+                let captures_reference = state.and_then(|state| state.reference).is_some()
+                    || state.map(|state| state.boxed).unwrap_or(false);
+                if captures_reference {
+                    return Err(Diagnostic::error(
+                        "NXL2017",
+                        format!(
+                            "async block captures reference '{name}'; references may not escape the borrow scope"
+                        ),
+                        span,
+                    )
+                    .with_help("capture the owned value instead"));
+                }
+            }
             let result = self.allocate();
             let ty = self.value_type(value);
             let instruction = Instruction::Load {
@@ -4761,6 +6482,9 @@ impl Lowerer {
                 .map(|name| (name.clone(), Type::Unknown))
                 .collect(),
             return_type: Type::Unknown,
+            type_parameters: Vec::new(),
+            parameter_annotations: captured.iter().map(|_| None).collect(),
+            return_annotation: None,
         });
         let owned = crate::ast::Function {
             name: Some(worker.clone()),
@@ -4801,17 +6525,121 @@ impl Lowerer {
         display_type: &str,
         variants: &[(String, Vec<String>)],
         variant: &str,
+        type_arguments: &[String],
         arguments: &[Expression],
         span: Span,
     ) -> Result<ValueId, Diagnostic> {
+        let type_parameters = find_type_declaration(&self.program, qualified_type)
+            .map(|declaration| declaration.type_parameters.clone())
+            .unwrap_or_default();
+        if !type_arguments.is_empty() {
+            if type_parameters.is_empty() {
+                return Err(Diagnostic::error(
+                    "NXL2014",
+                    format!("'{display_type}' is not generic and takes no type arguments"),
+                    span,
+                ));
+            }
+            if type_arguments.len() != type_parameters.len() {
+                return Err(Diagnostic::error(
+                    "NXL2001",
+                    format!(
+                        "generic enum '{display_type}' expects {} type argument(s), found {}",
+                        type_parameters.len(),
+                        type_arguments.len()
+                    ),
+                    span,
+                ));
+            }
+        }
         match variants.iter().find(|(candidate, _)| candidate == variant) {
             Some((_, payload)) if payload.len() == arguments.len() => {
                 let mut lowered = Vec::with_capacity(arguments.len());
-                for (argument, expected) in arguments.iter().zip(payload.iter()) {
+                let mut actual_types = Vec::with_capacity(arguments.len());
+                for argument in arguments {
                     let argument_id = self.expression(argument)?;
-                    let actual = self.value_type(argument_id);
-                    if let Some(expected) = self.resolve_type(expected) {
-                        if !types_compatible(actual, expected) {
+                    actual_types.push(self.value_type(argument_id));
+                    lowered.push(argument_id);
+                }
+                let (bindings, resolved_arguments) = if type_parameters.is_empty() {
+                    (HashMap::new(), Vec::new())
+                } else if !type_arguments.is_empty() {
+                    let resolved = type_arguments
+                        .iter()
+                        .map(|argument| self.resolve_type_argument(argument, span))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let bindings = type_parameters
+                        .iter()
+                        .cloned()
+                        .zip(type_arguments.iter().cloned())
+                        .collect::<HashMap<_, _>>();
+                    (bindings, resolved)
+                } else {
+                    let mut inferred = HashMap::new();
+                    for (actual, annotation) in actual_types.iter().zip(payload.iter()) {
+                        if self
+                            .bind_annotation_to_type(
+                                annotation,
+                                *actual,
+                                &type_parameters,
+                                &mut inferred,
+                            )
+                            .is_err()
+                        {
+                            return Err(Diagnostic::error(
+                                "NXL2001",
+                                format!(
+                                    "cannot infer consistent type argument(s) for '{display_type}.{variant}': payload values disagree"
+                                ),
+                                span,
+                            ));
+                        }
+                    }
+                    let written = self.inferred_arguments(
+                        display_type,
+                        &type_parameters,
+                        &inferred,
+                        &format!(
+                            "write {display_type}.{variant}<{}>(...)",
+                            type_parameters.join(", ")
+                        ),
+                        span,
+                    )?;
+                    let ordered = type_parameters
+                        .iter()
+                        .map(|parameter| written[parameter].clone())
+                        .collect::<Vec<_>>();
+                    let mut resolved = Vec::with_capacity(ordered.len());
+                    for argument in &ordered {
+                        resolved.push(self.resolve_type_argument(argument, span)?);
+                    }
+                    let bindings = type_parameters
+                        .iter()
+                        .cloned()
+                        .zip(ordered.iter().cloned())
+                        .collect::<HashMap<_, _>>();
+                    (bindings, resolved)
+                };
+                let ty = if type_parameters.is_empty() {
+                    Type::Generic(stable_type_id(qualified_type))
+                } else {
+                    let base = stable_type_id(qualified_type);
+                    self.record_instance_arguments(base, &resolved_arguments);
+                    Type::Instance(base, argument_fingerprint(&resolved_arguments))
+                };
+                for ((argument, expected), actual) in arguments
+                    .iter()
+                    .zip(payload.iter())
+                    .zip(actual_types.iter())
+                {
+                    let expected_type = if bindings.is_empty() {
+                        self.resolve_type(expected)
+                    } else {
+                        let substituted = substitute_type_parameters(expected, &bindings);
+                        self.resolve_concrete_annotation(&substituted)
+                    };
+                    if let Some(expected) = expected_type {
+                        if !types_compatible(*actual, expected) {
                             return Err(Diagnostic::error(
                                 "NXL2001",
                                 format!(
@@ -4821,13 +6649,13 @@ impl Lowerer {
                             ));
                         }
                     }
-                    lowered.push(argument_id);
                 }
                 let result = self.allocate();
                 let instruction = Instruction::EnumNew {
                     result,
                     type_name: qualified_type.to_owned(),
                     variant: variant.to_owned(),
+                    ty,
                     arguments: lowered,
                     span,
                 };
@@ -4857,6 +6685,7 @@ impl Lowerer {
         &mut self,
         module: &str,
         chain: &[String],
+        type_arguments: &[String],
         arguments: &[Expression],
         span: Span,
     ) -> Result<ValueId, Diagnostic> {
@@ -4868,7 +6697,22 @@ impl Lowerer {
                     .iter()
                     .any(|signature| signature.name == qualified)
                 {
-                    return self.lower_direct_call(&qualified, name, arguments, span, span, false);
+                    return self.lower_direct_call(
+                        &qualified,
+                        name,
+                        type_arguments,
+                        arguments,
+                        span,
+                        span,
+                        false,
+                    );
+                }
+                if !type_arguments.is_empty() {
+                    return Err(Diagnostic::error(
+                        "NXL2014",
+                        format!("'{name}' in module '{module}' is not generic"),
+                        span,
+                    ));
                 }
                 // `math.User(..)` constructs like `User(..)` does.
                 if let Some(kind) =
@@ -4920,6 +6764,7 @@ impl Lowerer {
                         type_name,
                         &variants,
                         variant,
+                        type_arguments,
                         arguments,
                         span,
                     ),
@@ -5068,6 +6913,7 @@ impl Lowerer {
                                 result,
                                 type_name: variants[0].0.clone(),
                                 variant: name.clone(),
+                                ty: Type::Generic(stable_type_id(&variants[0].0)),
                                 arguments: Vec::new(),
                                 span: expression.span,
                             };
@@ -5082,8 +6928,39 @@ impl Lowerer {
                         ));
                     }
                 };
+                let logical_type = self.binding_type(name);
+                self.check_binding_use(name, BindingUse::Read, expression.span)?;
                 let result = self.allocate();
-                let ty = self.value_type(value);
+                if self
+                    .binding_state(name)
+                    .map(|state| state.boxed)
+                    .unwrap_or(false)
+                {
+                    // The name slot stores the cell; read through it.
+                    let reference_ty = Type::Reference(self.record_identity(logical_type), true);
+                    let load = Instruction::Load {
+                        result,
+                        name: name.clone(),
+                        ty: reference_ty,
+                        span: expression.span,
+                    };
+                    self.record_value_type(&load);
+                    self.instructions.push(load);
+                    return self.lower_reference_read(result, expression.span);
+                }
+                let ty = if self
+                    .binding_state(name)
+                    .and_then(|state| state.reference)
+                    .is_some()
+                {
+                    logical_type
+                } else {
+                    self.value_type(value)
+                };
+                // A load is a fresh value id; carry any per-value field types
+                // recorded at construction so `let boxed = Box { .. }` keeps
+                // precise field types.
+                let field_types = self.value_field_types.get(&value).cloned();
                 let instruction = Instruction::Load {
                     result,
                     name: name.clone(),
@@ -5092,12 +6969,29 @@ impl Lowerer {
                 };
                 self.record_value_type(&instruction);
                 self.instructions.push(instruction);
+                if let Some(field_types) = field_types {
+                    self.value_field_types.insert(result, field_types);
+                }
                 Ok(result)
             }
             ExpressionKind::Unary { operator, operand } => {
+                match operator {
+                    UnaryOperator::Borrow | UnaryOperator::Reference | UnaryOperator::BorrowMut => {
+                        let mutable = *operator == UnaryOperator::BorrowMut;
+                        return self.lower_borrow(operand, mutable, expression.span);
+                    }
+                    UnaryOperator::Deref => {
+                        let reference = self.expression(operand)?;
+                        return self.lower_reference_read(reference, expression.span);
+                    }
+                    UnaryOperator::Move => {
+                        return self.lower_move(operand, expression.span);
+                    }
+                    _ => {}
+                }
                 let operand = self.expression(operand)?;
+                let operand_type = erased_for_check(self.value_type(operand));
                 let result = self.allocate();
-                let operand_type = self.value_type(operand);
                 let ty = match operator {
                     UnaryOperator::Negate
                         if matches!(operand_type, Type::Int | Type::Float | Type::Unknown) =>
@@ -5133,8 +7027,8 @@ impl Lowerer {
             } => {
                 let left = self.expression(left)?;
                 let right = self.expression(right)?;
-                let left_type = self.value_type(left);
-                let right_type = self.value_type(right);
+                let left_type = erased_for_check(self.value_type(left));
+                let right_type = erased_for_check(self.value_type(right));
                 if left_type != right_type
                     && left_type != Type::Unknown
                     && right_type != Type::Unknown
@@ -5260,6 +7154,16 @@ impl Lowerer {
                     if ty == Type::Unknown {
                         continue;
                     }
+                    // A reference inside an aggregate would outlive the
+                    // lexical borrow scope. Array annotations already reject
+                    // nested references; reject the literal too.
+                    if self.type_contains_reference(ty, 0) {
+                        return Err(Diagnostic::error(
+                            "NXL2017",
+                            "an array cannot hold a reference: references may not escape the borrow scope",
+                            expression.span,
+                        ));
+                    }
                     match element_type {
                         None => element_type = Some(ty),
                         Some(known) if known == ty => {}
@@ -5273,7 +7177,11 @@ impl Lowerer {
                     }
                 }
                 let array_type = match element_type {
-                    Some(ty) => Type::Array(type_identity(ty)),
+                    Some(ty) => {
+                        self.identity_types.insert(type_identity(ty), ty);
+                        self.identity_types.insert(array_identity(ty), ty);
+                        Type::Array(array_identity(ty))
+                    }
                     None => Type::Array(0),
                 };
                 let result = self.allocate();
@@ -5292,14 +7200,15 @@ impl Lowerer {
                 let object_id = self.expression(target)?;
                 let index_id = self.expression(index)?;
                 let index_type = self.value_type(index_id);
-                if index_type != Type::Int && index_type != Type::Unknown {
+                if index_type != Type::Int && !is_dynamic(index_type) {
                     return Err(Diagnostic::error(
                         "NXL2001",
                         format!("array index has type {index_type:?}, expected Int"),
                         index.span,
                     ));
                 }
-                Ok(self.lower_index_get(object_id, index_id, expression.span))
+                let ty = self.inferred_element_type(object_id);
+                Ok(self.lower_index_get(object_id, index_id, ty, expression.span))
             }
             ExpressionKind::Member {
                 target,
@@ -5339,6 +7248,7 @@ impl Lowerer {
                                         type_name,
                                         &variants,
                                         variant,
+                                        &[],
                                         &[],
                                         expression.span,
                                     );
@@ -5390,6 +7300,7 @@ impl Lowerer {
                                     result,
                                     type_name: qualified.clone(),
                                     variant: name.clone(),
+                                    ty: Type::Generic(stable_type_id(&qualified)),
                                     arguments: Vec::new(),
                                     span: expression.span,
                                 };
@@ -5418,16 +7329,26 @@ impl Lowerer {
                     }
                 }
                 let object_id = self.expression(target)?;
-                Ok(self.lower_field_get(object_id, name, expression.span))
+                let ty = self.inferred_field_type(object_id, name);
+                Ok(self.lower_field_get(object_id, name, ty, expression.span))
             }
             ExpressionKind::Object { type_name, fields } => {
-                let qualified = self.resolve_type_alias(type_name);
+                let (written_base, explicit_arguments) = match type_name.find('<') {
+                    Some(open) if type_name.ends_with('>') => (
+                        &type_name[..open],
+                        Some(split_type_arguments(
+                            &type_name[open + 1..type_name.len() - 1],
+                        )),
+                    ),
+                    _ => (type_name.as_str(), None),
+                };
+                let qualified = self.resolve_type_alias(written_base);
                 let declaration = find_type_declaration(&self.program, &qualified)
                     .cloned()
                     .ok_or_else(|| {
                         Diagnostic::error(
                             "NXL2004",
-                            format!("unknown type '{type_name}'"),
+                            format!("unknown type '{written_base}'"),
                             expression.span,
                         )
                     })?;
@@ -5435,7 +7356,7 @@ impl Lowerer {
                     return Err(Diagnostic::error(
                         "NXL2001",
                         format!(
-                            "cannot construct {:?} '{type_name}' with an object literal",
+                            "cannot construct {:?} '{written_base}' with an object literal",
                             declaration.kind
                         ),
                         expression.span,
@@ -5446,32 +7367,172 @@ impl Lowerer {
                     if !seen.insert(field.as_str()) {
                         return Err(Diagnostic::error(
                             "NXL2005",
-                            format!("duplicate field '{field}' in '{type_name}' literal"),
+                            format!("duplicate field '{field}' in '{written_base}' literal"),
                             expression.span,
                         ));
                     }
                 }
-                let mut lowered = Vec::with_capacity(fields.len());
+                // Lower the provided values once, so generic parameters can be
+                // inferred from their types before the fields are checked.
+                let mut provided = Vec::with_capacity(fields.len());
                 for (field, value) in fields {
                     let Some(declared) = declaration.fields.iter().find(|f| &f.name == field)
                     else {
                         return Err(Diagnostic::error(
                             "NXL2002",
-                            format!("unknown field '{field}' on struct '{type_name}'"),
+                            format!("unknown field '{field}' on struct '{written_base}'"),
                             expression.span,
                         ));
                     };
                     let value_id = self.expression(value)?;
                     let actual = self.value_type(value_id);
-                    self.check_field_value(
-                        type_name,
-                        field,
-                        &declared.annotation,
+                    provided.push((
+                        field.clone(),
+                        declared.annotation.clone(),
+                        value_id,
                         actual,
                         value.span,
-                    )?;
-                    lowered.push((field.clone(), value_id));
+                    ));
                 }
+                let is_generic = !declaration.type_parameters.is_empty();
+                let (_type_bindings, _type_arguments_display, instance_type, field_types) =
+                    if !is_generic {
+                        if explicit_arguments.is_some() {
+                            return Err(Diagnostic::error(
+                                "NXL2001",
+                                format!("type '{written_base}' is not generic"),
+                                expression.span,
+                            ));
+                        }
+                        let mut field_types = HashMap::new();
+                        for (field, annotation, _, actual, value_span) in &provided {
+                            if let Some(expected) = self.resolve_type(annotation) {
+                                field_types.insert(field.clone(), expected);
+                            }
+                            self.check_field_value(
+                                written_base,
+                                field,
+                                annotation,
+                                *actual,
+                                *value_span,
+                            )?;
+                        }
+                        (
+                            None,
+                            String::new(),
+                            Type::Generic(stable_type_id(&qualified)),
+                            field_types,
+                        )
+                    } else {
+                        let (argument_strings, resolved_arguments) = match &explicit_arguments {
+                            Some(arguments) => {
+                                if arguments.len() != declaration.type_parameters.len() {
+                                    return Err(Diagnostic::error(
+                                        "NXL2001",
+                                        format!(
+                                            "type '{written_base}' expects {} type argument(s), found {}",
+                                            declaration.type_parameters.len(),
+                                            arguments.len()
+                                        ),
+                                        expression.span,
+                                    ));
+                                }
+                                let mut resolved = Vec::with_capacity(arguments.len());
+                                for argument in arguments {
+                                    resolved.push(
+                                        self.resolve_type_argument(argument, expression.span)?,
+                                    );
+                                }
+                                (
+                                    arguments
+                                        .iter()
+                                        .map(|argument| (*argument).to_owned())
+                                        .collect::<Vec<_>>(),
+                                    resolved,
+                                )
+                            }
+                            None => {
+                                let mut inferred = HashMap::new();
+                                for (_, annotation, _, actual, _) in &provided {
+                                    if self
+                                        .bind_annotation_to_type(
+                                            annotation,
+                                            *actual,
+                                            &declaration.type_parameters,
+                                            &mut inferred,
+                                        )
+                                        .is_err()
+                                    {
+                                        return Err(Diagnostic::error(
+                                            "NXL2001",
+                                            format!(
+                                                "cannot infer consistent type argument(s) for '{written_base}': field values disagree"
+                                            ),
+                                            expression.span,
+                                        ));
+                                    }
+                                }
+                                let written = self.inferred_arguments(
+                                    written_base,
+                                    &declaration.type_parameters,
+                                    &inferred,
+                                    &format!(
+                                        "write {written_base}<{}>",
+                                        declaration.type_parameters.join(", ")
+                                    ),
+                                    expression.span,
+                                )?;
+                                let ordered = declaration
+                                    .type_parameters
+                                    .iter()
+                                    .map(|parameter| written[parameter].clone())
+                                    .collect::<Vec<_>>();
+                                let mut resolved = Vec::with_capacity(ordered.len());
+                                for argument in &ordered {
+                                    resolved.push(
+                                        self.resolve_type_argument(argument, expression.span)?,
+                                    );
+                                }
+                                (ordered, resolved)
+                            }
+                        };
+                        let bindings = declaration
+                            .type_parameters
+                            .iter()
+                            .cloned()
+                            .zip(argument_strings.iter().cloned())
+                            .collect::<HashMap<_, _>>();
+                        let base = stable_type_id(&qualified);
+                        self.record_instance_arguments(base, &resolved_arguments);
+                        let instance =
+                            Type::Instance(base, argument_fingerprint(&resolved_arguments));
+                        let mut field_types = HashMap::new();
+                        for (field, annotation, _, actual, value_span) in &provided {
+                            let substituted = substitute_type_parameters(annotation, &bindings);
+                            let expected = self.resolve_type_argument(&substituted, *value_span)?;
+                            field_types.insert(field.clone(), expected);
+                            if !types_compatible(*actual, expected) {
+                                return Err(Diagnostic::error(
+                                    "NXL2001",
+                                    format!(
+                                        "field '{field}' of '{written_base}<{}>' has type {actual:?}, expected {expected:?}",
+                                        argument_strings.join(", ")
+                                    ),
+                                    *value_span,
+                                ));
+                            }
+                        }
+                        (
+                            Some(bindings),
+                            argument_strings.join(", "),
+                            instance,
+                            field_types,
+                        )
+                    };
+                let lowered = provided
+                    .iter()
+                    .map(|(field, _, value, _, _)| (field.clone(), *value))
+                    .collect::<Vec<_>>();
                 let missing: Vec<&str> = declaration
                     .fields
                     .iter()
@@ -5482,7 +7543,7 @@ impl Lowerer {
                     return Err(Diagnostic::error(
                         "NXL2001",
                         format!(
-                            "struct '{type_name}' literal is missing field(s): {}",
+                            "struct '{written_base}' literal is missing field(s): {}",
                             missing.join(", ")
                         ),
                         expression.span,
@@ -5492,11 +7553,13 @@ impl Lowerer {
                 let instruction = Instruction::StructNew {
                     result,
                     type_name: qualified.clone(),
+                    ty: instance_type,
                     fields: lowered,
                     span: expression.span,
                 };
                 self.record_value_type(&instruction);
                 self.instructions.push(instruction);
+                self.value_field_types.insert(result, field_types);
                 Ok(result)
             }
             ExpressionKind::New { .. } => Err(Diagnostic::error(
@@ -5504,7 +7567,11 @@ impl Lowerer {
                 "class instantiation with `new` is not supported yet",
                 expression.span,
             )),
-            ExpressionKind::Call { callee, arguments } => {
+            ExpressionKind::Call {
+                callee,
+                type_arguments,
+                arguments,
+            } => {
                 // Enum construction: `Choice.Some(1)`.
                 if let ExpressionKind::Member {
                     target,
@@ -5537,6 +7604,7 @@ impl Lowerer {
                                 type_name,
                                 &variants,
                                 variant,
+                                type_arguments,
                                 arguments,
                                 expression.span,
                             );
@@ -5546,7 +7614,13 @@ impl Lowerer {
                 // Module-qualified call: `math.add(..)`, `math.Color.Red(..)`.
                 if let ExpressionKind::Member { .. } = &callee.kind {
                     if let Some((module, chain)) = self.split_module_access(callee) {
-                        return self.lower_module_call(&module, &chain, arguments, expression.span);
+                        return self.lower_module_call(
+                            &module,
+                            &chain,
+                            type_arguments,
+                            arguments,
+                            expression.span,
+                        );
                     }
                 }
                 // Method call: `user.greet("hi")` (dynamic dispatch on the
@@ -5564,11 +7638,27 @@ impl Lowerer {
                             callee.span,
                         ));
                     }
+                    if !type_arguments.is_empty() {
+                        return Err(Diagnostic::error(
+                            "NXL2014",
+                            format!("method '{method}' does not accept type arguments"),
+                            callee.span,
+                        ));
+                    }
                     let receiver_id = self.expression(target)?;
+                    let receiver_type = self.value_type(receiver_id);
                     let mut lowered = Vec::with_capacity(arguments.len());
                     for argument in arguments {
                         lowered.push(self.expression(argument)?);
                     }
+                    self.check_dynamic_arguments(
+                        method,
+                        receiver_type,
+                        method,
+                        arguments,
+                        &lowered,
+                        expression.span,
+                    )?;
                     let result = self.allocate();
                     let receiver_out = self.allocate();
                     let instruction = Instruction::MethodCall {
@@ -5587,17 +7677,45 @@ impl Lowerer {
                     // into the root would corrupt the root binding. (Nested
                     // mutation needs path write-back: a later phase.)
                     if let ExpressionKind::Name(root) = &target.kind {
-                        self.instructions.push(Instruction::Assign {
-                            name: root.clone(),
-                            value: receiver_out,
-                            span: expression.span,
-                        });
+                        let is_reference = self
+                            .binding_state(root)
+                            .and_then(|state| state.reference)
+                            .is_some();
+                        if !is_reference {
+                            self.check_binding_use(root, BindingUse::Write, expression.span)?;
+                            if self
+                                .binding_state(root)
+                                .map(|state| state.boxed)
+                                .unwrap_or(false)
+                            {
+                                let cell =
+                                    self.lookup_value(root).expect("receiver binding exists");
+                                self.instructions.push(Instruction::StoreMemory {
+                                    pointer: cell,
+                                    value: receiver_out,
+                                    span: expression.span,
+                                });
+                            } else {
+                                self.instructions.push(Instruction::Assign {
+                                    name: root.clone(),
+                                    value: receiver_out,
+                                    span: expression.span,
+                                });
+                            }
+                        }
                     }
                     return Ok(result);
                 }
                 // Channel construction: `channel()` (element types are
                 // informational in this phase; capacity arguments reserved).
                 if matches!(&callee.kind, ExpressionKind::Channel { .. }) {
+                    if !type_arguments.is_empty() {
+                        return Err(Diagnostic::error(
+                            "NXL2014",
+                            "channel() does not accept type arguments in this phase",
+                            callee.span,
+                        ));
+                    }
                     if !arguments.is_empty() {
                         return Err(Diagnostic::error(
                             "NXL2001",
@@ -5618,11 +7736,19 @@ impl Lowerer {
                 // expression (closure literal, call result, index, field).
                 // Lower it, then call through the resulting value.
                 let ExpressionKind::Name(name) = &callee.kind else {
+                    if !type_arguments.is_empty() {
+                        return Err(Diagnostic::error(
+                            "NXL2014",
+                            "type arguments require a named generic function",
+                            callee.span,
+                        ));
+                    }
                     let callee_id = self.expression(callee)?;
                     let mut lowered_arguments = Vec::with_capacity(arguments.len());
                     for arg in arguments {
                         lowered_arguments.push(self.expression(arg)?);
                     }
+                    self.check_indirect_arguments("indirect call", callee_id, arguments, &lowered_arguments)?;
                     let result = self.allocate();
                     let instruction = Instruction::CallIndirect {
                         result,
@@ -5638,6 +7764,13 @@ impl Lowerer {
 
                 // Check for built-in functions the runtime provides directly.
                 if builtin_arity(name).is_some() {
+                    if !type_arguments.is_empty() {
+                        return Err(Diagnostic::error(
+                            "NXL2014",
+                            format!("builtin function '{name}' is not generic"),
+                            callee.span,
+                        ));
+                    }
                     return self.lower_builtin_call(name, arguments, expression.span);
                 }
 
@@ -5651,6 +7784,15 @@ impl Lowerer {
                             crate::ast::DeclarationKind::Class | crate::ast::DeclarationKind::Actor
                         )
                     ) {
+                        if !type_arguments.is_empty() {
+                            return Err(Diagnostic::error(
+                                "NXL2014",
+                                format!(
+                                    "class or actor '{name}' does not accept type arguments yet"
+                                ),
+                                callee.span,
+                            ));
+                        }
                         return self.lower_construction(name, arguments, expression.span);
                     }
                 }
@@ -5665,6 +7807,15 @@ impl Lowerer {
                             kind,
                             crate::ast::DeclarationKind::Class | crate::ast::DeclarationKind::Actor
                         ) {
+                            if !type_arguments.is_empty() {
+                                return Err(Diagnostic::error(
+                                    "NXL2014",
+                                    format!(
+                                        "class or actor '{name}' does not accept type arguments yet"
+                                    ),
+                                    callee.span,
+                                ));
+                            }
                             return self.lower_construction(&qualified, arguments, expression.span);
                         }
                     }
@@ -5675,10 +7826,25 @@ impl Lowerer {
                     Some(resolved) => resolved,
                     None => {
                         if let Some(value) = self.lookup_value(name) {
+                            if !type_arguments.is_empty() {
+                                return Err(Diagnostic::error(
+                                    "NXL2014",
+                                    format!(
+                                        "'{name}' is a function value, not a named generic function"
+                                    ),
+                                    callee.span,
+                                ));
+                            }
                             let mut lowered_arguments = Vec::with_capacity(arguments.len());
                             for arg in arguments {
                                 lowered_arguments.push(self.expression(arg)?);
                             }
+                            self.check_indirect_arguments(
+                                name,
+                                value,
+                                arguments,
+                                &lowered_arguments,
+                            )?;
                             let result = self.allocate();
                             let instruction = Instruction::CallIndirect {
                                 result,
@@ -5694,6 +7860,13 @@ impl Lowerer {
                         // `from std.<module> import <name>` reaches a stdlib
                         // builtin when no user function claims the name.
                         if let Some(qualified) = self.resolve_stdlib_builtin(name) {
+                            if !type_arguments.is_empty() {
+                                return Err(Diagnostic::error(
+                                    "NXL2014",
+                                    format!("stdlib builtin '{name}' is not generic"),
+                                    callee.span,
+                                ));
+                            }
                             return self.lower_builtin_call(&qualified, arguments, expression.span);
                         }
                         // A registered `extern` (C ABI) declaration answers a
@@ -5702,6 +7875,7 @@ impl Lowerer {
                             return self.lower_direct_call(
                                 name,
                                 name,
+                                type_arguments,
                                 arguments,
                                 callee.span,
                                 expression.span,
@@ -5719,6 +7893,7 @@ impl Lowerer {
                 self.lower_direct_call(
                     &resolved,
                     name,
+                    type_arguments,
                     arguments,
                     callee.span,
                     expression.span,
@@ -5759,6 +7934,18 @@ impl Lowerer {
                     ExpressionKind::Member { .. } | ExpressionKind::Index { .. } => {
                         return self.assign_to_place(target, *operator, value, expression.span);
                     }
+                    // `*r = v` writes through a mutable reference.
+                    ExpressionKind::Unary {
+                        operator: UnaryOperator::Deref,
+                        operand,
+                    } => {
+                        return self.assign_through_reference(
+                            operand,
+                            *operator,
+                            value,
+                            expression.span,
+                        );
+                    }
                     _ => {}
                 }
                 let ExpressionKind::Name(name) = &target.kind else {
@@ -5768,7 +7955,7 @@ impl Lowerer {
                         target.span,
                     ));
                 };
-                let binding = self.values.get(name).copied();
+                let binding = self.lookup_value(name);
                 let Some(_value_id) = binding else {
                     return Err(Diagnostic::error(
                         "NXL2002",
@@ -5776,6 +7963,18 @@ impl Lowerer {
                         target.span,
                     ));
                 };
+                if self
+                    .binding_state(name)
+                    .and_then(|state| state.reference)
+                    .is_some()
+                {
+                    return Err(Diagnostic::error(
+                        "NXL2015",
+                        format!("cannot rebind reference '{name}'"),
+                        target.span,
+                    )
+                    .with_help("write through the reference with '*name = value'"));
+                }
                 let is_mutable = self.mutability.get(name).copied().unwrap_or(false);
                 if !is_mutable {
                     return Err(Diagnostic::error(
@@ -5784,6 +7983,7 @@ impl Lowerer {
                         target.span,
                     ));
                 }
+                self.check_borrow_conflict(name, BindingUse::Write, target.span)?;
 
                 let assigned_value = match operator {
                     crate::ast::AssignmentOperator::Assign => self.expression(value)?,
@@ -5845,13 +8045,43 @@ impl Lowerer {
                     })?,
                 };
 
-                self.values.insert(name.clone(), assigned_value);
-                let assign_instruction = Instruction::Assign {
-                    name: name.clone(),
-                    value: assigned_value,
-                    span: expression.span,
-                };
-                self.instructions.push(assign_instruction);
+                if matches!(self.value_type(assigned_value), Type::Reference(..)) {
+                    return Err(Diagnostic::error(
+                        "NXL2017",
+                        "a reference cannot be stored into an existing binding",
+                        expression.span,
+                    )
+                    .with_help("let the reference be initialised in its own 'let' declaration"));
+                }
+                if self
+                    .binding_state(name)
+                    .map(|state| state.boxed)
+                    .unwrap_or(false)
+                {
+                    // The binding is borrowed: keep the cell identity so
+                    // outstanding references see the new value, and store
+                    // through it instead of replacing the slot.
+                    let cell = self
+                        .lookup_value(name)
+                        .expect("binding exists, checked above");
+                    self.instructions.push(Instruction::StoreMemory {
+                        pointer: cell,
+                        value: assigned_value,
+                        span: expression.span,
+                    });
+                } else {
+                    self.values.insert(name.clone(), assigned_value);
+                    let assign_instruction = Instruction::Assign {
+                        name: name.clone(),
+                        value: assigned_value,
+                        span: expression.span,
+                    };
+                    self.instructions.push(assign_instruction);
+                }
+                if let Some(state) = self.binding_state_mut(name) {
+                    // Reassignment restores a moved binding.
+                    state.moved = false;
+                }
                 Ok(assigned_value)
             }
             ExpressionKind::Function(function) => {
@@ -5883,6 +8113,26 @@ impl Lowerer {
                             function.span,
                         )
                     })?;
+                    let active = self
+                        .scope_stack
+                        .iter()
+                        .any(|scope| scope.contains_key(name));
+                    if active {
+                        self.check_binding_use(name, BindingUse::Read, function.span)?;
+                        let state = self.binding_state(name);
+                        let captures_reference = state.and_then(|state| state.reference).is_some()
+                            || state.map(|state| state.boxed).unwrap_or(false);
+                        if captures_reference {
+                            return Err(Diagnostic::error(
+                                "NXL2017",
+                                format!(
+                                    "closure captures reference '{name}'; references may not escape the borrow scope"
+                                ),
+                                function.span,
+                            )
+                            .with_help("capture the owned value instead"));
+                        }
+                    }
                     let result = self.allocate();
                     let ty = self.value_type(value);
                     let instruction = Instruction::Load {
@@ -5900,13 +8150,35 @@ impl Lowerer {
                     .iter()
                     .map(|name| (name.clone(), Type::Unknown))
                     .collect();
+                // A declared parameter annotation resolves to its type, so a
+                // closure parameter written `&T` is a reference slot exactly
+                // like a named function's; an unannotated one stays `Unknown`.
+                let mut declared = Vec::with_capacity(function.parameters.len());
                 for param in &function.parameters {
-                    params.push((param.name.clone(), Type::Unknown));
+                    let ty = param
+                        .annotation
+                        .as_ref()
+                        .and_then(|annotation| self.resolve_type(annotation))
+                        .unwrap_or(Type::Unknown);
+                    declared.push(ty);
+                    params.push((param.name.clone(), ty));
                 }
                 self.signatures.push(FunctionSignature {
                     name: closure_name.clone(),
                     parameters: params.clone(),
                     return_type: Type::Unknown,
+                    type_parameters: function.type_parameters.clone(),
+                    parameter_annotations: captured
+                        .iter()
+                        .map(|_| None)
+                        .chain(
+                            function
+                                .parameters
+                                .iter()
+                                .map(|param| param.annotation.clone()),
+                        )
+                        .collect(),
+                    return_annotation: function.return_type.clone(),
                 });
 
                 let owned = crate::ast::Function {
@@ -5919,9 +8191,14 @@ impl Lowerer {
                     is_async: function.is_async,
                     span: function.span,
                 };
+                // Closure literals get the same declaration-level ownership
+                // check as a named function: `fn() -> &Int` is rejected
+                // wherever it is written.
+                validate_function_ownership(&owned)?;
                 self.lower_statement(&Statement::Function(owned))?;
 
                 let result = self.allocate();
+                self.closure_parameters.insert(result, declared);
                 let instruction = Instruction::MakeClosure {
                     result,
                     callee: closure_name,
@@ -5930,6 +8207,95 @@ impl Lowerer {
                 };
                 self.record_value_type(&instruction);
                 self.instructions.push(instruction);
+                Ok(result)
+            }
+            ExpressionKind::Conditional {
+                condition,
+                then_value,
+                else_value,
+            } => {
+                let condition_id = self.expression(condition)?;
+                let condition_type = self.value_type(condition_id);
+                if condition_type != Type::Bool && !is_dynamic(condition_type) {
+                    return Err(Diagnostic::error(
+                        "NXL2001",
+                        format!(
+                            "conditional expression condition has type {condition_type:?}, expected Bool"
+                        ),
+                        condition.span,
+                    ));
+                }
+
+                // Lower each branch into its own instruction stream, then
+                // merge by storing the chosen value into a synthesized local.
+                let saved_instructions = std::mem::take(&mut self.instructions);
+                let saved_values = self.values.clone();
+                let saved_mutability = self.mutability.clone();
+                let saved_value_types = self.value_types.clone();
+
+                let then_id = self.expression(then_value)?;
+                let then_type = self.value_type(then_id);
+                let mut then_instructions = std::mem::take(&mut self.instructions);
+
+                self.instructions = Vec::new();
+                self.values = saved_values.clone();
+                self.mutability = saved_mutability.clone();
+                self.value_types = saved_value_types.clone();
+                let else_id = self.expression(else_value)?;
+                let else_type = self.value_type(else_id);
+                let mut else_instructions = std::mem::take(&mut self.instructions);
+
+                self.values = saved_values;
+                self.mutability = saved_mutability;
+                self.value_types = saved_value_types;
+
+                if then_type == Type::Void || else_type == Type::Void {
+                    return Err(Diagnostic::error(
+                        "NXL2006",
+                        "a conditional expression cannot produce a void value",
+                        expression.span,
+                    ));
+                }
+                let result_type =
+                    unify_inferred_types(then_type, else_type).map_err(|()| {
+                        Diagnostic::error(
+                            "NXL2001",
+                            format!(
+                                "conditional branches have incompatible types {then_type:?} and {else_type:?}"
+                            ),
+                            expression.span,
+                        )
+                    })?;
+
+                let temporary = format!("__conditional_{}", self.conditional_counter);
+                self.conditional_counter += 1;
+                then_instructions.push(Instruction::Store {
+                    name: temporary.clone(),
+                    value: then_id,
+                    span: expression.span,
+                });
+                else_instructions.push(Instruction::Store {
+                    name: temporary.clone(),
+                    value: else_id,
+                    span: expression.span,
+                });
+
+                self.instructions = saved_instructions;
+                self.instructions.push(Instruction::If {
+                    condition: condition_id,
+                    then_branch: then_instructions,
+                    else_branch: Some(else_instructions),
+                    span: expression.span,
+                });
+                let result = self.allocate();
+                let load = Instruction::Load {
+                    result,
+                    name: temporary,
+                    ty: result_type,
+                    span: expression.span,
+                };
+                self.record_value_type(&load);
+                self.instructions.push(load);
                 Ok(result)
             }
             _ => Err(Diagnostic::error(
@@ -5994,15 +8360,516 @@ impl Lowerer {
             .copied()
             .unwrap_or(Type::Unknown)
     }
+
+    /// Remember the concrete arguments behind an `Instance` fingerprint. The
+    /// fingerprint is a one-way hash, so every site that builds an instance
+    /// from written text records its argument list here; inference, field
+    /// lookup and annotation round-tripping all read it back.
+    fn record_instance_arguments(&mut self, base: TypeId, arguments: &[Type]) {
+        let fingerprint = argument_fingerprint(arguments);
+        for argument in arguments {
+            self.register_type_identities(*argument);
+        }
+        self.identity_types
+            .entry(mix_type_id(base, fingerprint))
+            .or_insert(Type::Instance(base, fingerprint));
+        self.instance_arguments
+            .entry((base, fingerprint))
+            .or_insert_with(|| arguments.to_vec());
+    }
+
+    /// Register a type that was resolved from a written annotation. Hashed
+    /// ids cannot be reversed, so the written text is the only place the
+    /// target of a reference, the element of an array, or the arguments of a
+    /// generic instance are still available.
+    fn register_annotation_type(&mut self, annotation: &str, ty: Type) {
+        let annotation = annotation.trim();
+        match ty {
+            Type::Reference(id, _) => {
+                let target_text = annotation
+                    .strip_prefix('&')
+                    .map(|rest| rest.strip_prefix("mut ").unwrap_or(rest).trim())
+                    .filter(|rest| !rest.is_empty());
+                if let Some(target_text) = target_text {
+                    if let Some(target) = self.resolve_type(target_text) {
+                        self.register_annotation_type(target_text, target);
+                        self.identity_types.entry(id).or_insert(target);
+                    }
+                }
+            }
+            Type::Array(id) => {
+                if let Some(element_text) = array_element_annotation(annotation) {
+                    if let Some(element) = self.resolve_type(element_text) {
+                        self.register_annotation_type(element_text, element);
+                        self.identity_types.entry(id).or_insert(element);
+                    }
+                }
+            }
+            Type::Instance(base, fingerprint) => {
+                let Some(open) = annotation.find('<') else {
+                    return;
+                };
+                if !annotation.ends_with('>') {
+                    return;
+                }
+                let names = split_type_arguments(&annotation[open + 1..annotation.len() - 1]);
+                let mut arguments = Vec::with_capacity(names.len());
+                for name in &names {
+                    let Some(argument) = self.resolve_type(name) else {
+                        return;
+                    };
+                    // Nested instances (`Box<Box<Int>>`) are only visible in
+                    // their written form here, so register them as well.
+                    self.register_annotation_type(name, argument);
+                    arguments.push(argument);
+                }
+                if argument_fingerprint(&arguments) == fingerprint {
+                    self.record_instance_arguments(base, &arguments);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Register the identities a type already knows about, so nested
+    /// structural types survive a round-trip through `type_by_identity`.
+    fn register_type_identities(&mut self, ty: Type) {
+        match ty {
+            Type::Reference(id, _)
+            | Type::Array(id)
+            | Type::Optional(id)
+            | Type::Task(id)
+            | Type::Channel(id) => {
+                if let Some(inner) = self.type_by_identity(id) {
+                    self.register_type_identities(inner);
+                }
+            }
+            Type::Instance(base, fingerprint) => {
+                if let Some(arguments) = self.resolve_instance_arguments(base, fingerprint) {
+                    for argument in arguments {
+                        self.register_type_identities(argument);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Recover the concrete `Type`s of an `Instance` from the fingerprint of
+    /// a written annotation (`Box<Int>`), when that annotation is available.
+    fn resolve_instance_arguments(&self, base: TypeId, fingerprint: TypeId) -> Option<Vec<Type>> {
+        // The fingerprint is not reversible, so record arguments at every
+        // construction/annotation site instead. This helper only validates
+        // the cached entry (guarding against a stale hash collision).
+        let arguments = self.instance_arguments.get(&(base, fingerprint))?;
+        (argument_fingerprint(arguments) == fingerprint).then(|| arguments.clone())
+    }
+
+    /// Resolve a `Type::Array`/`Type::Tuple` element id back to a `Type`.
+    fn type_by_identity(&self, id: TypeId) -> Option<Type> {
+        if let Some(ty) = self.identity_types.get(&id) {
+            return Some(*ty);
+        }
+        for (name, ty) in [
+            ("Int", Type::Int),
+            ("Float", Type::Float),
+            ("Bool", Type::Bool),
+            ("String", Type::String),
+            ("Void", Type::Void),
+        ] {
+            if stable_type_id(name) == id {
+                return Some(ty);
+            }
+        }
+        // Named user types resolve by their (possibly qualified) identity.
+        self.program.statements.iter().find_map(|statement| {
+            let declaration = match statement {
+                Statement::TypeDeclaration(declaration) => declaration,
+                Statement::TypeAlias(alias) if stable_type_id(&alias.name) == id => {
+                    return Some(Type::Generic(id));
+                }
+                Statement::Export(inner) => {
+                    return match inner.as_ref() {
+                        Statement::TypeDeclaration(declaration) => {
+                            (stable_type_id(&declaration.name) == id).then_some(Type::Generic(id))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => return None,
+            };
+            (stable_type_id(&declaration.name) == id).then_some(Type::Generic(id))
+        })
+    }
+
+    /// The declared field type of `field` on `object_ty`, if the object type
+    /// and the declaration can be resolved statically. For an instantiated
+    /// generic struct the declared parameters are substituted with the
+    /// instance's recorded arguments, so `Box<Int>.value` is `Int`.
+    fn field_type_of(&mut self, object_ty: Type, field: &str) -> Option<Type> {
+        let (base, arguments) = match object_ty {
+            Type::Generic(base) | Type::Struct(base) | Type::Enum(base) => (base, None),
+            Type::Instance(base, fingerprint) => {
+                (base, self.resolve_instance_arguments(base, fingerprint))
+            }
+            _ => return None,
+        };
+        // Copy the declaration data out so the immutable borrow of the
+        // program ends before identities are registered below.
+        let (annotation, type_parameters) =
+            self.program.statements.iter().find_map(|statement| {
+                let declaration = match statement {
+                    Statement::TypeDeclaration(declaration) => declaration,
+                    Statement::Export(inner) => match inner.as_ref() {
+                        Statement::TypeDeclaration(declaration) => declaration,
+                        _ => return None,
+                    },
+                    _ => return None,
+                };
+                if stable_type_id(&declaration.name) != base {
+                    return None;
+                }
+                let declared = declaration
+                    .fields
+                    .iter()
+                    .find(|candidate| candidate.name == field)?;
+                Some((
+                    declared.annotation.clone(),
+                    declaration.type_parameters.clone(),
+                ))
+            })?;
+        let annotation = match arguments {
+            Some(arguments) if !type_parameters.is_empty() => {
+                if arguments.len() != type_parameters.len() {
+                    return None;
+                }
+                let mut bindings = HashMap::with_capacity(type_parameters.len());
+                for (parameter, argument) in type_parameters.iter().zip(arguments.iter()) {
+                    let rendered = self.type_to_annotation(*argument)?;
+                    bindings.insert(parameter.clone(), rendered);
+                }
+                substitute_type_parameters(&annotation, &bindings)
+            }
+            _ => annotation,
+        };
+        let ty = type_from_name_with(&annotation, &self.type_aliases, &type_parameters)?;
+        self.register_annotation_type(&annotation, ty);
+        Some(ty)
+    }
+
+    /// The element type of an array type, when it can be recovered.
+    fn array_element_type(&self, ty: Type) -> Option<Type> {
+        match ty {
+            Type::Array(id) if id != 0 => self.type_by_identity(id),
+            _ => None,
+        }
+    }
+
+    /// Structurally bind a declared type parameter to the concrete type of a
+    /// value. Returns `Err(())` when the same parameter would be bound to two
+    /// incompatible types. Annotations that do not mention a parameter are
+    /// ignored here; the ordinary type check validates them.
+    fn bind_annotation_to_type(
+        &self,
+        annotation: &str,
+        actual: Type,
+        params: &[String],
+        bindings: &mut HashMap<String, Type>,
+    ) -> Result<(), ()> {
+        let annotation = annotation.trim();
+        if params.iter().any(|parameter| parameter == annotation) {
+            if is_dynamic(actual) {
+                return Ok(());
+            }
+            return match bindings.get(annotation) {
+                Some(existing) if *existing == actual => Ok(()),
+                Some(_) => Err(()),
+                None => {
+                    bindings.insert(annotation.to_owned(), actual);
+                    Ok(())
+                }
+            };
+        }
+        // References constrain the type they point at, not the reference
+        // itself: `fn read<T>(x: &T)` called with `borrow n` binds `T = Int`.
+        if let Some(inner) = annotation.strip_prefix('&') {
+            let target = inner.strip_prefix("mut ").unwrap_or(inner).trim();
+            let pointed = match self.reference_target(actual) {
+                Some((target, _)) => target,
+                None if is_dynamic(actual) => Type::Unknown,
+                // A non-reference value cannot satisfy a reference parameter.
+                None => return Err(()),
+            };
+            return self.bind_annotation_to_type(target, pointed, params, bindings);
+        }
+        // Array forms: `[T]`, `Array<T>`, `List<T>`.
+        let element_annotation = if annotation.starts_with('[') && annotation.ends_with(']') {
+            Some(annotation[1..annotation.len() - 1].to_owned())
+        } else if let Some(open) = annotation.find('<') {
+            let base = annotation[..open].trim();
+            if annotation.ends_with('>') && matches!(base, "Array" | "List") {
+                let inner = &annotation[open + 1..annotation.len() - 1];
+                (!inner.contains(',')).then(|| inner.to_owned())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(inner) = element_annotation {
+            if let Some(element) = self.array_element_type(actual) {
+                return self.bind_annotation_to_type(&inner, element, params, bindings);
+            }
+            return Ok(());
+        }
+        // User generic form: `Base<T, ...>`.
+        if let Some(open) = annotation.find('<') {
+            if annotation.ends_with('>') {
+                let base_name = annotation[..open].trim();
+                let arguments = split_type_arguments(&annotation[open + 1..annotation.len() - 1]);
+                let resolved_base = stable_type_id(
+                    &self
+                        .type_aliases
+                        .get(base_name)
+                        .cloned()
+                        .unwrap_or_else(|| base_name.to_owned()),
+                );
+                let instance_arguments = match actual {
+                    Type::Instance(base, fingerprint) if base == resolved_base => {
+                        self.resolve_instance_arguments(base, fingerprint)
+                    }
+                    _ => None,
+                };
+                if let Some(arguments_actual) = instance_arguments {
+                    for (declared, actual) in arguments.iter().zip(arguments_actual.iter()) {
+                        self.bind_annotation_to_type(declared, *actual, params, bindings)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Turn inferred parameter bindings into annotation strings. Every
+    /// parameter must be bound to a concrete type; otherwise inference is
+    /// ambiguous and the caller must supply explicit type arguments.
+    fn inferred_arguments(
+        &self,
+        display: &str,
+        params: &[String],
+        bindings: &HashMap<String, Type>,
+        missing_help: &str,
+        span: Span,
+    ) -> Result<HashMap<String, String>, Diagnostic> {
+        let mut written = HashMap::with_capacity(params.len());
+        for parameter in params {
+            let Some(ty) = bindings.get(parameter) else {
+                return Err(Diagnostic::error(
+                    "NXL2014",
+                    format!(
+                        "cannot infer type argument '{parameter}' for '{display}'; add explicit type argument(s)"
+                    ),
+                    span,
+                )
+                .with_help(missing_help));
+            };
+            let Some(annotation) = self.type_to_annotation(*ty) else {
+                return Err(Diagnostic::error(
+                    "NXL2014",
+                    format!(
+                        "cannot infer type argument '{parameter}' for '{display}' from a dynamic value"
+                    ),
+                    span,
+                )
+                .with_help(missing_help));
+            };
+            written.insert(parameter.clone(), annotation);
+        }
+        Ok(written)
+    }
+
+    /// Infer return types for unannotated functions before the real lowering
+    /// pass. Calls are order-independent: a function that depends on another
+    /// unannotated function is retried in the next round. Errors are ignored
+    /// here so the main pass can report them with full span context.
+    fn infer_return_types(&mut self, files: &[ProjectFile]) {
+        const MAX_ROUNDS: usize = 8;
+        for _ in 0..MAX_ROUNDS {
+            let mut changed = false;
+            for file in files {
+                for statement in &file.hir.program.statements {
+                    let function = match statement {
+                        Statement::Function(function) => function,
+                        Statement::Export(inner) => match inner.as_ref() {
+                            Statement::Function(function) => function,
+                            _ => continue,
+                        },
+                        _ => continue,
+                    };
+                    let Some(name) = &function.name else {
+                        continue;
+                    };
+                    if function.return_type.is_some() {
+                        continue;
+                    }
+                    let Some(signature) = self
+                        .signatures
+                        .iter()
+                        .find(|signature| signature.name == *name)
+                    else {
+                        continue;
+                    };
+                    if signature.return_type != Type::Unknown {
+                        continue;
+                    }
+                    let mut probe = self.clone();
+                    probe.functions.clear();
+                    probe.instructions.clear();
+                    probe.values.clear();
+                    probe.mutability.clear();
+                    probe.scope_stack = vec![HashMap::new()];
+                    probe.mutability_stack = vec![HashMap::new()];
+                    probe.next_value = 0;
+                    probe.in_function = false;
+                    probe.current_function_return_type = None;
+                    probe.current_return_types.clear();
+                    probe.current_type_parameters.clear();
+                    probe.in_loop = false;
+                    probe.loop_depth = 0;
+                    probe.try_stack.clear();
+                    probe.function_has_return = false;
+                    probe.value_types.clear();
+                    probe.value_field_types.clear();
+                    probe.conditional_counter = 0;
+                    probe.async_counter = 0;
+                    probe.closure_counter = 0;
+                    probe.current_module = file.path.clone();
+                    probe.file_imports = file.imports.clone();
+                    probe.type_aliases = file.aliases.clone();
+                    probe.source_name = file.hir.source_name.clone();
+                    if probe.lower_statement(statement).is_err() {
+                        continue;
+                    }
+                    // The function branch records its inferred result on the
+                    // probe's own signature and restores the raw return list.
+                    let inferred = probe
+                        .signatures
+                        .iter()
+                        .find(|signature| signature.name == *name)
+                        .map(|signature| signature.return_type)
+                        .unwrap_or(Type::Unknown);
+                    if inferred == Type::Unknown {
+                        continue;
+                    }
+                    if let Some(signature) = self
+                        .signatures
+                        .iter_mut()
+                        .find(|signature| signature.name == *name)
+                    {
+                        if signature.return_type != inferred {
+                            signature.return_type = inferred;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// Infer the type of `field` read from an already-lowered object value.
+    fn inferred_field_type(&mut self, object: ValueId, field: &str) -> Type {
+        if let Some(fields) = self.value_field_types.get(&object) {
+            if let Some(ty) = fields.get(field) {
+                return *ty;
+            }
+        }
+        let object_type = self.value_type(object);
+        self.field_type_of(object_type, field)
+            .unwrap_or(Type::Unknown)
+    }
+
+    /// Infer the element type of an already-lowered array value.
+    fn inferred_element_type(&self, object: ValueId) -> Type {
+        self.array_element_type(self.value_type(object))
+            .unwrap_or(Type::Unknown)
+    }
+
+    /// Render a concrete inferred type back into a type annotation that
+    /// `resolve_type_argument` can read.
+    fn type_to_annotation(&self, ty: Type) -> Option<String> {
+        match ty {
+            Type::Int => Some("Int".to_owned()),
+            Type::Float => Some("Float".to_owned()),
+            Type::Bool => Some("Bool".to_owned()),
+            Type::String => Some("String".to_owned()),
+            Type::Void => Some("Void".to_owned()),
+            Type::Generic(id) => self.type_name_by_identity(id),
+            Type::Instance(base, fingerprint) => {
+                let arguments = self.resolve_instance_arguments(base, fingerprint)?;
+                let base_name = self.type_name_by_identity(base)?;
+                let rendered = arguments
+                    .iter()
+                    .map(|argument| self.type_to_annotation(*argument))
+                    .collect::<Option<Vec<_>>>()?
+                    .join(", ");
+                Some(format!("{base_name}<{rendered}>"))
+            }
+            Type::Array(id) => {
+                let element = self.type_by_identity(id)?;
+                Some(format!("[{}]", self.type_to_annotation(element)?))
+            }
+            Type::Reference(id, mutable) => {
+                let target = self.type_by_identity(id)?;
+                let rendered = self.type_to_annotation(target)?;
+                Some(if mutable {
+                    format!("&mut {rendered}")
+                } else {
+                    format!("&{rendered}")
+                })
+            }
+            Type::Tuple(id) => {
+                // Tuples are keyed by their written annotation; recover the
+                // element list through the same identity map used for arrays.
+                let _ = id;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Resolve a type identity back to the declared (possibly qualified) name.
+    fn type_name_by_identity(&self, id: TypeId) -> Option<String> {
+        self.type_names
+            .iter()
+            .find(|name| stable_type_id(name) == id)
+            .cloned()
+    }
 }
 
 pub(crate) fn type_from_name(name: &str, aliases: &HashMap<String, String>) -> Option<Type> {
+    type_from_name_with(name, aliases, &[])
+}
+
+/// Resolve a written type annotation, treating names in `params` as
+/// unsubstituted type parameters (`T`). User-defined `Base<Args>` become
+/// `Type::Instance`; their base is resolved through `aliases` when known.
+pub(crate) fn type_from_name_with(
+    name: &str,
+    aliases: &HashMap<String, String>,
+    params: &[String],
+) -> Option<Type> {
     /// Resolve a bare argument name through aliases for hashing purposes.
     fn keyed(argument: &str, aliases: &HashMap<String, String>) -> String {
         aliases
             .get(argument)
             .cloned()
             .unwrap_or_else(|| argument.to_owned())
+    }
+    if params.iter().any(|param| param == name) {
+        return Some(Type::Param(stable_type_id(name)));
     }
     match name {
         "Int" => Some(Type::Int),
@@ -6019,23 +8886,32 @@ pub(crate) fn type_from_name(name: &str, aliases: &HashMap<String, String>) -> O
                 let (mutable, target) = inner
                     .strip_prefix("mut ")
                     .map_or((false, inner), |target| (true, target));
-                type_from_name(target, aliases)?;
-                return Some(Type::Reference(
-                    stable_type_id(&keyed(target, aliases)),
-                    mutable,
-                ));
+                // The reference is keyed by the identity of what it points
+                // at, not by the text written after `&`, so a borrow of a
+                // `Box<Int>` and an annotation `&Box<Int>` agree.
+                let target_ty = type_from_name_with(target, aliases, params)?;
+                return Some(Type::Reference(type_identity(target_ty), mutable));
             }
             if name.starts_with('[') && name.ends_with(']') {
                 let inner = &name[1..name.len() - 1];
-                type_from_name(inner, aliases)?;
-                return Some(Type::Array(stable_type_id(&keyed(inner, aliases))));
+                let element = type_from_name_with(inner, aliases, params)?;
+                return Some(Type::Array(array_identity(element)));
             }
             if name.starts_with('(') && name.ends_with(')') {
                 let contents = &name[1..name.len() - 1];
-                split_type_arguments(contents)
+                let arguments = split_type_arguments(contents)
                     .into_iter()
-                    .map(|argument| type_from_name(argument, aliases))
+                    .map(|argument| type_from_name_with(argument, aliases, params))
                     .collect::<Option<Vec<_>>>()?;
+                // A reference nested inside a value type would escape the
+                // borrow scope; only a direct `&T` binding or parameter is
+                // supported.
+                if arguments
+                    .iter()
+                    .any(|argument| matches!(argument, Type::Reference(..)))
+                {
+                    return None;
+                }
                 return Some(Type::Tuple(stable_type_id(name)));
             }
             let open = name.find('<')?;
@@ -6046,13 +8922,16 @@ pub(crate) fn type_from_name(name: &str, aliases: &HashMap<String, String>) -> O
             let argument_names = split_type_arguments(&name[open + 1..name.len() - 1]);
             let arguments = argument_names
                 .iter()
-                .map(|argument| type_from_name(argument, aliases))
+                .map(|argument| type_from_name_with(argument, aliases, params))
                 .collect::<Option<Vec<_>>>()?;
+            if arguments
+                .iter()
+                .any(|argument| matches!(argument, Type::Reference(..)))
+            {
+                return None;
+            }
             match (constructor, arguments.as_slice()) {
-                ("Array", [_]) | ("List", [_]) => Some(Type::Array(stable_type_id(&keyed(
-                    argument_names[0],
-                    aliases,
-                )))),
+                ("Array", [_]) | ("List", [_]) => Some(Type::Array(array_identity(arguments[0]))),
                 ("Option", [_]) => Some(Type::Optional(stable_type_id(&keyed(
                     argument_names[0],
                     aliases,
@@ -6070,7 +8949,19 @@ pub(crate) fn type_from_name(name: &str, aliases: &HashMap<String, String>) -> O
                     stable_type_id(&keyed(argument_names[1], aliases)),
                 )),
                 ("Map", [_, _]) => Some(Type::Map(stable_type_id(name))),
-                _ => Some(Type::Generic(stable_type_id(name))),
+                // Known containers with the wrong arity are malformed, not
+                // user-defined generic types.
+                ("Array" | "List" | "Option" | "Task" | "Channel" | "Result" | "Map", _) => None,
+                (base, _) => {
+                    let qualified = aliases
+                        .get(base)
+                        .cloned()
+                        .unwrap_or_else(|| base.to_owned());
+                    Some(Type::Instance(
+                        stable_type_id(&qualified),
+                        argument_fingerprint(&arguments),
+                    ))
+                }
             }
         }
     }
@@ -6082,7 +8973,26 @@ pub(crate) fn stable_type_id(name: &str) -> TypeId {
     })
 }
 
-fn split_type_arguments(arguments: &str) -> Vec<&str> {
+/// The element annotation of an array type written as `[T]`, `Array<T>` or
+/// `List<T>`. Used to register the element identity of an array built from
+/// an annotation (`type_from_name_with` hashes the element's identity).
+fn array_element_annotation(annotation: &str) -> Option<&str> {
+    let trimmed = annotation.trim();
+    if let Some(inner) = trimmed
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        return Some(inner.trim());
+    }
+    let open = trimmed.find('<')?;
+    let base = trimmed[..open].trim();
+    if matches!(base, "Array" | "List") && trimmed.ends_with('>') {
+        return Some(trimmed[open + 1..trimmed.len() - 1].trim());
+    }
+    None
+}
+
+pub(crate) fn split_type_arguments(arguments: &str) -> Vec<&str> {
     let mut depth = 0usize;
     let mut start = 0usize;
     let mut items = Vec::new();
@@ -6101,6 +9011,85 @@ fn split_type_arguments(arguments: &str) -> Vec<&str> {
         items.push(arguments[start..].trim());
     }
     items
+}
+
+/// Number of type parameters a builtin container constructor takes.
+fn builtin_type_arity(name: &str) -> Option<usize> {
+    match name {
+        "Array" | "List" | "Option" | "Task" | "Channel" => Some(1),
+        "Result" | "Map" => Some(2),
+        _ => None,
+    }
+}
+
+fn is_primitive_type_name(name: &str) -> bool {
+    matches!(name, "Int" | "Float" | "Bool" | "String" | "Void")
+}
+
+/// Replace identifier tokens that name type parameters with their written
+/// type arguments. Identifiers are scanned whole, so substituting `T` does
+/// not corrupt `Task<T>` or `Type`.
+fn substitute_type_parameters(annotation: &str, bindings: &HashMap<String, String>) -> String {
+    let mut result = String::with_capacity(annotation.len());
+    let mut identifier = String::new();
+    let flush = |identifier: &mut String, result: &mut String| {
+        if identifier.is_empty() {
+            return;
+        }
+        match bindings.get(identifier.as_str()) {
+            Some(replacement) => result.push_str(replacement),
+            None => result.push_str(identifier),
+        }
+        identifier.clear();
+    };
+    for character in annotation.chars() {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            identifier.push(character);
+        } else {
+            flush(&mut identifier, &mut result);
+            result.push(character);
+        }
+    }
+    flush(&mut identifier, &mut result);
+    result
+}
+
+/// Best-effort substitution for signatures without written annotations.
+/// Container arguments are identity hashes, so replacing them is only
+/// possible when the bound argument has a recorded written form.
+fn substitute_erased_type_parameters(ty: Type, bindings: &HashMap<TypeId, (Type, String)>) -> Type {
+    let inner = |id: TypeId| {
+        bindings
+            .get(&id)
+            .map(|(_, written)| stable_type_id(written))
+            .unwrap_or(id)
+    };
+    match ty {
+        Type::Param(id) => bindings.get(&id).map_or(ty, |(resolved, _)| *resolved),
+        // Arrays and references only reach this path through a written
+        // annotation, which is substituted structurally before resolving, so
+        // their ids are already final here.
+        Type::Array(_) => ty,
+        Type::Tuple(id) => Type::Tuple(inner(id)),
+        Type::Map(id) => Type::Map(inner(id)),
+        Type::Struct(id) => Type::Struct(inner(id)),
+        Type::Enum(id) => Type::Enum(inner(id)),
+        Type::Reference(id, mutable) => Type::Reference(inner(id), mutable),
+        Type::Task(id) => Type::Task(inner(id)),
+        Type::Channel(id) => Type::Channel(inner(id)),
+        Type::Optional(id) => Type::Optional(inner(id)),
+        Type::Result(ok, error) => Type::Result(inner(ok), inner(error)),
+        Type::Instance(_, _)
+        | Type::Generic(_)
+        | Type::Unknown
+        | Type::Function(_)
+        | Type::ForeignHandle(_)
+        | Type::Int
+        | Type::Float
+        | Type::Bool
+        | Type::String
+        | Type::Void => ty,
+    }
 }
 
 fn statement_span(statement: &Statement) -> Span {

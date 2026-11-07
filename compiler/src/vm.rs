@@ -183,6 +183,14 @@ pub enum Opcode {
     PatternIndex,
     /// Like GetField, but pushes Unit instead of throwing on failure.
     PatternField(String),
+    /// Push a fresh reference cell holding Unit.
+    Allocate,
+    /// Pop a reference, push the value stored in its cell.
+    LoadMemory,
+    /// Pop a value then a reference; store the value in the cell.
+    StoreMemory,
+    /// Pop a reference cell and push a reference to the same cell.
+    Borrow,
     /// Debug annotation — carries source span, no runtime effect.
     DebugSpan(Span),
 }
@@ -680,6 +688,10 @@ fn serialize_opcode(buf: &mut Vec<u8>, op: &Opcode) {
             buf.push(0x20);
             write_str(buf, name);
         }
+        Opcode::Allocate => buf.push(0x2A),
+        Opcode::LoadMemory => buf.push(0x2B),
+        Opcode::StoreMemory => buf.push(0x2C),
+        Opcode::Borrow => buf.push(0x2D),
         Opcode::DebugSpan(s) => {
             buf.push(0x10);
             buf.extend_from_slice(&(s.start as u32).to_le_bytes());
@@ -812,6 +824,10 @@ fn deserialize_opcode(data: &[u8], cursor: &mut usize) -> Result<Opcode, String>
         }
         0x1F => Ok(Opcode::PatternIndex),
         0x20 => Ok(Opcode::PatternField(read_str(data, cursor)?)),
+        0x2A => Ok(Opcode::Allocate),
+        0x2B => Ok(Opcode::LoadMemory),
+        0x2C => Ok(Opcode::StoreMemory),
+        0x2D => Ok(Opcode::Borrow),
         0x10 => {
             let start = read_u32(data, cursor)? as usize;
             let end = read_u32(data, cursor)? as usize;
@@ -1070,6 +1086,38 @@ fn compile_instruction(
             chunk.emit(Opcode::StoreLocal(dst_slot));
             // Also update value_slots so subsequent loads see the new value.
             value_slots.insert(*value, dst_slot);
+        }
+
+        nir::Instruction::Allocate { result, .. } => {
+            chunk.emit(Opcode::Allocate);
+            let slot = ensure_slot(result, value_slots, next_slot);
+            chunk.emit(Opcode::StoreLocal(slot));
+        }
+
+        nir::Instruction::LoadMemory {
+            result, pointer, ..
+        } => {
+            let pointer_slot = *value_slots.get(pointer).unwrap_or(&0);
+            chunk.emit(Opcode::LoadLocal(pointer_slot));
+            chunk.emit(Opcode::LoadMemory);
+            let slot = ensure_slot(result, value_slots, next_slot);
+            chunk.emit(Opcode::StoreLocal(slot));
+        }
+
+        nir::Instruction::StoreMemory { pointer, value, .. } => {
+            let pointer_slot = *value_slots.get(pointer).unwrap_or(&0);
+            let value_slot = *value_slots.get(value).unwrap_or(&0);
+            chunk.emit(Opcode::LoadLocal(pointer_slot));
+            chunk.emit(Opcode::LoadLocal(value_slot));
+            chunk.emit(Opcode::StoreMemory);
+        }
+
+        nir::Instruction::Borrow { result, value, .. } => {
+            let source_slot = *value_slots.get(value).unwrap_or(&0);
+            chunk.emit(Opcode::LoadLocal(source_slot));
+            chunk.emit(Opcode::Borrow);
+            let slot = ensure_slot(result, value_slots, next_slot);
+            chunk.emit(Opcode::StoreLocal(slot));
         }
 
         nir::Instruction::Unary {
@@ -1916,6 +1964,9 @@ pub enum Value {
     },
     Task(TaskShared),
     Channel(ChannelShared),
+    /// A borrowed cell. The runtime keeps the cell alive for the lexical
+    /// borrow scope; the compiler guarantees no reference outlives it.
+    Reference(Arc<Mutex<Value>>),
     Closure {
         name: String,
         captures: Vec<Value>,
@@ -1956,6 +2007,7 @@ impl PartialEq for Value {
             ) => a_type == b_type && a_variant == b_variant && a_args == b_args,
             (Value::Task(a), Value::Task(b)) => Arc::ptr_eq(&a.state, &b.state),
             (Value::Channel(a), Value::Channel(b)) => Arc::ptr_eq(&a.0, &b.0),
+            (Value::Reference(a), Value::Reference(b)) => Arc::ptr_eq(a, b),
             (
                 Value::Closure {
                     name: a_name,
@@ -2257,6 +2309,15 @@ impl fmt::Display for Value {
             }
             Value::Task(shared) => write!(f, "task#{}", shared.state.id),
             Value::Channel(shared) => write!(f, "channel#{}", shared.0.id),
+            Value::Reference(cell) => {
+                write!(
+                    f,
+                    "<ref {}>",
+                    cell.lock()
+                        .map(|value| value.to_string())
+                        .unwrap_or_default()
+                )
+            }
             Value::Closure { name, .. } => write!(f, "<closure {name}>"),
             Value::Unit => write!(f, "()"),
         }
@@ -3128,6 +3189,47 @@ impl Vm {
                     }
                 }
 
+                Opcode::Allocate => {
+                    self.stack
+                        .push(Value::Reference(Arc::new(Mutex::new(Value::Unit))));
+                }
+
+                Opcode::LoadMemory => {
+                    let pointer = self.stack.pop().unwrap_or(Value::Unit);
+                    match pointer {
+                        Value::Reference(cell) => {
+                            let value = cell
+                                .lock()
+                                .map(|value| value.clone())
+                                .unwrap_or(Value::Unit);
+                            self.stack.push(value);
+                        }
+                        _ => self.stack.push(Value::Unit),
+                    }
+                }
+
+                Opcode::StoreMemory => {
+                    let value = self.stack.pop().unwrap_or(Value::Unit);
+                    let pointer = self.stack.pop().unwrap_or(Value::Unit);
+                    if let Value::Reference(cell) = pointer {
+                        if let Ok(mut slot) = cell.lock() {
+                            *slot = value;
+                        }
+                    }
+                }
+
+                Opcode::Borrow => {
+                    let value = self.stack.pop().unwrap_or(Value::Unit);
+                    match value {
+                        // A borrowed cell is already a reference: reborrowing
+                        // aliases the same cell.
+                        Value::Reference(cell) => self.stack.push(Value::Reference(cell)),
+                        other => self
+                            .stack
+                            .push(Value::Reference(Arc::new(Mutex::new(other)))),
+                    }
+                }
+
                 Opcode::PatternIndex => {
                     let index = self.stack.pop().unwrap_or(Value::Unit);
                     let object = self.stack.pop().unwrap_or(Value::Unit);
@@ -3321,6 +3423,7 @@ fn type_name_of(value: &Value) -> &str {
         Value::Enum { type_name, .. } => type_name,
         Value::Task(_) => "Task",
         Value::Channel(_) => "Channel",
+        Value::Reference(_) => "Reference",
         Value::Closure { .. } => "Function",
         Value::Unit => "Void",
     }

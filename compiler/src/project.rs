@@ -196,6 +196,41 @@ pub fn qualify_module_items(module: &mut ProjectModule) {
     for statement in &mut module.program.statements {
         rename(statement, &path);
     }
+    // Field and variant annotations belong to the declaring file's namespace.
+    // Qualify them now so construction sites in other files can resolve the
+    // declared types without importing every name themselves.
+    let aliases = file_aliases(
+        &module.path,
+        &module.program,
+        &parse_imports(&module.program),
+    );
+    fn canonicalize_fields(statement: &mut Statement, aliases: &HashMap<String, String>) {
+        match statement {
+            Statement::TypeDeclaration(declaration) => {
+                for field in &mut declaration.fields {
+                    field.annotation = crate::hir::canonicalize_type_annotation(
+                        &field.annotation,
+                        aliases,
+                        &declaration.type_parameters,
+                    );
+                }
+                for variant in &mut declaration.variants {
+                    for payload in &mut variant.payload {
+                        *payload = crate::hir::canonicalize_type_annotation(
+                            payload,
+                            aliases,
+                            &declaration.type_parameters,
+                        );
+                    }
+                }
+            }
+            Statement::Export(inner) => canonicalize_fields(inner, aliases),
+            _ => {}
+        }
+    }
+    for statement in &mut module.program.statements {
+        canonicalize_fields(statement, &aliases);
+    }
 }
 
 /// Compile an already-loaded module set to NIR.

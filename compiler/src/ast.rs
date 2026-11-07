@@ -279,6 +279,8 @@ pub enum ExpressionKind {
     },
     Call {
         callee: Box<Expression>,
+        /// Explicit generic instantiation (`<Int>` in `identity<Int>(x)`).
+        type_arguments: Vec<String>,
         arguments: Vec<Expression>,
     },
     Member {
@@ -319,8 +321,16 @@ pub enum ExpressionKind {
 pub enum UnaryOperator {
     Negate,
     Not,
+    /// `ref x` — immutable borrow.
     Reference,
+    /// `borrow x` — immutable borrow.
     Borrow,
+    /// `ref mut x` / `borrow mut x` — mutable borrow.
+    BorrowMut,
+    /// `*x` — read through a reference.
+    Deref,
+    /// `move x` — explicit ownership transfer.
+    Move,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

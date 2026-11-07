@@ -1,6 +1,8 @@
 use crate::ast::{Program, Statement};
 use crate::diagnostic::Diagnostic;
-use crate::nir::{stable_type_id, type_from_name, FunctionSignature, Type};
+use crate::nir::{
+    split_type_arguments, stable_type_id, type_from_name_with, FunctionSignature, Type,
+};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +35,12 @@ pub fn analyze_module(
         .iter()
         .filter_map(declared_type_name)
         .collect::<Vec<_>>();
+    // Declared generic arity per bare type name, for argument validation.
+    let generic_arities = program
+        .statements
+        .iter()
+        .filter_map(declared_type_arity)
+        .collect::<HashMap<_, _>>();
     let mut seen_types = HashSet::new();
     for statement in &program.statements {
         if let Some(name) = declared_type_name(statement) {
@@ -64,20 +72,35 @@ pub fn analyze_module(
             ));
         }
 
+        let type_parameters = function.type_parameters.clone();
+        let mut seen_parameters = HashSet::new();
+        for parameter in &type_parameters {
+            if !seen_parameters.insert(parameter) {
+                return Err(Diagnostic::error(
+                    "NXL2005",
+                    format!("duplicate type parameter '{parameter}' in function '{name}'"),
+                    function.span,
+                ));
+            }
+        }
         let mut parameters = Vec::with_capacity(function.parameters.len());
+        let mut parameter_annotations = Vec::with_capacity(function.parameters.len());
         for parameter in &function.parameters {
             let ty = match &parameter.annotation {
-                Some(annotation) => resolve_type(annotation, &type_names, &context.aliases)
-                    .ok_or_else(|| {
-                        Diagnostic::error(
-                            "NXL2004",
-                            format!("unknown type '{annotation}'"),
-                            parameter.span,
-                        )
-                    })?,
+                Some(annotation) => resolve_type(
+                    annotation,
+                    &type_names,
+                    &context.aliases,
+                    &generic_arities,
+                    &type_parameters,
+                )
+                .map_err(|error| type_diagnostic(error, annotation, parameter.span))?,
                 None => Type::Unknown,
             };
             parameters.push((parameter.name.clone(), ty));
+            parameter_annotations.push(parameter.annotation.as_ref().map(|annotation| {
+                canonicalize_type_annotation(annotation, &context.aliases, &type_parameters)
+            }));
         }
         let mut param_names = std::collections::HashSet::new();
         for (pname, _) in &parameters {
@@ -90,20 +113,26 @@ pub fn analyze_module(
             }
         }
         let return_type = match &function.return_type {
-            Some(annotation) => resolve_type(annotation, &type_names, &context.aliases)
-                .ok_or_else(|| {
-                    Diagnostic::error(
-                        "NXL2004",
-                        format!("unknown type '{annotation}'"),
-                        function.span,
-                    )
-                })?,
+            Some(annotation) => resolve_type(
+                annotation,
+                &type_names,
+                &context.aliases,
+                &generic_arities,
+                &type_parameters,
+            )
+            .map_err(|error| type_diagnostic(error, annotation, function.span))?,
             None => Type::Unknown,
         };
+        let return_annotation = function.return_type.as_ref().map(|annotation| {
+            canonicalize_type_annotation(annotation, &context.aliases, &type_parameters)
+        });
         functions.push(FunctionSignature {
             name: name.clone(),
             parameters,
             return_type,
+            type_parameters,
+            parameter_annotations,
+            return_annotation,
         });
     }
 
@@ -141,12 +170,145 @@ fn statement_span(statement: &Statement) -> crate::source::Span {
     }
 }
 
+fn declared_type_arity(statement: &Statement) -> Option<(String, usize)> {
+    match statement {
+        Statement::TypeDeclaration(declaration) => {
+            Some((declaration.name.clone(), declaration.type_parameters.len()))
+        }
+        Statement::TypeAlias(alias) => Some((alias.name.clone(), alias.type_parameters.len())),
+        Statement::Export(inner) => declared_type_arity(inner),
+        _ => None,
+    }
+}
+
+#[derive(Debug)]
+enum TypeResolveError {
+    Unknown,
+    Arity {
+        base: String,
+        expected: usize,
+        found: usize,
+    },
+}
+
+fn type_diagnostic(
+    error: TypeResolveError,
+    annotation: &str,
+    span: crate::source::Span,
+) -> Diagnostic {
+    match error {
+        TypeResolveError::Unknown => {
+            Diagnostic::error("NXL2004", format!("unknown type '{annotation}'"), span)
+        }
+        TypeResolveError::Arity {
+            base,
+            expected,
+            found,
+        } => Diagnostic::error(
+            "NXL2001",
+            format!("type '{base}' expects {expected} type argument(s), found {found}"),
+            span,
+        ),
+    }
+}
+
+/// Rewrite bare type names in an annotation to the qualified names of the
+/// declaring file, leaving declared type parameters untouched. The result is
+/// self-contained: call-site instantiation can substitute type arguments and
+/// resolve it without the caller's (different) alias table.
+pub(crate) fn canonicalize_type_annotation(
+    annotation: &str,
+    aliases: &HashMap<String, String>,
+    parameters: &[String],
+) -> String {
+    let mut canonical = String::with_capacity(annotation.len());
+    let mut identifier_start: Option<usize> = None;
+    for (index, character) in annotation.char_indices() {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            identifier_start.get_or_insert(index);
+            continue;
+        }
+        if let Some(start) = identifier_start.take() {
+            push_canonical_identifier(
+                &mut canonical,
+                &annotation[start..index],
+                aliases,
+                parameters,
+            );
+        }
+        canonical.push(character);
+    }
+    if let Some(start) = identifier_start {
+        push_canonical_identifier(&mut canonical, &annotation[start..], aliases, parameters);
+    }
+    canonical
+}
+
+fn push_canonical_identifier(
+    out: &mut String,
+    identifier: &str,
+    aliases: &HashMap<String, String>,
+    parameters: &[String],
+) {
+    if parameters.iter().any(|parameter| parameter == identifier) {
+        out.push_str(identifier);
+    } else if let Some(qualified) = aliases.get(identifier) {
+        out.push_str(qualified);
+    } else {
+        out.push_str(identifier);
+    }
+}
+
 fn resolve_type(
     name: &str,
     known_types: &[String],
     aliases: &HashMap<String, String>,
-) -> Option<Type> {
-    type_from_name(name, aliases)
+    generic_arities: &HashMap<String, usize>,
+    params: &[String],
+) -> Result<Type, TypeResolveError> {
+    // A function's own type parameters are in scope before any concrete type.
+    if params.iter().any(|param| param == name) {
+        return Ok(Type::Param(stable_type_id(name)));
+    }
+    // A reference annotation (`&T`, `&mut T`) validates the type it wraps:
+    // strip the wrapper before looking for a generic instantiation, so
+    // `&Box<Int>` and `&[Int]` are not mistaken for types named `&Box`/`&[`.
+    let checked = name
+        .strip_prefix('&')
+        .map(|rest| rest.strip_prefix("mut ").unwrap_or(rest))
+        .unwrap_or(name)
+        .trim();
+    // Validate explicit instantiation of locally declared generic types.
+    if let Some(open) = checked.find('<') {
+        if checked.ends_with('>') {
+            let base = &checked[..open];
+            let is_builtin = matches!(
+                base,
+                "Array" | "List" | "Option" | "Task" | "Channel" | "Result" | "Map"
+            );
+            if !is_builtin {
+                let arguments = split_type_arguments(&checked[open + 1..checked.len() - 1]);
+                match generic_arities.get(base) {
+                    Some(&expected) if expected != arguments.len() => {
+                        return Err(TypeResolveError::Arity {
+                            base: base.to_owned(),
+                            expected,
+                            found: arguments.len(),
+                        });
+                    }
+                    Some(_) => {}
+                    None => {
+                        // Imported generic types are declared in another file;
+                        // their arity is validated where they are declared.
+                        if !aliases.contains_key(base) {
+                            return Err(TypeResolveError::Unknown);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    type_from_name_with(name, aliases, params)
         .or_else(|| {
             aliases
                 .get(name)
@@ -158,4 +320,5 @@ fn resolve_type(
                 .any(|known| known == name)
                 .then(|| Type::Generic(stable_type_id(name)))
         })
+        .ok_or(TypeResolveError::Unknown)
 }

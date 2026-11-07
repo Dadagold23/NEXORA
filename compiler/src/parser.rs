@@ -902,6 +902,15 @@ impl Parser {
     }
 
     fn type_annotation(&mut self) -> Result<String, Diagnostic> {
+        if self.matches(&TokenKind::Ampersand) {
+            let mutable = self.matches(&TokenKind::Mut);
+            let inner = self.type_annotation()?;
+            return Ok(if mutable {
+                format!("&mut {inner}")
+            } else {
+                format!("&{inner}")
+            });
+        }
         if self.matches(&TokenKind::LeftBracket) {
             let inner = self.type_annotation()?;
             self.consume(&TokenKind::RightBracket, "expected ']' after array type")?;
@@ -1122,10 +1131,19 @@ impl Parser {
             TokenKind::Bang | TokenKind::Not => Some(UnaryOperator::Not),
             TokenKind::Ref => Some(UnaryOperator::Reference),
             TokenKind::Borrow => Some(UnaryOperator::Borrow),
+            TokenKind::Move => Some(UnaryOperator::Move),
+            TokenKind::Star => Some(UnaryOperator::Deref),
             _ => None,
         };
-        if let Some(operator) = operator {
+        if let Some(mut operator) = operator {
             let start = self.advance().span;
+            // `ref mut x` / `borrow mut x` is a mutable borrow; `move` and
+            // `*` take no modifier.
+            if matches!(operator, UnaryOperator::Reference | UnaryOperator::Borrow)
+                && self.matches(&TokenKind::Mut)
+            {
+                operator = UnaryOperator::BorrowMut;
+            }
             let operand = self.unary()?;
             return Ok(Expression {
                 span: start.join(operand.span),
@@ -1151,7 +1169,24 @@ impl Parser {
 
     fn postfix(&mut self) -> Result<Expression, Diagnostic> {
         let mut expression = self.primary()?;
+        let mut pending_type_arguments: Option<Vec<String>> = None;
         loop {
+            // Explicit instantiation of a callable: `identity<Int>(25)` or
+            // `math.identity<Int>(25)`. The `<...>` is only adopted when the
+            // next token is `(`, so ordinary comparisons still parse.
+            if pending_type_arguments.is_none()
+                && matches!(
+                    expression.kind,
+                    ExpressionKind::Name(_) | ExpressionKind::Member { .. }
+                )
+            {
+                if let Some(type_arguments) =
+                    self.try_explicit_type_arguments(&TokenKind::LeftParen)
+                {
+                    pending_type_arguments = Some(type_arguments);
+                    continue;
+                }
+            }
             if self.matches(&TokenKind::LeftParen) {
                 let mut arguments = Vec::new();
                 if !self.check(&TokenKind::RightParen) {
@@ -1167,6 +1202,7 @@ impl Parser {
                 expression = Expression {
                     kind: ExpressionKind::Call {
                         callee: Box::new(expression),
+                        type_arguments: pending_type_arguments.take().unwrap_or_default(),
                         arguments,
                     },
                     span,
@@ -1231,6 +1267,12 @@ impl Parser {
             TokenKind::Identifier(name) => {
                 if self.is_object_literal_ahead() {
                     self.object_literal(name, token.span)
+                } else if let Some(arguments) =
+                    self.try_explicit_type_arguments(&TokenKind::LeftBrace)
+                {
+                    // Generic struct literal: `Box<Int> { value: 1 }`.
+                    let type_name = format!("{name}<{}>", arguments.join(", "));
+                    self.object_literal(type_name, token.span)
                 } else {
                     Ok(self.literal_expression(ExpressionKind::Name(name), token.span))
                 }
@@ -1490,6 +1532,80 @@ impl Parser {
         self.check(&TokenKind::LeftBrace)
             && self.check_at(1, &TokenKind::Identifier(String::new()))
             && self.check_at(2, &TokenKind::Colon)
+    }
+
+    /// Index of the token just past a balanced `<...>` list, or `None` when
+    /// the `<` at the cursor cannot be an explicit type-argument list (for
+    /// example a comparison). Only type-shaped tokens are accepted inside.
+    fn generic_type_argument_end(&self) -> Option<usize> {
+        if !self.check(&TokenKind::Less) {
+            return None;
+        }
+        let mut depth = 0usize;
+        let mut index = self.current;
+        while let Some(token) = self.tokens.get(index) {
+            match token.kind {
+                TokenKind::Less => depth += 1,
+                TokenKind::Greater => {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        return Some(index + 1);
+                    }
+                }
+                TokenKind::ShiftRight => {
+                    depth = depth.checked_sub(2)?;
+                    if depth == 0 {
+                        return Some(index + 1);
+                    }
+                }
+                TokenKind::Identifier(_)
+                | TokenKind::Dot
+                | TokenKind::Comma
+                | TokenKind::LeftBracket
+                | TokenKind::RightBracket
+                | TokenKind::LeftParen
+                | TokenKind::RightParen
+                | TokenKind::Question => {}
+                _ => return None,
+            }
+            index += 1;
+        }
+        None
+    }
+
+    /// Speculatively parse `<type, ...>` and keep it only when the following
+    /// token is `follower`. On any mismatch the parser state (including any
+    /// token re-splitting performed for `>>`) is restored exactly.
+    fn try_explicit_type_arguments(&mut self, follower: &TokenKind) -> Option<Vec<String>> {
+        let end = self.generic_type_argument_end()?;
+        let followed = self.tokens.get(end).is_some_and(|token| {
+            std::mem::discriminant(&token.kind) == std::mem::discriminant(follower)
+        });
+        if !followed {
+            return None;
+        }
+        let saved_tokens = self.tokens.clone();
+        let saved_current = self.current;
+        let parsed = (|| -> Result<Vec<String>, Diagnostic> {
+            self.consume(&TokenKind::Less, "expected '<'")?;
+            let mut arguments = Vec::new();
+            loop {
+                arguments.push(self.type_annotation()?);
+                if !self.matches(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.consume_type_greater("expected '>' after type arguments")?;
+            Ok(arguments)
+        })();
+        match parsed {
+            Ok(arguments) => Some(arguments),
+            Err(_) => {
+                self.tokens = saved_tokens;
+                self.current = saved_current;
+                None
+            }
+        }
     }
 
     fn matches(&mut self, kind: &TokenKind) -> bool {

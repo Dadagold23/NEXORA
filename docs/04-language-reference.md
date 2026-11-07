@@ -13,7 +13,9 @@ The canonical description is [specifications/nxl-grammar.ebnf](../specifications
 - concurrency: `async fn`, `await`, `spawn`
 - strings with interpolation, char literals, numeric bases, raw strings, comments
 
-Semantics NOT yet enforced (P04/P05 status): ownership, borrowing, lifetimes, full generics. Parser accepts the syntax; the compiler reports unsupported lowering rather than pretending they run.
+Generic functions and generic structs are type-checked with explicit or inferred type arguments (Modules 2.2-2.5): `fn id<T>(x: T) -> T`, `struct Box<T> { value: T }`, `Box<Int> { value: 1 }`, and `id(borrow n)` bind `T` from the argument. Semantics NOT yet supported: lifetime parameters, generic constraints, monomorphization, and constructing an instance from the enclosing function's own type parameters (`fn pair<A, B>() -> Pair<A, B> { return Pair<A, B> { .. } }` is rejected with NXL2014). The parser accepts more syntax than the compiler lowers; unsupported forms report NXL2007 (or NXL2014 for the restriction above) rather than pretending they run.
+
+Ownership and borrowing now have lexical enforcement (Module 2.4): explicit `move`, `borrow`/`ref` (`&T`), `borrow mut`/`ref mut` (`&mut T`), `*r` reads, `*r = v` writes, `(*r).field = v` / `(*r)[i] = v` place updates, conflict detection, use-after-move prevention, and escape rejection for returns, fields, enum payloads, closures, and `async` blocks. See `specifications/language-specification.md` §6. This is not a proof of memory safety: alias analysis through aggregates/FFI and lifetime parameters remain future work.
 
 ## Phase 1 — executable semantics (errors + strings)
 

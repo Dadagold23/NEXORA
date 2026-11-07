@@ -441,6 +441,7 @@ fn nir_memory_and_abi_operations_have_typed_representation() {
         result: 602,
         callee: "make_task".to_owned(),
         arguments: Vec::new(),
+        type_arguments: Vec::new(),
         return_type: Type::Task(777),
         span,
     });
@@ -618,6 +619,104 @@ fn nir_verifier_rejects_undefined_entry_point() {
         .verify()
         .expect_err("an entry point that names no function must be rejected");
     assert_eq!(diagnostic.code, "NXL3001");
+}
+
+fn loop_module(name: &str) -> nxl_compiler::nir::Module {
+    let source = SourceFile::new(name, "while true { break; }");
+    compile_to_nir(&source).expect("while loop should lower")
+}
+
+/// The largest valid block id, so `id + 1` is guaranteed to name no block.
+fn first_missing_block(module: &nxl_compiler::nir::Module) -> u32 {
+    module.functions[0]
+        .basic_blocks
+        .iter()
+        .map(|block| block.id)
+        .max()
+        .expect("a lowered function always has blocks")
+        + 1
+}
+
+#[test]
+fn nir_verifier_accepts_valid_loop_metadata() {
+    let module = loop_module("loop_metadata_ok.nxl");
+    assert!(
+        !module.functions[0].loops.is_empty(),
+        "a while loop should record loop metadata"
+    );
+    module
+        .verify()
+        .expect("loop metadata produced by lowering must verify");
+}
+
+#[test]
+fn nir_verifier_rejects_loop_with_invalid_header_block() {
+    let mut module = loop_module("loop_bad_header.nxl");
+    let missing = first_missing_block(&module);
+    module.functions[0].loops[0].header = missing;
+    let diagnostic = module
+        .verify()
+        .expect_err("a loop header that names no block must be rejected");
+    assert_eq!(diagnostic.code, "NXL3001");
+    assert!(
+        diagnostic.message.contains("header bb"),
+        "diagnostic should name the invalid header: {}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn nir_verifier_rejects_loop_with_invalid_body_block() {
+    let mut module = loop_module("loop_bad_body.nxl");
+    let missing = first_missing_block(&module);
+    module.functions[0].loops[0].body = missing;
+    let diagnostic = module
+        .verify()
+        .expect_err("a loop body that names no block must be rejected");
+    assert_eq!(diagnostic.code, "NXL3001");
+    assert!(
+        diagnostic.message.contains("body bb"),
+        "diagnostic should name the invalid body: {}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn nir_verifier_rejects_loop_with_invalid_exit_block() {
+    let mut module = loop_module("loop_bad_exit.nxl");
+    let missing = first_missing_block(&module);
+    module.functions[0].loops[0].exit = missing;
+    let diagnostic = module
+        .verify()
+        .expect_err("a loop exit that names no block must be rejected");
+    assert_eq!(diagnostic.code, "NXL3001");
+    assert!(
+        diagnostic.message.contains("exit bb"),
+        "diagnostic should name the invalid exit: {}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn nir_verifier_reports_first_invalid_loop_reference_deterministically() {
+    let mut module = loop_module("loop_all_bad.nxl");
+    let missing = first_missing_block(&module);
+    module.functions[0].loops[0].header = missing;
+    module.functions[0].loops[0].body = missing;
+    module.functions[0].loops[0].exit = missing;
+    // The verifier stops at the first malformed loop field rather than
+    // accumulating diagnostics, so the header check must win reproducibly.
+    for _ in 0..2 {
+        let diagnostic = module
+            .verify()
+            .expect_err("any invalid loop reference must be rejected");
+        assert_eq!(diagnostic.code, "NXL3001");
+        assert!(
+            diagnostic.message.contains("header bb"),
+            "header is checked first: {}",
+            diagnostic.message
+        );
+    }
 }
 
 #[test]

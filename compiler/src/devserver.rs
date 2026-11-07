@@ -65,78 +65,15 @@ pub fn router(project: PathBuf, bundle: DevBundle, config: DevConfig) -> Router 
 /// The project's own static assets, served from `public/`.
 ///
 /// Anything the dev server does not route itself and that exists under
-/// `public/` is served as a file; everything else is a 404. Paths are
-/// canonicalised before reading so `..` cannot climb out of `public/`, and a
-/// symlink pointing outside it is refused for the same reason.
+/// `public/` is served as a file; everything else is a 404. The serving rules
+/// (canonicalisation, refusals, content types) are shared with the site server
+/// so the two cannot drift apart.
 async fn asset(State(state): State<DevState>, uri: axum::http::Uri) -> Response {
-    let requested = uri.path().trim_start_matches('/');
-    if requested.is_empty() {
-        return not_found();
-    }
-    let public = state.project.join("public");
-    let Ok(root) = public.canonicalize() else {
-        return not_found();
-    };
-    let Ok(file) = public.join(requested).canonicalize() else {
-        return not_found();
-    };
-    if !file.starts_with(&root) || !file.is_file() {
-        return not_found();
-    }
-    // Compiler source is not a web asset. `public/index.nxl` is a program the
-    // server renders for `/`, and `public/index.nxlhtml` is a template it
-    // renders the same way; handing either one's text to the browser would show
-    // the page's source instead of the page, which looks like a broken site
-    // rather than a wrong URL. Any other `.nxl*` file is withheld for the same
-    // reason.
-    let extension = file.extension().and_then(|extension| extension.to_str());
-    if extension == Some("nxl") || extension.is_some_and(|value| value.starts_with("nxl")) {
-        return not_found();
-    }
-    let Ok(bytes) = std::fs::read(&file) else {
-        return not_found();
-    };
-    let content_type = content_type_for(&file);
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, content_type),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
-        bytes,
-    )
-        .into_response()
+    crate::web::static_response(&state.project, uri.path()).unwrap_or_else(not_found)
 }
 
 fn not_found() -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
-}
-
-/// Content type for a served file, by extension.
-fn content_type_for(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("html" | "htm") => "text/html; charset=utf-8",
-        Some("css") => "text/css; charset=utf-8",
-        Some("js" | "mjs") => "application/javascript; charset=utf-8",
-        Some("json") => "application/json; charset=utf-8",
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        Some("ico") => "image/x-icon",
-        Some("woff2") => "font/woff2",
-        Some("woff") => "font/woff",
-        Some("txt" | "md") => "text/plain; charset=utf-8",
-        Some("webmanifest") => "application/manifest+json",
-        Some("map") => "application/json; charset=utf-8",
-        _ => "application/octet-stream",
-    }
 }
 
 /// Recompile if any source changed since the last check.

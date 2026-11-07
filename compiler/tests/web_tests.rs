@@ -213,6 +213,114 @@ fn an_unknown_path_returns_the_404_page_with_a_404_status() {
     assert!(body.contains("Missing"), "{body}");
 }
 
+// ── Static files ──────────────────────────────────────────────────────────────
+
+fn with_public(name: &str) -> PathBuf {
+    let dir = project(name);
+    std::fs::create_dir_all(dir.join("public")).unwrap();
+    dir
+}
+
+#[test]
+fn static_assets_are_served_from_public() {
+    // The starter's layout links `/styles.css` and `/favicon.svg`; if the site
+    // server does not serve `public/`, the page arrives unstyled.
+    let dir = with_public("static");
+    std::fs::write(
+        dir.join("public").join("styles.css"),
+        "body { color: red; }",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("public").join("favicon.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+    )
+    .unwrap();
+
+    let (head, body) = response(dir.as_path(), "GET", "/styles.css", None);
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    assert!(head.contains("content-type: text/css"), "{head}");
+    // The safe defaults leave through the same middleware as pages.
+    assert!(head.contains("x-content-type-options: nosniff"), "{head}");
+    assert!(body.contains("color: red"), "{body}");
+
+    let (status, _) = request(&dir, "GET", "/favicon.svg", None);
+    assert_eq!(status, 200);
+}
+
+#[test]
+fn a_declared_route_wins_over_a_file_of_the_same_name() {
+    let dir = with_public("static_precedence");
+    std::fs::write(
+        dir.join("public").join("index.html"),
+        "<h1>static index</h1>",
+    )
+    .unwrap();
+    let (status, body) = request(&dir, "GET", "/", None);
+    assert_eq!(status, 200);
+    assert!(body.contains("<h1>Home</h1>"), "route must win: {body}");
+    assert!(!body.contains("static index"), "{body}");
+}
+
+#[test]
+fn a_missing_asset_is_the_404_page_not_a_crash() {
+    let dir = with_public("static_missing");
+    let (status, body) = request(&dir, "GET", "/missing.css", None);
+    assert_eq!(status, 404);
+    assert!(body.contains("Missing"), "{body}");
+}
+
+#[test]
+fn compiler_source_is_not_served_by_the_site() {
+    // `public/index.nxl` is a program and `.nxlhtml` is a template. Serving
+    // their text would show a page's source instead of the page.
+    let dir = with_public("static_source");
+    std::fs::write(
+        dir.join("public").join("page.nxl"),
+        "fn secret() { print(\"TOKEN\"); }\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("public").join("partial.nxlhtml"), "<p>TOKEN</p>").unwrap();
+
+    for path in ["/page.nxl", "/partial.nxlhtml"] {
+        let (status, body) = request(&dir, "GET", path, None);
+        assert_eq!(status, 404, "{path} must not be served: {body}");
+        assert!(!body.contains("TOKEN"), "{path} leaked source: {body}");
+    }
+}
+
+#[test]
+fn public_files_cannot_escape_their_directory() {
+    let dir = with_public("static_escape");
+    std::fs::write(dir.join("secret.txt"), "do not serve me").unwrap();
+    for path in [
+        "/../secret.txt",
+        "/%2e%2e/secret.txt",
+        "/..%2fsecret.txt",
+        "/sub/../../secret.txt",
+    ] {
+        let (status, body) = request(&dir, "GET", path, None);
+        assert!(
+            status == 404 || !body.contains("do not serve me"),
+            "{path} must not serve a file outside public/ (status {status})"
+        );
+    }
+}
+
+#[test]
+fn a_static_file_is_only_served_on_get() {
+    // A file URL is not an endpoint; POST keeps the unrouted-path behavior.
+    let dir = with_public("static_post");
+    std::fs::write(
+        dir.join("public").join("styles.css"),
+        "body { color: red; }",
+    )
+    .unwrap();
+    let (status, body) = request(&dir, "POST", "/styles.css", Some(""));
+    assert_eq!(status, 404, "{body}");
+    assert!(!body.contains("color: red"), "{body}");
+}
+
 #[test]
 fn a_complete_submission_is_accepted() {
     let dir = project("post_ok");

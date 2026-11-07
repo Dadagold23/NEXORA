@@ -1677,6 +1677,7 @@ impl<'m> RustBackend<'m> {
                 arguments,
                 return_type,
                 span,
+                ..
             } => {
                 let args: Vec<String> = arguments.iter().map(|a| self.var(*a)).collect();
                 let callee_name = rust_safe(callee);
@@ -2014,6 +2015,9 @@ fn rust_unary(op: UnaryOperator) -> &'static str {
         UnaryOperator::Negate => "-",
         UnaryOperator::Not => "!",
         UnaryOperator::Reference | UnaryOperator::Borrow => "&",
+        UnaryOperator::BorrowMut => "&mut ",
+        UnaryOperator::Deref => "*",
+        UnaryOperator::Move => "",
     }
 }
 
@@ -2093,6 +2097,9 @@ fn js_unary(op: UnaryOperator) -> &'static str {
         UnaryOperator::Negate => "-",
         UnaryOperator::Not => "!",
         UnaryOperator::Reference | UnaryOperator::Borrow => "&",
+        UnaryOperator::BorrowMut => "&mut ",
+        UnaryOperator::Deref => "*",
+        UnaryOperator::Move => "",
     }
 }
 

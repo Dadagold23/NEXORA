@@ -42,7 +42,7 @@ use crate::html;
 use crate::nuf;
 use crate::source::SourceFile;
 use axum::extract::State;
-use axum::http::{StatusCode, Uri};
+use axum::http::{header, StatusCode, Uri};
 use axum::response::{Html, Response};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -654,12 +654,23 @@ pub fn build_app(context: Arc<SiteContext>) -> nuf::App {
     }
     let _ = slot.set(app.openapi_json(&title, env!("CARGO_PKG_VERSION")));
 
-    // Anything unmatched is the project's 404 page, with a real 404 status.
+    // Anything unmatched is a file under `public/` when one exists, and the
+    // project's 404 page otherwise. Static serving comes second so a declared
+    // route always wins over a file of the same name.
     let not_found_context = context.clone();
     app.set_fallback(axum::routing::any(
-        move |State(_): State<Arc<nuf::AppState>>, uri: axum::http::Uri| {
+        move |State(_): State<Arc<nuf::AppState>>,
+              method: axum::http::Method,
+              uri: axum::http::Uri| {
             let context = not_found_context.clone();
             async move {
+                // A file URL is not an endpoint: POST (or any other verb) to a
+                // static path is still the 404 page.
+                if method == axum::http::Method::GET || method == axum::http::Method::HEAD {
+                    if let Some(asset) = static_response(&context.root, uri.path()) {
+                        return asset;
+                    }
+                }
                 let (status, page) = context.render_not_found(uri.path());
                 (status, Html(page)).into_response()
             }
@@ -667,6 +678,73 @@ pub fn build_app(context: Arc<SiteContext>) -> nuf::App {
     ));
 
     app
+}
+
+/// Serve a file from the project's `public/` directory, if it exists.
+///
+/// The path is canonicalised before it is read, so `..` cannot climb out of
+/// `public/` and a symlink pointing outside it is refused. Compiler source is
+/// never served: `public/index.nxl` is a program and `.nxlhtml` is a template,
+/// and handing either one's text to the browser shows the page's source
+/// instead of the page.
+pub(crate) fn static_response(project: &Path, request_path: &str) -> Option<Response> {
+    let requested = percent_decode(request_path.trim_start_matches('/'));
+    if requested.is_empty() {
+        return None;
+    }
+    let root = project.join("public").canonicalize().ok()?;
+    let file = project
+        .join("public")
+        .join(&requested)
+        .canonicalize()
+        .ok()?;
+    if !file.starts_with(&root) || !file.is_file() {
+        return None;
+    }
+    let extension = file.extension().and_then(|value| value.to_str());
+    if extension.is_some_and(|value| value.to_ascii_lowercase().starts_with("nxl")) {
+        return None;
+    }
+    let bytes = std::fs::read(&file).ok()?;
+    let response = (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, content_type_for(&file)),
+            // No hashed file names and no build step to rewrite them, so a
+            // cached copy could outlive the source it came from.
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        bytes,
+    )
+        .into_response();
+    Some(response)
+}
+
+/// Content type for a served file, by extension.
+fn content_type_for(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("html" | "htm") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("js" | "mjs") => "application/javascript; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("txt" | "md") => "text/plain; charset=utf-8",
+        Some("webmanifest") => "application/manifest+json",
+        Some("map") => "application/json; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 /// Pull the values of a pattern's `:parameters` out of a concrete path.
