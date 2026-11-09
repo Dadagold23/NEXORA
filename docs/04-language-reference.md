@@ -2,8 +2,8 @@
 
 The canonical description is [specifications/nxl-grammar.ebnf](../specifications/nxl-grammar.ebnf). The parser in `compiler/src/parser.rs` accepts the following forms (tested by `compiler/tests/language_frontend_tests.rs`):
 
-- variables: `let x = 1;`, `let mut i = 0;`, `let name: Int = "x";`
-- constants/mutability: `const`, `mut`
+- variables: `let x = 1;`, `let mut i = 0;`, `let name: Int = 42;` (`let` is immutable by default; `mut` makes it assignable)
+- constants/mutability: `const` (lowered as an immutable binding, no compile-time evaluation), `mut`
 - functions: `fn add(a: Int, b: Int) -> Int { return a + b; }`, async variants
 - control flow: `if cond { } else { }`, `while cond { }`, `loop { }` with `break`/`continue`
 - `for i in iter { }`, `match v { ... }`, `try { } catch { } finally { }`, `throw`
@@ -11,11 +11,16 @@ The canonical description is [specifications/nxl-grammar.ebnf](../specifications
 - generics on declarations, typed channels `channel`, closures in expressions
 - modules: `module path;`, `import` with alias/selected, `export`
 - concurrency: `async fn`, `await`, `spawn`
-- strings with interpolation, char literals, numeric bases, raw strings, comments
+- strings with interpolation, single-quoted strings, numeric bases, raw strings, comments
 
-Generic functions and generic structs are type-checked with explicit or inferred type arguments (Modules 2.2-2.5): `fn id<T>(x: T) -> T`, `struct Box<T> { value: T }`, `Box<Int> { value: 1 }`, and `id(borrow n)` bind `T` from the argument. Semantics NOT yet supported: lifetime parameters, generic constraints, monomorphization, and constructing an instance from the enclosing function's own type parameters (`fn pair<A, B>() -> Pair<A, B> { return Pair<A, B> { .. } }` is rejected with NXL2014). The parser accepts more syntax than the compiler lowers; unsupported forms report NXL2007 (or NXL2014 for the restriction above) rather than pretending they run.
+Parsing is broader than lowering. Forms that parse but are not lowered are
+listed per phase below; they report `NXL2007` rather than being silently
+ignored. In particular, `?.`, map/set literals, tuple values/patterns, `null`,
+and `yield` are syntax-only today.
 
-Ownership and borrowing now have lexical enforcement (Module 2.4): explicit `move`, `borrow`/`ref` (`&T`), `borrow mut`/`ref mut` (`&mut T`), `*r` reads, `*r = v` writes, `(*r).field = v` / `(*r)[i] = v` place updates, conflict detection, use-after-move prevention, and escape rejection for returns, fields, enum payloads, closures, and `async` blocks. See `specifications/language-specification.md` §6. This is not a proof of memory safety: alias analysis through aggregates/FFI and lifetime parameters remain future work.
+Generic functions and generic structs are type-checked with explicit or inferred type arguments (Modules 2.2-2.7): `fn id<T>(x: T) -> T`, `struct Box<T> { value: T }`, `Box<Int> { value: 1 }`, and `id(borrow n)` bind `T` from the argument. `Option<T>` and `Optional<T>` are one canonical identity, including when nested, and a declared user type shadows a builtin container name (`struct Option<T>` is usable). Function-level `where T: Bound` constraints are validated against declared traits/interfaces and enforced at instantiation using `impl Bound for Type` blocks (`NXL2014` on violation); inline `<T: Bound>` bounds are rejected with a help pointing at `where`; constraints on type declarations are rejected. Semantics NOT yet supported: lifetime parameters, associated types, monomorphization, trait objects, and constructing an instance from the enclosing function's own type parameters (`fn pair<A, B>() -> Pair<A, B> { .. }` is rejected with NXL2014).
+
+Ownership and borrowing have lexical enforcement (Modules 2.4-2.7): explicit `move`, `borrow`/`ref` (`&T`), `borrow mut`/`ref mut` (`&mut T`), `*r` reads, `*r = v` writes, `(*r).field = v` / `(*r)[i] = v` place updates, conflict detection, use-after-move prevention, and escape rejection for returns, fields, enum payloads, closures, and `async` blocks. A reference argument is accepted only where the *declared* parameter type is a reference; passing one to an unannotated generic parameter, an unresolved dynamic call, or any other untrackable slot is `NXL2017`, including for indirect/closure calls. See `specifications/language-specification.md` §6. This is not a proof of memory safety: alias analysis through aggregates/FFI, lifetime parameters, and NLL remain future work.
 
 ## Phase 1 — executable semantics (errors + strings)
 
@@ -29,10 +34,10 @@ JavaScript backend, tested in `language_frontend_tests.rs`):
 - `try { } catch e: Int { }` — annotated catches match the runtime type name (`Int`/`Float`/`Bool`/`String`/`Void`); no match rethrows
 - `finally { }` — runs on normal, caught, and uncaught paths
 - runtime errors (e.g. division by zero, calling an undefined function) are catchable values; uncaught failures exit non-zero as `runtime error: <value>` (NXL9001)
-- limits (NXL2007/NXL2013 with explicit messages): `return`/`break`/`continue` across a `try` boundary; a catch after a bare catch; `for-in` iteration in the VM (still use `while`); `try`/`catch` in the Rust backend
+- limits (NXL2007/NXL2013 with explicit messages): `return`/`break`/`continue` across a `try` boundary; a catch after a bare catch; `try`/`catch` in the Rust backend (the VM supports them)
 
-Still parsed-but-not-lowered (later phases): `struct`/`class`/`enum`/`actor` semantics, `impl` methods, modules/imports resolution, `async`/`await`/`spawn` execution, `yield`/`unsafe`, advanced match patterns.
-## Phase 2 — iteration + data (VM authoritative; JS backend for expressions)
+Parsed but not lowered: `yield`, `unsafe` (syntax only, no semantics), and `null`. Struct/class/enum/actor semantics, `impl` methods, modules, and async/spawn are implemented in the later phases below.
+## Phase 2 — iteration + data (VM authoritative; JS backend for the documented subset)
 
 Implemented end-to-end in `nir.rs`/`vm.rs`/`backend.rs` (JS), tested in
 `language_frontend_tests.rs`:
@@ -56,12 +61,12 @@ Implemented end-to-end in `nir.rs`/`vm.rs`/`backend.rs` (JS), tested in
 - gradual operators: `Unknown`-typed values (untyped params, dynamic reads)
   allow arithmetic/comparison/equality with runtime checking; statically bad
   combinations still fail with NXL2001; `%` works on integers
-- limits: tuple/array/set/map literals, tuple/array patterns, bindings in
+- limits: tuple/set/map literals, tuple/array patterns, bindings in
   `|`-patterns, nested compound patterns beyond one level, `new`, `?.`,
-  `for-in` and `try` in the Rust backend, `for-in` loops in emitted JS
-  (backend control-flow phase)
+  `for-in` and `try` in the Rust backend. `for-in` loops are emitted natively
+  by the JavaScript backend (Phase 6)
 
-## Phase 3 — objects + methods (VM authoritative; JS backend for calls)
+## Phase 3 — objects + methods (VM authoritative; JS backend for the documented subset)
 
 Implemented end-to-end in `nir.rs`/`vm.rs`/`backend.rs` (JS), tested in
 `language_frontend_tests.rs`:
@@ -84,7 +89,9 @@ Implemented end-to-end in `nir.rs`/`vm.rs`/`backend.rs` (JS), tested in
 - JS backend emits `Type$method` functions plus a method registry with the
   same `[return, self]` write-back protocol as the VM
 - limits: `new`, static/singleton calls on types, `?.`, first-class method
-  values, inheritance, generics on types, method calls in the Rust backend
+  values, inheritance, method calls in the Rust backend. Generic structs and
+  generic enums are supported; generic constraints are covered above and in
+  `specifications/language-specification.md` §12.
 
 ## Phase 4 — modules (multi-file programs)
 
@@ -156,12 +163,18 @@ print(lstrlenA("hello"));
 - Runtime failures — unloadable library (`NXL11013`), missing symbol (`NXL11014`), bad argument such as an interior NUL byte (`NXL11015`), NULL string return (`NXL11016`) — are catchable: `try { ... } catch e { print(e); }` receives `"error[CODE]: message"`.
 - VM only: the JS and Rust backends reject foreign calls with NXL2007. The signature is trusted exactly like linking a native binary (see `12-security.md`); the compiler catches arity/type mismatches statically (`NXL2001`, `NXL2009`) but cannot verify a library's real C prototype.
 
-## Standard library (`std.strings`, `std.math`, `std.crypto`, `std.http`)
+## Standard library (implemented subset)
 
 Implemented in `stdlib.rs`, resolved by `nir.rs` (`lower_builtin_call`),
-executed by `vm.rs`, and mirrored by the JavaScript backend; tested in
-`language_frontend_tests.rs` (the `stdlib_*` tests run every function on the
-VM and on emitted Node.js and require identical output).
+executed by `vm.rs`, and mirrored by the JavaScript backend for every module
+except the VM-only ones; tested in `language_frontend_tests.rs` (the
+`stdlib_*` tests run every function on the VM and on emitted Node.js and
+require identical output).
+
+Status: `std.strings`, `std.math` and `std.crypto` are Implemented on both the
+VM and the JavaScript backend. `std.http`, `std.networking` and
+`std.concurrency` are Implemented on the VM only. The other `std` modules are
+internal Rust APIs, not NXL builtins (see the last bullet).
 
 - Names come from imports: `import std.math;` exposes `std.math.sqrt(..)`
   (also `math.sqrt(..)` once aliased), and `from std.strings import len` binds
@@ -198,11 +211,14 @@ VM and on emitted Node.js and require identical output).
   `for`), and `tcp_probe(host, port, timeout_ms)` reports whether a TCP
   connection succeeds in time. Unusable ports or timeouts are catchable
   errors (`NXL11012`), not `false`.
+- `std.concurrency` (1 function, **VM-only**): `sleep(ms)` parks the calling
+  worker thread; negative values or values over one hour are catchable
+  errors.
 - VM-only means the JavaScript backend rejects them at compile time with
   NXL2007 ("needs the VM (`nxl run`)"): Node and browsers have no
-  synchronous fetch or DNS, so there is nothing to mirror. Tests for
-  these modules live in `http_tests.rs` and run against a local test
-  server only - the suite never touches the network.
+  synchronous fetch, DNS or blocking sleep, so there is nothing to mirror.
+  Tests for HTTP and networking live in `http_tests.rs` and run against a
+  local test server only - the suite never touches the network.
 - Calling convention: arity is checked at compile time (a wrong count is
   NXL2002); argument *types* are checked at run time, so a mismatch is a
   catchable error rather than a compile failure. `Int` promotes to `Float`

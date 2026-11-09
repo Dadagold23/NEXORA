@@ -1021,3 +1021,45 @@ fn generic_function_cannot_construct_an_instance_from_its_own_parameters() {
         "NXL2014"
     );
 }
+
+#[test]
+fn imported_user_type_named_option_is_not_the_builtin() {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!(
+        "nxl_generics_option_project_{}_{}",
+        std::process::id(),
+        id
+    ));
+    let module_dir = dir.join("src").join("app");
+    std::fs::create_dir_all(&module_dir).unwrap();
+    std::fs::write(
+        module_dir.join("option.nxl"),
+        r#"
+            struct Option<T> {
+                value: T
+            }
+        "#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src").join("main.nxl"),
+        r#"
+            from app.option import Option;
+            let o: Option<String> = Option<String> { value: "imported" };
+            print(o.value);
+        "#,
+    )
+    .unwrap();
+
+    let module = nxl_compiler::project::compile_project(&dir.join("src").join("main.nxl"))
+        .expect("an imported user type named Option should compile");
+    module
+        .verify()
+        .expect("the imported user Option must verify");
+    let output = nxl_compiler::vm::execute(&module)
+        .expect("the VM should run the imported user Option program")
+        .output;
+    assert_eq!(output, vec!["imported"]);
+    std::fs::remove_dir_all(&dir).ok();
+}

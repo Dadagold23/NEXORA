@@ -644,3 +644,298 @@ fn baseline_reference_annotations_cover_arrays_and_mutable_targets() {
         Err("NXL2001".into())
     );
 }
+
+// ---------------------------------------------------------------------------
+// Module 2.7 — Option/Optional identity and declared-name precedence
+// ---------------------------------------------------------------------------
+
+fn signature_parameter(module: &nxl_compiler::nir::Module, function: &str, index: usize) -> Type {
+    module
+        .signatures
+        .iter()
+        .find(|signature| signature.name == function)
+        .unwrap_or_else(|| panic!("missing signature '{function}'"))
+        .parameters[index]
+        .1
+}
+
+#[test]
+fn module_2_7_option_and_optional_are_one_identity() {
+    let module = compile_ok(
+        "option_optional_identity.nxl",
+        r#"
+            fn takes_option(x: Option<Int>) -> Int { return 1; }
+            fn takes_optional(x: Optional<Int>) -> Int { return 2; }
+            fn passes_through(x: Option<Int>) -> Optional<Int> { return x; }
+        "#,
+    );
+    module.verify().expect("annotations must verify");
+    let option = signature_parameter(&module, "takes_option", 0);
+    let optional = signature_parameter(&module, "takes_optional", 0);
+    assert!(matches!(option, Type::Optional(_)), "{option:?}");
+    assert_eq!(option, optional, "Option and Optional must be one identity");
+    assert_eq!(
+        signature_parameter(&module, "passes_through", 0),
+        option,
+        "a return annotation must use the same identity"
+    );
+    // The return type is the canonical identity too, so `return x` agrees.
+    let passes_through = module
+        .signatures
+        .iter()
+        .find(|signature| signature.name == "passes_through")
+        .expect("passes_through signature");
+    assert_eq!(passes_through.return_type, option);
+
+    // A different payload is still a different type.
+    assert_eq!(
+        compile(
+            "option_mismatch.nxl",
+            "fn f(x: Option<Int>) -> Option<String> { return x; }"
+        ),
+        Err("NXL2001".into())
+    );
+}
+
+#[test]
+fn module_2_7_nested_option_arguments_are_canonicalized() {
+    let module = compile_ok(
+        "option_nested_identity.nxl",
+        r#"
+            fn a(x: Option<Array<Int>>) -> Int { return 1; }
+            fn b(x: Optional<Array<Int>>) -> Int { return 2; }
+            fn c(x: Array<Option<Int>>) -> Int { return 3; }
+            fn d(x: Array<Optional<Int>>) -> Int { return 4; }
+            fn e(x: Option<Optional<Int>>) -> Int { return 5; }
+            fn f(x: Optional<Option<Int>>) -> Int { return 6; }
+        "#,
+    );
+    module.verify().expect("nested annotations must verify");
+    assert_eq!(
+        signature_parameter(&module, "a", 0),
+        signature_parameter(&module, "b", 0),
+        "the payload container spelling must not change identity"
+    );
+    assert_eq!(
+        signature_parameter(&module, "c", 0),
+        signature_parameter(&module, "d", 0),
+        "a nested option inside an array must share identity"
+    );
+    assert_eq!(
+        signature_parameter(&module, "e", 0),
+        signature_parameter(&module, "f", 0),
+        "deeply nested options must share identity"
+    );
+}
+
+#[test]
+fn module_2_7_option_identity_flows_through_generics() {
+    // A type parameter nested in both spellings must resolve to one
+    // identity, both as a parameter and as a return type.
+    let module = compile_ok(
+        "option_generic_flow.nxl",
+        r#"
+            fn consume<T>(value: Option<T>) -> Optional<T> { return value; }
+            fn nested<T>(value: Optional<Array<T>>) -> Option<Array<T>> { return value; }
+        "#,
+    );
+    module
+        .verify()
+        .expect("generic option annotations must verify");
+    for function in ["consume", "nested"] {
+        let signature = module
+            .signatures
+            .iter()
+            .find(|signature| signature.name == function)
+            .unwrap_or_else(|| panic!("missing signature '{function}'"));
+        assert_eq!(
+            signature.parameters[0].1, signature.return_type,
+            "'{function}' must resolve both option spellings to one identity"
+        );
+    }
+    // The negative control keeps the identity precise.
+    assert_eq!(
+        compile(
+            "option_generic_mismatch.nxl",
+            r#"
+                fn bad(x: Option<Int>) -> Array<Int> { return x; }
+            "#
+        ),
+        Err("NXL2001".into())
+    );
+}
+
+#[test]
+fn module_2_7_declared_type_shadows_builtin_container_name() {
+    let module = compile_ok(
+        "user_option.nxl",
+        r#"
+            struct Option<T> { value: T }
+            let o: Option<Int> = Option<Int> { value: 5 };
+            let v: Int = o.value;
+            print(v);
+        "#,
+    );
+    module
+        .verify()
+        .expect("a user type named Option must verify");
+    let output = nxl_compiler::vm::execute(&module)
+        .expect("the VM should run the user Option program")
+        .output;
+    assert_eq!(output, vec!["5"]);
+}
+
+#[test]
+fn module_2_7_declared_result_shadows_builtin_container_name() {
+    let module = compile_ok(
+        "user_result.nxl",
+        r#"
+            struct Result<T, E> { value: T; error: E }
+            let r: Result<Int, String> = Result<Int, String> { value: 9, error: "ok" };
+            print(r.value);
+        "#,
+    );
+    module
+        .verify()
+        .expect("a user type named Result must verify");
+    let output = nxl_compiler::vm::execute(&module)
+        .expect("the VM should run the user Result program")
+        .output;
+    assert_eq!(output, vec!["9"]);
+}
+
+// ---------------------------------------------------------------------------
+// Module 2.7 — generic constraint validation and enforcement
+// ---------------------------------------------------------------------------
+
+#[test]
+fn module_2_7_where_bound_is_enforced_with_impl_information() {
+    let module = compile_ok(
+        "where_bound_satisfied.nxl",
+        r#"
+            interface Greeter { fn greet() -> String; }
+            struct Person { name: String }
+            impl Greeter for Person { fn greet() -> String { return "hi"; } }
+            fn keep<T>(value: T) -> T where T: Greeter { return value; }
+            let p: Person = Person { name: "ada" };
+            let q: Person = keep(p);
+            print(q.name);
+        "#,
+    );
+    module.verify().expect("a satisfied bound must verify");
+    let output = nxl_compiler::vm::execute(&module)
+        .expect("a satisfied bound must run")
+        .output;
+    assert_eq!(output, vec!["ada"]);
+}
+
+#[test]
+fn module_2_7_unknown_bound_is_rejected() {
+    assert_eq!(
+        compile(
+            "where_unknown_bound.nxl",
+            r#"
+                fn keep<T>(value: T) -> T where T: Missing { return value; }
+                print(keep(1));
+            "#
+        ),
+        Err("NXL2014".into())
+    );
+}
+
+#[test]
+fn module_2_7_non_trait_bound_is_rejected() {
+    assert_eq!(
+        compile(
+            "where_non_trait_bound.nxl",
+            r#"
+                struct NotATrait { value: Int }
+                fn keep<T>(value: T) -> T where T: NotATrait { return value; }
+                print(keep(1));
+            "#
+        ),
+        Err("NXL2014".into())
+    );
+}
+
+#[test]
+fn module_2_7_unknown_constrained_parameter_is_rejected() {
+    assert_eq!(
+        compile(
+            "where_unknown_parameter.nxl",
+            r#"
+                interface Greeter { fn greet() -> String; }
+                fn keep<T>(value: T) -> T where U: Greeter { return value; }
+                print(keep(1));
+            "#
+        ),
+        Err("NXL2014".into())
+    );
+}
+
+#[test]
+fn module_2_7_duplicate_constraint_is_rejected() {
+    assert_eq!(
+        compile(
+            "where_duplicate_constraint.nxl",
+            r#"
+                interface First { fn one() -> Int; }
+                interface Second { fn two() -> Int; }
+                fn keep<T>(value: T) -> T where T: First, T: Second { return value; }
+                print(keep(1));
+            "#
+        ),
+        Err("NXL2014".into())
+    );
+}
+
+#[test]
+fn module_2_7_constraint_must_be_satisfied_at_instantiation() {
+    assert_eq!(
+        compile(
+            "where_bound_unimplemented.nxl",
+            r#"
+                interface Greeter { fn greet() -> String; }
+                struct Person { name: String }
+                struct Other { value: Int }
+                impl Greeter for Person { fn greet() -> String { return "hi"; } }
+                fn keep<T>(value: T) -> T where T: Greeter { return value; }
+                let o: Other = Other { value: 1 };
+                let q: Other = keep(o);
+                print(q.value);
+            "#
+        ),
+        Err("NXL2014".into())
+    );
+}
+
+#[test]
+fn module_2_7_constraints_on_type_declarations_are_rejected() {
+    assert_eq!(
+        compile(
+            "where_on_type_declaration.nxl",
+            r#"
+                interface Greeter { fn greet() -> String; }
+                struct Box<T> where T: Greeter { value: T }
+                let b: Box<Int> = Box<Int> { value: 1 };
+                print(b.value);
+            "#
+        ),
+        Err("NXL2014".into())
+    );
+}
+
+#[test]
+fn module_2_7_inline_bound_points_at_where_syntax() {
+    let diagnostic = compile_to_nir(&SourceFile::new(
+        "inline_bound.nxl",
+        "fn keep<T: Greeter>(value: T) -> T { return value; }",
+    ))
+    .expect_err("inline bounds are not supported");
+    assert_eq!(diagnostic.code, "NXL1001");
+    assert!(
+        diagnostic.message.contains("where"),
+        "the diagnostic should name the supported form: {}",
+        diagnostic.message
+    );
+}

@@ -236,6 +236,10 @@ pub struct FunctionSignature {
     pub return_type: Type,
     /// Declared type parameters (`T` in `fn id<T>`), in source order.
     pub type_parameters: Vec<String>,
+    /// Supported `where T: Bound` constraints (Module 2.7, WP-C). Bounds are
+    /// validated against declared traits/interfaces and enforced with actual
+    /// `impl` information when the signature is instantiated.
+    pub constraints: Vec<crate::ast::GenericConstraint>,
     /// Written parameter annotations, canonicalized against the declaring
     /// file's type aliases. Kept so explicit instantiation can substitute
     /// type arguments into structural types (`Array<T>`, `Box<T>`) that the
@@ -783,6 +787,7 @@ pub fn lower_project_files(files: &[ProjectFile]) -> Result<Module, Diagnostic> 
         value_field_types: HashMap::new(),
         instance_arguments: HashMap::new(),
         identity_types: HashMap::new(),
+        reference_targets: HashMap::new(),
         conditional_counter: 0,
         program: Program {
             statements: files
@@ -1114,6 +1119,23 @@ fn module_declarations(program: &Program) -> (Vec<TypeDefinition>, Vec<String>, 
     let mut type_definitions = Vec::new();
     let mut imports = Vec::new();
     let mut exports = Vec::new();
+    // Declared names take precedence over builtin container spellings when
+    // field and payload annotations are resolved (WP-B).
+    let declared_names = program
+        .statements
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::TypeDeclaration(declaration) => Some(declaration.name.clone()),
+            Statement::TypeAlias(alias) => Some(alias.name.clone()),
+            Statement::Export(inner) => match inner.as_ref() {
+                Statement::TypeDeclaration(declaration) => Some(declaration.name.clone()),
+                Statement::TypeAlias(alias) => Some(alias.name.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let is_declared = |base: &str| declared_names.iter().any(|name| name == base);
     for statement in &program.statements {
         match statement {
             Statement::TypeDeclaration(declaration) => {
@@ -1139,10 +1161,11 @@ fn module_declarations(program: &Program) -> (Vec<TypeDefinition>, Vec<String>, 
                         .fields
                         .iter()
                         .map(|field| {
-                            let ty = type_from_name_with(
+                            let ty = type_from_name_scoped(
                                 &field.annotation,
                                 &HashMap::new(),
                                 &declaration.type_parameters,
+                                &is_declared,
                             )
                             .unwrap_or_else(|| Type::Generic(stable_type_id(&field.annotation)));
                             (field.name.clone(), ty)
@@ -1158,10 +1181,11 @@ fn module_declarations(program: &Program) -> (Vec<TypeDefinition>, Vec<String>, 
                                     .payload
                                     .iter()
                                     .map(|ty| {
-                                        type_from_name_with(
+                                        type_from_name_scoped(
                                             ty,
                                             &HashMap::new(),
                                             &declaration.type_parameters,
+                                            &is_declared,
                                         )
                                         .unwrap_or_else(|| Type::Generic(stable_type_id(ty)))
                                     })
@@ -1583,6 +1607,62 @@ fn verify_function(
             ),
             function.debug.function_span,
         ));
+    }
+
+    // Handler metadata must point at a real dispatch block, and a dispatch
+    // block must begin by popping the in-flight exception (Module 2.7, WP-D).
+    for block in &function.basic_blocks {
+        if let Some(Instruction::Catch { .. }) = block.instructions.first() {
+            // Valid dispatch entry.
+        } else if block
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Instruction::Catch { .. }))
+        {
+            return Err(Diagnostic::error(
+                "NXL3001",
+                format!(
+                    "function '{}' block {} has a Catch that is not the first instruction",
+                    function.name, block.id
+                ),
+                block
+                    .instructions
+                    .first()
+                    .map_or(function.debug.function_span, instruction_span),
+            ));
+        }
+        let mut flat: Vec<&Instruction> = Vec::new();
+        for instruction in &block.instructions {
+            push_flattened(instruction, &mut flat);
+        }
+        for instruction in flat {
+            if let Instruction::PushHandler { catch_block, span } = instruction {
+                let Some(target) = function
+                    .basic_blocks
+                    .iter()
+                    .find(|candidate| candidate.id == *catch_block)
+                else {
+                    return Err(Diagnostic::error(
+                        "NXL3001",
+                        format!(
+                            "function '{}' registers a handler for missing block {}",
+                            function.name, catch_block
+                        ),
+                        *span,
+                    ));
+                };
+                if !matches!(target.instructions.first(), Some(Instruction::Catch { .. })) {
+                    return Err(Diagnostic::error(
+                        "NXL3001",
+                        format!(
+                            "function '{}' handler block {} does not start with Catch",
+                            function.name, catch_block
+                        ),
+                        *span,
+                    ));
+                }
+            }
+        }
     }
 
     let entry_id = function.basic_blocks[0].id;
@@ -2037,6 +2117,365 @@ fn verify_instruction_types(
                         ));
                     }
                 }
+                Instruction::Constant { value, ty, .. } => {
+                    let expected = match value {
+                        Constant::Integer(_) => Type::Int,
+                        Constant::Float(_) => Type::Float,
+                        Constant::String(_) => Type::String,
+                        Constant::Boolean(_) => Type::Bool,
+                    };
+                    if !types_compatible(*ty, expected) {
+                        return Err(mismatch(format!(
+                            "constant value has type {ty:?}, expected {expected:?}"
+                        )));
+                    }
+                }
+                Instruction::Load { name, .. } | Instruction::Store { name, .. } => {
+                    if name.is_empty() {
+                        return Err(mismatch(
+                            "load/store instruction has an empty binding name".to_owned(),
+                        ));
+                    }
+                }
+                Instruction::IteratorNext {
+                    has_next,
+                    iterable,
+                    index,
+                    ..
+                } => {
+                    let iterable_type = types.get(iterable).copied().unwrap_or(Type::Unknown);
+                    let index_type = types.get(index).copied().unwrap_or(Type::Unknown);
+                    // The VM iterates arrays, integer ranges and channels and
+                    // reports anything else as a catchable runtime "not
+                    // iterable" error (`NXL9001`), so the verifier only rejects
+                    // a definitely-impossible Void iterable.
+                    if iterable_type == Type::Void {
+                        return Err(mismatch(
+                            "iterator step cannot read a Void value".to_owned(),
+                        ));
+                    }
+                    if !matches!(index_type, Type::Int | Type::Unknown) {
+                        return Err(mismatch(format!(
+                            "iterator index must be Int, found {index_type:?}"
+                        )));
+                    }
+                    let has_next_type = types.get(has_next).copied().unwrap_or(Type::Unknown);
+                    if !matches!(has_next_type, Type::Bool | Type::Unknown) {
+                        return Err(mismatch("iterator has-next value must be Bool".to_owned()));
+                    }
+                }
+                Instruction::ArrayNew { elements, .. } => {
+                    for element in elements {
+                        let ty = types.get(element).copied().unwrap_or(Type::Unknown);
+                        if ty == Type::Void {
+                            return Err(mismatch("array element cannot have type Void".to_owned()));
+                        }
+                    }
+                }
+                Instruction::IndexGet {
+                    object, index, ty, ..
+                } => {
+                    let object_type = types.get(object).copied().unwrap_or(Type::Unknown);
+                    let index_type = types.get(index).copied().unwrap_or(Type::Unknown);
+                    if !matches!(object_type, Type::Array(_) | Type::Unknown) {
+                        return Err(mismatch(format!(
+                            "index read requires an array value, found {object_type:?}"
+                        )));
+                    }
+                    if !matches!(index_type, Type::Int | Type::Unknown) {
+                        return Err(mismatch(format!(
+                            "array index must be Int, found {index_type:?}"
+                        )));
+                    }
+                    if *ty == Type::Void {
+                        return Err(mismatch(
+                            "array element read cannot produce Void".to_owned(),
+                        ));
+                    }
+                }
+                Instruction::IndexSet {
+                    object,
+                    index,
+                    value,
+                    ..
+                } => {
+                    let object_type = types.get(object).copied().unwrap_or(Type::Unknown);
+                    let index_type = types.get(index).copied().unwrap_or(Type::Unknown);
+                    let value_type = types.get(value).copied().unwrap_or(Type::Unknown);
+                    if !matches!(object_type, Type::Array(_) | Type::Unknown) {
+                        return Err(mismatch(format!(
+                            "index write requires an array value, found {object_type:?}"
+                        )));
+                    }
+                    if !matches!(index_type, Type::Int | Type::Unknown) {
+                        return Err(mismatch(format!(
+                            "array index must be Int, found {index_type:?}"
+                        )));
+                    }
+                    if value_type == Type::Void {
+                        return Err(mismatch(
+                            "array element write cannot use a Void value".to_owned(),
+                        ));
+                    }
+                }
+                Instruction::StructNew {
+                    type_name,
+                    ty,
+                    fields,
+                    ..
+                } => {
+                    if type_name.is_empty() {
+                        return Err(mismatch(
+                            "struct construction has an empty type name".to_owned(),
+                        ));
+                    }
+                    if matches!(ty, Type::Reference(..) | Type::Void) {
+                        return Err(mismatch(format!(
+                            "struct construction cannot produce {ty:?}"
+                        )));
+                    }
+                    let mut seen = std::collections::HashSet::new();
+                    for (field, value) in fields {
+                        if field.is_empty() || !seen.insert(field.as_str()) {
+                            return Err(mismatch(format!(
+                                "struct construction repeats or omits field '{field}'"
+                            )));
+                        }
+                        if types.get(value).copied().unwrap_or(Type::Unknown) == Type::Void {
+                            return Err(mismatch(format!(
+                                "struct field '{field}' cannot be assigned a Void value"
+                            )));
+                        }
+                    }
+                }
+                Instruction::FieldGet {
+                    object, field, ty, ..
+                } => {
+                    let object_type = types.get(object).copied().unwrap_or(Type::Unknown);
+                    if field.is_empty() {
+                        return Err(mismatch("field read has an empty field name".to_owned()));
+                    }
+                    if object_type == Type::Void || *ty == Type::Void {
+                        return Err(mismatch(
+                            "field read cannot use or produce a Void value".to_owned(),
+                        ));
+                    }
+                }
+                Instruction::FieldSet {
+                    object,
+                    field,
+                    value,
+                    ..
+                } => {
+                    let object_type = types.get(object).copied().unwrap_or(Type::Unknown);
+                    let value_type = types.get(value).copied().unwrap_or(Type::Unknown);
+                    if field.is_empty() {
+                        return Err(mismatch("field write has an empty field name".to_owned()));
+                    }
+                    if object_type == Type::Void || value_type == Type::Void {
+                        return Err(mismatch("field write cannot use a Void value".to_owned()));
+                    }
+                }
+                Instruction::EnumNew {
+                    type_name,
+                    variant,
+                    ty,
+                    arguments,
+                    ..
+                } => {
+                    if type_name.is_empty() || variant.is_empty() {
+                        return Err(mismatch(
+                            "enum construction has an empty type or variant name".to_owned(),
+                        ));
+                    }
+                    if matches!(ty, Type::Reference(..) | Type::Void) {
+                        return Err(mismatch(format!("enum construction cannot produce {ty:?}")));
+                    }
+                    for argument in arguments {
+                        if types.get(argument).copied().unwrap_or(Type::Unknown) == Type::Void {
+                            return Err(mismatch(
+                                "enum payload argument cannot be Void".to_owned(),
+                            ));
+                        }
+                    }
+                }
+                Instruction::VariantName { value, .. } => {
+                    if types.get(value).copied().unwrap_or(Type::Unknown) == Type::Void {
+                        return Err(mismatch(
+                            "variant name requires a non-Void value".to_owned(),
+                        ));
+                    }
+                }
+                Instruction::PatternIndex { index, .. } => {
+                    let index_type = types.get(index).copied().unwrap_or(Type::Unknown);
+                    if !matches!(index_type, Type::Int | Type::Unknown) {
+                        return Err(mismatch(format!(
+                            "pattern index must be Int, found {index_type:?}"
+                        )));
+                    }
+                }
+                Instruction::PatternField { field, .. } => {
+                    if field.is_empty() {
+                        return Err(mismatch(
+                            "pattern field read has an empty field name".to_owned(),
+                        ));
+                    }
+                }
+                Instruction::MethodCall {
+                    receiver,
+                    method,
+                    arguments,
+                    ..
+                } => {
+                    if method.is_empty() {
+                        return Err(mismatch("method call has an empty method name".to_owned()));
+                    }
+                    if types.get(receiver).copied().unwrap_or(Type::Unknown) == Type::Void {
+                        return Err(mismatch("method call receiver cannot be Void".to_owned()));
+                    }
+                    for argument in arguments {
+                        if types.get(argument).copied().unwrap_or(Type::Unknown) == Type::Void {
+                            return Err(mismatch("method argument cannot be Void".to_owned()));
+                        }
+                    }
+                }
+                Instruction::MakeClosure { callee, .. } => {
+                    if callee.is_empty() {
+                        return Err(mismatch(
+                            "closure construction has an empty callee name".to_owned(),
+                        ));
+                    }
+                }
+                Instruction::CallIndirect {
+                    arguments,
+                    return_type,
+                    ..
+                } => {
+                    // Whether the callee is callable is a *runtime* property
+                    // (`NXL9001`); the language promises a catchable error, so
+                    // the verifier must not reject it statically. `Void` is a
+                    // valid contract for a value-less indirect call.
+                    let _ = return_type;
+                    for argument in arguments {
+                        if types.get(argument).copied().unwrap_or(Type::Unknown) == Type::Void {
+                            return Err(mismatch(
+                                "indirect call argument cannot be Void".to_owned(),
+                            ));
+                        }
+                    }
+                }
+                Instruction::SpawnCall {
+                    callee, arguments, ..
+                } => {
+                    if callee.is_empty() {
+                        return Err(mismatch("spawn has an empty callee name".to_owned()));
+                    }
+                    for argument in arguments {
+                        if types.get(argument).copied().unwrap_or(Type::Unknown) == Type::Void {
+                            return Err(mismatch("spawn argument cannot be Void".to_owned()));
+                        }
+                    }
+                }
+                Instruction::SpawnMethod {
+                    receiver,
+                    method,
+                    arguments,
+                    ..
+                } => {
+                    if method.is_empty() {
+                        return Err(mismatch("spawn has an empty method name".to_owned()));
+                    }
+                    if types.get(receiver).copied().unwrap_or(Type::Unknown) == Type::Void {
+                        return Err(mismatch("spawn receiver cannot be Void".to_owned()));
+                    }
+                    for argument in arguments {
+                        if types.get(argument).copied().unwrap_or(Type::Unknown) == Type::Void {
+                            return Err(mismatch("spawn argument cannot be Void".to_owned()));
+                        }
+                    }
+                }
+                Instruction::CompleteTask { value, .. } => {
+                    if types.get(value).copied().unwrap_or(Type::Unknown) == Type::Void {
+                        return Err(mismatch(
+                            "cannot complete a task with a Void value".to_owned(),
+                        ));
+                    }
+                }
+                Instruction::ChannelNew { .. } => {}
+                Instruction::Drop { value, .. } => {
+                    if types.get(value).copied().unwrap_or(Type::Unknown) == Type::Void {
+                        return Err(mismatch("cannot drop a Void value".to_owned()));
+                    }
+                }
+                Instruction::ActorDispatch { actor, .. } => {
+                    if types.get(actor).copied().unwrap_or(Type::Unknown) == Type::Void {
+                        return Err(mismatch(
+                            "actor dispatch requires a non-Void actor".to_owned(),
+                        ));
+                    }
+                }
+                Instruction::CancelTask { task, .. } => {
+                    let task_type = types.get(task).copied().unwrap_or(Type::Unknown);
+                    if !matches!(task_type, Type::Task(_) | Type::Unknown) {
+                        return Err(mismatch(format!(
+                            "cancellation requires a task value, found {task_type:?}"
+                        )));
+                    }
+                }
+                Instruction::Assign { name, value, .. } => {
+                    if name.is_empty() {
+                        return Err(mismatch("assignment has an empty binding name".to_owned()));
+                    }
+                    if types.get(value).copied().unwrap_or(Type::Unknown) == Type::Void {
+                        return Err(mismatch("cannot assign a Void value".to_owned()));
+                    }
+                }
+                Instruction::If { condition, .. } => {
+                    let condition_type = types.get(condition).copied().unwrap_or(Type::Unknown);
+                    if !matches!(condition_type, Type::Bool | Type::Unknown) {
+                        return Err(mismatch(format!(
+                            "if condition must be Bool, found {condition_type:?}"
+                        )));
+                    }
+                }
+                Instruction::Loop {
+                    condition: Some(condition),
+                    ..
+                } => {
+                    let condition_type = types.get(condition).copied().unwrap_or(Type::Unknown);
+                    if !matches!(condition_type, Type::Bool | Type::Unknown) {
+                        return Err(mismatch(format!(
+                            "loop condition must be Bool, found {condition_type:?}"
+                        )));
+                    }
+                }
+                Instruction::Loop {
+                    condition: None, ..
+                } => {}
+                Instruction::Return { value, .. } => match value {
+                    Some(value) => {
+                        let actual = types.get(value).copied().unwrap_or(Type::Unknown);
+                        if !types_compatible(actual, function.return_type) {
+                            return Err(mismatch(format!(
+                                "return value has type {actual:?}, expected {:?}",
+                                function.return_type
+                            )));
+                        }
+                    }
+                    None => {
+                        if !matches!(function.return_type, Type::Void | Type::Unknown) {
+                            return Err(mismatch(format!(
+                                "value-less return in a function returning {:?}",
+                                function.return_type
+                            )));
+                        }
+                    }
+                },
+                Instruction::Throw { value, .. } => {
+                    if types.get(value).copied().unwrap_or(Type::Unknown) == Type::Void {
+                        return Err(mismatch("cannot throw a Void value".to_owned()));
+                    }
+                }
                 Instruction::Call {
                     callee,
                     type_arguments,
@@ -2405,6 +2844,23 @@ fn types_compatible(actual: Type, expected: Type) -> bool {
 /// identity of its element; without a tag, `Array<Int>` and `Int` would have
 /// the same id and `&Int` would accept a borrow of `[Int]`.
 const ARRAY_ID_TAG: TypeId = 0x9E37_79B9;
+/// Container tags keep `Option<Int>` distinct from `Int` while still making
+/// the identity depend on the canonicalized argument. `Option<Optional<Int>>`
+/// and `Optional<Option<Int>>` therefore agree (Module 2.7, WP-B).
+const OPTIONAL_ID_TAG: TypeId = 0x85EB_CA6B;
+const TASK_ID_TAG: TypeId = 0xC2B2_AE35;
+const CHANNEL_ID_TAG: TypeId = 0x27D4_EB2F;
+const RESULT_OK_ID_TAG: TypeId = 0x1656_67B1;
+const RESULT_ERROR_ID_TAG: TypeId = 0x7F4A_7C15;
+
+fn tagged_identity(tag: TypeId, argument: Type) -> TypeId {
+    let identity = type_identity(argument);
+    if identity == 0 {
+        0
+    } else {
+        mix_type_id(tag, identity)
+    }
+}
 
 /// The identity of an array type: its element identity, mixed with a tag so
 /// it cannot collide with the element type itself.
@@ -2741,6 +3197,10 @@ struct Lowerer {
     instance_arguments: HashMap<(TypeId, TypeId), Vec<Type>>,
     /// Concrete types behind `Type::Array`/`Type::Tuple` element ids.
     identity_types: HashMap<TypeId, Type>,
+    /// Targets of reference identities. Kept separately from
+    /// `identity_types` because an array's identity also maps to its element
+    /// type there, so `&[Int]` and `Array<Int>` cannot share one entry.
+    reference_targets: HashMap<TypeId, Type>,
     /// Monotonic counter for synthesized conditional-expression temporaries.
     conditional_counter: u32,
     /// Full program, for resolving struct/enum declarations by name.
@@ -3177,7 +3637,12 @@ impl Lowerer {
                             ));
                         }
                     }
-                    let target = self.type_by_identity(target).unwrap_or(Type::Unknown);
+                    let target = self
+                        .reference_targets
+                        .get(&target)
+                        .copied()
+                        .or_else(|| self.type_by_identity(target))
+                        .unwrap_or(Type::Unknown);
                     self.record_identity(target);
                     if let Some(state) = self.binding_state_mut(name) {
                         state.reference = Some((target, mutable));
@@ -3379,6 +3844,11 @@ impl Lowerer {
                     ));
                 }
 
+                self.validate_generic_constraints(
+                    &function.constraints,
+                    &function.type_parameters,
+                )?;
+
                 let signature = self
                     .signatures
                     .iter()
@@ -3395,6 +3865,18 @@ impl Lowerer {
                 let parameter_annotations = signature.parameter_annotations.clone();
                 let return_annotation = signature.return_annotation.clone();
                 let return_type = signature.return_type;
+                if matches!(return_type, Type::Reference(..)) {
+                    return Err(Diagnostic::error(
+                        "NXL2017",
+                        format!(
+                            "function '{function_name}' cannot return a reference: NXL has no lifetime parameters"
+                        ),
+                        function.span,
+                    )
+                    .with_help(
+                        "return an owned value, or write through the reference in the caller",
+                    ));
+                }
 
                 // Validate function body can be lowered
                 let Some(body) = &function.body else {
@@ -3473,7 +3955,12 @@ impl Lowerer {
                         .insert(param_name.clone(), value_id);
                     self.declare_binding(param_name);
                     if let Type::Reference(target, mutable) = *param_type {
-                        let target = self.type_by_identity(target).unwrap_or(Type::Unknown);
+                        let target = self
+                            .reference_targets
+                            .get(&target)
+                            .copied()
+                            .or_else(|| self.type_by_identity(target))
+                            .unwrap_or(Type::Unknown);
                         self.record_identity(target);
                         if let Some(state) = self.binding_state_mut(param_name) {
                             state.reference = Some((target, mutable));
@@ -4020,10 +4507,11 @@ impl Lowerer {
     }
 
     fn resolve_type(&self, annotation: &str) -> Option<Type> {
-        type_from_name_with(
+        type_from_name_scoped(
             annotation,
             &self.type_aliases,
             &self.current_type_parameters,
+            &|base| self.type_is_declared(base),
         )
         .or_else(|| {
             self.current_type_parameters
@@ -4102,6 +4590,15 @@ impl Lowerer {
         }
     }
 
+    /// Whether `base` names a type declared in the program or imported under
+    /// that name. Used to give a declared type precedence over builtin
+    /// container spellings (WP-B).
+    fn type_is_declared(&self, base: &str) -> bool {
+        self.type_aliases.contains_key(base)
+            || find_type_declaration(&self.program, base).is_some()
+            || self.type_names.iter().any(|known| known == base)
+    }
+
     fn resolve_type_alias(&self, name: &str) -> String {
         // Primitives and unknown names pass through untouched.
         for import in &self.file_imports {
@@ -4122,18 +4619,20 @@ impl Lowerer {
     /// instantiated generic signatures, whose annotations were canonicalized
     /// by HIR in the declaring file's namespace.
     fn resolve_concrete_annotation(&self, annotation: &str) -> Option<Type> {
-        type_from_name_with(annotation, &self.type_aliases, &[])
-            .or_else(|| {
-                self.type_names
-                    .contains(annotation)
-                    .then(|| Type::Generic(stable_type_id(annotation)))
-            })
-            .or_else(|| {
-                let qualified = self.resolve_type_alias(annotation);
-                self.type_names
-                    .contains(&qualified)
-                    .then(|| Type::Generic(stable_type_id(&qualified)))
-            })
+        type_from_name_scoped(annotation, &self.type_aliases, &[], &|base| {
+            self.type_is_declared(base)
+        })
+        .or_else(|| {
+            self.type_names
+                .contains(annotation)
+                .then(|| Type::Generic(stable_type_id(annotation)))
+        })
+        .or_else(|| {
+            let qualified = self.resolve_type_alias(annotation);
+            self.type_names
+                .contains(&qualified)
+                .then(|| Type::Generic(stable_type_id(&qualified)))
+        })
     }
 
     /// Validate and resolve one explicitly supplied type argument.
@@ -4267,6 +4766,206 @@ impl Lowerer {
         })
     }
 
+    /// Validate a declared `where` clause before its body is lowered
+    /// (Module 2.7, WP-C). Every constrained name must be a declared type
+    /// parameter and every bound must name a declared trait or interface.
+    /// Constraints that cannot be enforced are rejected rather than ignored.
+    fn validate_generic_constraints(
+        &self,
+        constraints: &[crate::ast::GenericConstraint],
+        parameters: &[String],
+    ) -> Result<(), Diagnostic> {
+        let mut seen = std::collections::HashSet::new();
+        for constraint in constraints {
+            if !parameters
+                .iter()
+                .any(|parameter| parameter == &constraint.parameter)
+            {
+                return Err(Diagnostic::error(
+                    "NXL2014",
+                    format!(
+                        "constrained type parameter '{}' is not declared",
+                        constraint.parameter
+                    ),
+                    constraint.span,
+                )
+                .with_help("only parameters in the generic list can appear in a where clause"));
+            }
+            if !seen.insert(constraint.parameter.as_str()) {
+                return Err(Diagnostic::error(
+                    "NXL2014",
+                    format!(
+                        "type parameter '{}' has more than one where-clause constraint",
+                        constraint.parameter
+                    ),
+                    constraint.span,
+                )
+                .with_help("combine the bounds into one clause: `where T: A + B`"));
+            }
+            for bound in &constraint.bounds {
+                if bound == &constraint.parameter {
+                    return Err(Diagnostic::error(
+                        "NXL2014",
+                        format!(
+                            "type parameter '{}' cannot be its own trait bound",
+                            constraint.parameter
+                        ),
+                        constraint.span,
+                    ));
+                }
+                let resolved = self.resolve_type_alias(bound);
+                let declaration = find_type_declaration(&self.program, bound)
+                    .or_else(|| find_type_declaration(&self.program, &resolved));
+                match declaration {
+                    Some(declaration)
+                        if matches!(
+                            declaration.kind,
+                            crate::ast::DeclarationKind::Interface
+                                | crate::ast::DeclarationKind::Trait
+                        ) => {}
+                    Some(_) => {
+                        return Err(Diagnostic::error(
+                            "NXL2014",
+                            format!("bound '{bound}' is not a declared trait or interface"),
+                            constraint.span,
+                        )
+                        .with_help("bounds must name a trait or interface declaration"));
+                    }
+                    None => {
+                        return Err(Diagnostic::error(
+                            "NXL2014",
+                            format!("unknown trait bound '{bound}'"),
+                            constraint.span,
+                        )
+                        .with_help("declare the trait/interface before using it as a bound"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Enforce a signature's `where` bounds for one instantiation using the
+    /// `impl Trait for Type` blocks present in the program. A bound with no
+    /// matching implementation is rejected; it is never silently accepted.
+    fn enforce_generic_constraints(
+        &self,
+        signature: &FunctionSignature,
+        written_arguments: &[String],
+        resolved_arguments: &[Type],
+        display: &str,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        for constraint in &signature.constraints {
+            let Some(index) = signature
+                .type_parameters
+                .iter()
+                .position(|parameter| parameter == &constraint.parameter)
+            else {
+                return Err(Diagnostic::error(
+                    "NXL2014",
+                    format!(
+                        "constrained type parameter '{}' is not declared by '{display}'",
+                        constraint.parameter
+                    ),
+                    span,
+                ));
+            };
+            let written = written_arguments
+                .get(index)
+                .map(String::as_str)
+                .unwrap_or("?");
+            let actual = resolved_arguments
+                .get(index)
+                .copied()
+                .unwrap_or(Type::Unknown);
+            for bound in &constraint.bounds {
+                if !self.type_implements_bound(actual, written, bound) {
+                    return Err(Diagnostic::error(
+                        "NXL2014",
+                        format!(
+                            "type '{written}' does not implement '{bound}', required by '{}: {bound}' in '{display}'",
+                            constraint.parameter
+                        ),
+                        span,
+                    )
+                    .with_help(format!(
+                        "add `impl {bound} for {written} {{ ... }}` or relax the where clause"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether an `impl Bound for <the actual type>` is present. The actual
+    /// type is identified through both its resolved `Type` identity and the
+    /// written argument text, so primitives, named types and generic
+    /// instances all agree with how `impl` targets are written.
+    fn type_implements_bound(&self, actual: Type, written: &str, bound: &str) -> bool {
+        if matches!(actual, Type::Unknown | Type::Param(_)) {
+            return false;
+        }
+        let mut target_ids = std::collections::HashSet::new();
+        match actual {
+            Type::Int => {
+                target_ids.insert(stable_type_id("Int"));
+            }
+            Type::Float => {
+                target_ids.insert(stable_type_id("Float"));
+            }
+            Type::Bool => {
+                target_ids.insert(stable_type_id("Bool"));
+            }
+            Type::String => {
+                target_ids.insert(stable_type_id("String"));
+            }
+            Type::Void => {
+                target_ids.insert(stable_type_id("Void"));
+            }
+            Type::Instance(base, _) => {
+                target_ids.insert(base);
+            }
+            Type::Generic(id) | Type::Struct(id) | Type::Enum(id) => {
+                target_ids.insert(id);
+            }
+            _ => {}
+        }
+        let written_name = written.split('<').next().unwrap_or(written).trim();
+        if !written_name.is_empty() {
+            target_ids.insert(stable_type_id(written_name));
+            target_ids.insert(stable_type_id(&self.resolve_type_alias(written_name)));
+        }
+        let bound_resolved = self.resolve_type_alias(bound);
+        fn impl_block(statement: &Statement) -> Option<&crate::ast::ImplBlock> {
+            match statement {
+                Statement::ImplBlock(implementation) => Some(implementation),
+                Statement::Export(inner) => match inner.as_ref() {
+                    Statement::ImplBlock(implementation) => Some(implementation),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        self.program.statements.iter().any(|statement| {
+            let Some(implementation) = impl_block(statement) else {
+                return false;
+            };
+            let Some(trait_name) = implementation.trait_name.as_deref() else {
+                return false;
+            };
+            if trait_name != bound
+                && trait_name != bound_resolved
+                && self.resolve_type_alias(trait_name) != bound_resolved
+            {
+                return false;
+            }
+            let target = self.resolve_type_alias(&implementation.target);
+            target_ids.contains(&stable_type_id(&implementation.target))
+                || target_ids.contains(&stable_type_id(&target))
+        })
+    }
+
     /// Substitute explicit type arguments into a generic function signature.
     /// Returns the instantiated parameter types, the instantiated return
     /// type, and the resolved type arguments (stored on the NIR call).
@@ -4292,6 +4991,13 @@ impl Lowerer {
             .iter()
             .map(|argument| self.resolve_type_argument(argument, span))
             .collect::<Result<Vec<_>, _>>()?;
+        self.enforce_generic_constraints(
+            signature,
+            type_arguments,
+            &resolved_arguments,
+            display,
+            span,
+        )?;
         let bindings = signature
             .type_parameters
             .iter()
@@ -4554,21 +5260,17 @@ impl Lowerer {
             Type::Instance(base, _) => base,
             _ => return None,
         };
-        let name = self
-            .program
-            .statements
-            .iter()
-            .find_map(|statement| {
-                let declaration = match statement {
+        let name = self.program.statements.iter().find_map(|statement| {
+            let declaration = match statement {
+                Statement::TypeDeclaration(declaration) => declaration,
+                Statement::Export(inner) => match inner.as_ref() {
                     Statement::TypeDeclaration(declaration) => declaration,
-                    Statement::Export(inner) => match inner.as_ref() {
-                        Statement::TypeDeclaration(declaration) => declaration,
-                        _ => return None,
-                    },
                     _ => return None,
-                };
-                (stable_type_id(&declaration.name) == base).then(|| declaration.name.clone())
-            })?;
+                },
+                _ => return None,
+            };
+            (stable_type_id(&declaration.name) == base).then(|| declaration.name.clone())
+        })?;
         let qualified = format!("{name}#{method}");
         self.signatures
             .iter()
@@ -4584,13 +5286,14 @@ impl Lowerer {
         method: &str,
         arguments: &[Expression],
         lowered: &[ValueId],
-        span: Span,
     ) -> Result<(), Diagnostic> {
         let parameters: Option<Vec<Type>> = self
             .method_signature(receiver_type, method)
             .map(|signature| signature.parameters.iter().map(|(_, ty)| *ty).collect());
         for (index, (argument, value)) in arguments.iter().zip(lowered.iter()).enumerate() {
-            let parameter_type = parameters.as_ref().and_then(|list| list.get(index).copied());
+            let parameter_type = parameters
+                .as_ref()
+                .and_then(|list| list.get(index).copied());
             self.check_reference_argument(
                 display,
                 index,
@@ -4615,7 +5318,9 @@ impl Lowerer {
     ) -> Result<(), Diagnostic> {
         let parameters = self.closure_parameters.get(&callee).cloned();
         for (index, (argument, value)) in arguments.iter().zip(lowered.iter()).enumerate() {
-            let parameter_type = parameters.as_ref().and_then(|list| list.get(index).copied());
+            let parameter_type = parameters
+                .as_ref()
+                .and_then(|list| list.get(index).copied());
             self.check_reference_argument(
                 display,
                 index,
@@ -4760,7 +5465,12 @@ impl Lowerer {
             .unwrap_or(false)
         {
             if let Type::Reference(target, _) = self.value_type(value) {
-                return self.type_by_identity(target).unwrap_or(Type::Unknown);
+                return self
+                    .reference_targets
+                    .get(&target)
+                    .copied()
+                    .or_else(|| self.type_by_identity(target))
+                    .unwrap_or(Type::Unknown);
             }
         }
         self.value_type(value)
@@ -4823,7 +5533,11 @@ impl Lowerer {
     fn reference_target(&self, ty: Type) -> Option<(Type, bool)> {
         match ty {
             Type::Reference(id, mutable) => {
-                let target = self.type_by_identity(id)?;
+                let target = self
+                    .reference_targets
+                    .get(&id)
+                    .copied()
+                    .or_else(|| self.type_by_identity(id))?;
                 Some((target, mutable))
             }
             _ => None,
@@ -4915,6 +5629,7 @@ impl Lowerer {
         self.register_borrow(name, kind, span)?;
         let cell = self.ensure_boxed(name, span)?;
         let target_id = self.record_identity(target);
+        self.reference_targets.insert(target_id, target);
         let result = self.allocate();
         let instruction = Instruction::Borrow {
             result,
@@ -5806,6 +6521,7 @@ impl Lowerer {
                 parameters,
                 return_type,
                 type_parameters: method.type_parameters.clone(),
+                constraints: method.constraints.clone(),
                 parameter_annotations: method
                     .parameters
                     .iter()
@@ -6132,8 +6848,7 @@ impl Lowerer {
                     span,
                 ));
             }
-            for (index, (arg, param_type)) in arguments.iter().zip(param_types.iter()).enumerate()
-            {
+            for (index, (arg, param_type)) in arguments.iter().zip(param_types.iter()).enumerate() {
                 let arg_value = self.expression(arg)?;
                 let arg_type = self.value_type(arg_value);
                 if !types_compatible(arg_type, *param_type) {
@@ -6169,8 +6884,7 @@ impl Lowerer {
                     span,
                 ));
             }
-            for (index, (arg, param_type)) in arguments.iter().zip(param_types.iter()).enumerate()
-            {
+            for (index, (arg, param_type)) in arguments.iter().zip(param_types.iter()).enumerate() {
                 let arg_value = self.expression(arg)?;
                 let arg_type = self.value_type(arg_value);
                 if !types_compatible(arg_type, *param_type) {
@@ -6182,11 +6896,14 @@ impl Lowerer {
                         arg.span,
                     ));
                 }
+                // The *declared* slot decides whether the borrow can be
+                // tracked; a substituted `&Int` produced by inferring
+                // `T = &Int` does not name a reference in the source.
                 self.check_reference_argument(
                     display,
                     index,
                     arg_type,
-                    Some(*param_type),
+                    Some(signature.parameters[index].1),
                     arg.span,
                 )?;
                 lowered_arguments.push(arg_value);
@@ -6263,11 +6980,13 @@ impl Lowerer {
                         arg.span,
                     ));
                 }
+                // Use the declared slot, not the substituted type: `T` bound
+                // to `&Int` is still an untrackable slot (WP-A).
                 self.check_reference_argument(
                     display,
                     index,
                     arg_type,
-                    Some(*param_type),
+                    Some(signature.parameters[index].1),
                     arg.span,
                 )?;
             }
@@ -6375,7 +7094,6 @@ impl Lowerer {
                         method,
                         arguments,
                         &lowered,
-                        span,
                     )?;
                     let result = self.allocate();
                     let instruction = Instruction::SpawnMethod {
@@ -6483,6 +7201,7 @@ impl Lowerer {
                 .collect(),
             return_type: Type::Unknown,
             type_parameters: Vec::new(),
+            constraints: Vec::new(),
             parameter_annotations: captured.iter().map(|_| None).collect(),
             return_annotation: None,
         });
@@ -7657,7 +8376,6 @@ impl Lowerer {
                         method,
                         arguments,
                         &lowered,
-                        expression.span,
                     )?;
                     let result = self.allocate();
                     let receiver_out = self.allocate();
@@ -7748,7 +8466,12 @@ impl Lowerer {
                     for arg in arguments {
                         lowered_arguments.push(self.expression(arg)?);
                     }
-                    self.check_indirect_arguments("indirect call", callee_id, arguments, &lowered_arguments)?;
+                    self.check_indirect_arguments(
+                        "indirect call",
+                        callee_id,
+                        arguments,
+                        &lowered_arguments,
+                    )?;
                     let result = self.allocate();
                     let instruction = Instruction::CallIndirect {
                         result,
@@ -8168,6 +8891,7 @@ impl Lowerer {
                     parameters: params.clone(),
                     return_type: Type::Unknown,
                     type_parameters: function.type_parameters.clone(),
+                    constraints: function.constraints.clone(),
                     parameter_annotations: captured
                         .iter()
                         .map(|_| None)
@@ -8393,7 +9117,7 @@ impl Lowerer {
                 if let Some(target_text) = target_text {
                     if let Some(target) = self.resolve_type(target_text) {
                         self.register_annotation_type(target_text, target);
-                        self.identity_types.entry(id).or_insert(target);
+                        self.reference_targets.insert(id, target);
                     }
                 }
             }
@@ -8552,7 +9276,10 @@ impl Lowerer {
             }
             _ => annotation,
         };
-        let ty = type_from_name_with(&annotation, &self.type_aliases, &type_parameters)?;
+        let ty =
+            type_from_name_scoped(&annotation, &self.type_aliases, &type_parameters, &|base| {
+                self.type_is_declared(base)
+            })?;
         self.register_annotation_type(&annotation, ty);
         Some(ty)
     }
@@ -8822,7 +9549,11 @@ impl Lowerer {
                 Some(format!("[{}]", self.type_to_annotation(element)?))
             }
             Type::Reference(id, mutable) => {
-                let target = self.type_by_identity(id)?;
+                let target = self
+                    .reference_targets
+                    .get(&id)
+                    .copied()
+                    .or_else(|| self.type_by_identity(id))?;
                 let rendered = self.type_to_annotation(target)?;
                 Some(if mutable {
                     format!("&mut {rendered}")
@@ -8861,13 +9592,21 @@ pub(crate) fn type_from_name_with(
     aliases: &HashMap<String, String>,
     params: &[String],
 ) -> Option<Type> {
-    /// Resolve a bare argument name through aliases for hashing purposes.
-    fn keyed(argument: &str, aliases: &HashMap<String, String>) -> String {
-        aliases
-            .get(argument)
-            .cloned()
-            .unwrap_or_else(|| argument.to_owned())
-    }
+    type_from_name_scoped(name, aliases, params, &|_| false)
+}
+
+/// Like [`type_from_name_with`], but `is_declared` tells the resolver whether
+/// a base name is a type declared in the current module. A declared user type
+/// wins over a builtin container spelling (WP-B): `struct Option<T>` is a user
+/// type in the module that declares it, while `Option<Int>` stays the builtin
+/// optional elsewhere. The builtin names are therefore never globally
+/// reserved.
+pub(crate) fn type_from_name_scoped(
+    name: &str,
+    aliases: &HashMap<String, String>,
+    params: &[String],
+    is_declared: &dyn Fn(&str) -> bool,
+) -> Option<Type> {
     if params.iter().any(|param| param == name) {
         return Some(Type::Param(stable_type_id(name)));
     }
@@ -8889,19 +9628,19 @@ pub(crate) fn type_from_name_with(
                 // The reference is keyed by the identity of what it points
                 // at, not by the text written after `&`, so a borrow of a
                 // `Box<Int>` and an annotation `&Box<Int>` agree.
-                let target_ty = type_from_name_with(target, aliases, params)?;
+                let target_ty = type_from_name_scoped(target, aliases, params, is_declared)?;
                 return Some(Type::Reference(type_identity(target_ty), mutable));
             }
             if name.starts_with('[') && name.ends_with(']') {
                 let inner = &name[1..name.len() - 1];
-                let element = type_from_name_with(inner, aliases, params)?;
+                let element = type_from_name_scoped(inner, aliases, params, is_declared)?;
                 return Some(Type::Array(array_identity(element)));
             }
             if name.starts_with('(') && name.ends_with(')') {
                 let contents = &name[1..name.len() - 1];
                 let arguments = split_type_arguments(contents)
                     .into_iter()
-                    .map(|argument| type_from_name_with(argument, aliases, params))
+                    .map(|argument| type_from_name_scoped(argument, aliases, params, is_declared))
                     .collect::<Option<Vec<_>>>()?;
                 // A reference nested inside a value type would escape the
                 // borrow scope; only a direct `&T` binding or parameter is
@@ -8919,10 +9658,16 @@ pub(crate) fn type_from_name_with(
                 return None;
             }
             let constructor = &name[..open];
-            let argument_names = split_type_arguments(&name[open + 1..name.len() - 1]);
+            // Canonicalize nested arguments through the alias table first, so
+            // `Option<Box<Int>>` and `Optional<AliasForBox<Int>>` agree on one
+            // identity inside the container as well as at the top level.
+            let argument_names = split_type_arguments(&name[open + 1..name.len() - 1])
+                .iter()
+                .map(|argument| crate::hir::canonicalize_type_annotation(argument, aliases, params))
+                .collect::<Vec<_>>();
             let arguments = argument_names
                 .iter()
-                .map(|argument| type_from_name_with(argument, aliases, params))
+                .map(|argument| type_from_name_scoped(argument, aliases, params, is_declared))
                 .collect::<Option<Vec<_>>>()?;
             if arguments
                 .iter()
@@ -8930,39 +9675,54 @@ pub(crate) fn type_from_name_with(
             {
                 return None;
             }
-            match (constructor, arguments.as_slice()) {
-                ("Array", [_]) | ("List", [_]) => Some(Type::Array(array_identity(arguments[0]))),
-                ("Option", [_]) => Some(Type::Optional(stable_type_id(&keyed(
-                    argument_names[0],
-                    aliases,
-                )))),
-                ("Task", [_]) => Some(Type::Task(stable_type_id(&keyed(
-                    argument_names[0],
-                    aliases,
-                )))),
-                ("Channel", [_]) => Some(Type::Channel(stable_type_id(&keyed(
-                    argument_names[0],
-                    aliases,
-                )))),
-                ("Result", [_, _]) => Some(Type::Result(
-                    stable_type_id(&keyed(argument_names[0], aliases)),
-                    stable_type_id(&keyed(argument_names[1], aliases)),
-                )),
-                ("Map", [_, _]) => Some(Type::Map(stable_type_id(name))),
-                // Known containers with the wrong arity are malformed, not
-                // user-defined generic types.
-                ("Array" | "List" | "Option" | "Task" | "Channel" | "Result" | "Map", _) => None,
-                (base, _) => {
-                    let qualified = aliases
-                        .get(base)
-                        .cloned()
-                        .unwrap_or_else(|| base.to_owned());
-                    Some(Type::Instance(
-                        stable_type_id(&qualified),
-                        argument_fingerprint(&arguments),
-                    ))
+            // A type declared in this module shadows the builtin spelling, so
+            // the container names are not reserved globally.
+            let user_declared = is_declared(constructor) || aliases.contains_key(constructor);
+            if !user_declared {
+                match (constructor, arguments.as_slice()) {
+                    ("Array", [_]) | ("List", [_]) => {
+                        return Some(Type::Array(array_identity(arguments[0])))
+                    }
+                    // `Option` and `Optional` are two spellings of one type;
+                    // the identity is the canonical identity of the argument,
+                    // so nested container spellings cannot diverge.
+                    ("Option", [_]) | ("Optional", [_]) => {
+                        return Some(Type::Optional(tagged_identity(
+                            OPTIONAL_ID_TAG,
+                            arguments[0],
+                        )))
+                    }
+                    ("Task", [_]) => {
+                        return Some(Type::Task(tagged_identity(TASK_ID_TAG, arguments[0])))
+                    }
+                    ("Channel", [_]) => {
+                        return Some(Type::Channel(tagged_identity(CHANNEL_ID_TAG, arguments[0])))
+                    }
+                    ("Result", [_, _]) => {
+                        return Some(Type::Result(
+                            tagged_identity(RESULT_OK_ID_TAG, arguments[0]),
+                            tagged_identity(RESULT_ERROR_ID_TAG, arguments[1]),
+                        ))
+                    }
+                    ("Map", [_, _]) => return Some(Type::Map(argument_fingerprint(&arguments))),
+                    // Known containers with the wrong arity are malformed, not
+                    // user-defined generic types.
+                    (
+                        "Array" | "List" | "Option" | "Optional" | "Task" | "Channel" | "Result"
+                        | "Map",
+                        _,
+                    ) => return None,
+                    _ => {}
                 }
             }
+            let qualified = aliases
+                .get(constructor)
+                .cloned()
+                .unwrap_or_else(|| constructor.to_owned());
+            Some(Type::Instance(
+                stable_type_id(&qualified),
+                argument_fingerprint(&arguments),
+            ))
         }
     }
 }
@@ -9016,7 +9776,7 @@ pub(crate) fn split_type_arguments(arguments: &str) -> Vec<&str> {
 /// Number of type parameters a builtin container constructor takes.
 fn builtin_type_arity(name: &str) -> Option<usize> {
     match name {
-        "Array" | "List" | "Option" | "Task" | "Channel" => Some(1),
+        "Array" | "List" | "Option" | "Optional" | "Task" | "Channel" => Some(1),
         "Result" | "Map" => Some(2),
         _ => None,
     }

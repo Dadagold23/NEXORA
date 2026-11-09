@@ -621,6 +621,356 @@ fn nir_verifier_rejects_undefined_entry_point() {
     assert_eq!(diagnostic.code, "NXL3001");
 }
 
+// ---------------------------------------------------------------------------
+// Module 2.7 — verifier arms for previously unverified instruction kinds
+// ---------------------------------------------------------------------------
+
+/// A module whose only function is assembled by hand, so each test can inject
+/// exactly one malformed instruction independently of the lowerer.
+fn hand_built_module(
+    instructions: Vec<nxl_compiler::nir::Instruction>,
+    return_type: nxl_compiler::nir::Type,
+    return_value: Option<nxl_compiler::nir::ValueId>,
+) -> nxl_compiler::nir::Module {
+    use nxl_compiler::nir::{BasicBlock, Terminator};
+
+    let template = SourceFile::new("hand_built_template.nxl", "let seed = 1;");
+    let mut module = compile_to_nir(&template).expect("template should lower");
+    let mut function = module.functions[0].clone();
+    function.name = "hand_built".to_owned();
+    function.parameters.clear();
+    function.return_type = return_type;
+    function.basic_blocks = vec![BasicBlock {
+        id: 0,
+        instructions,
+        terminator: Terminator::Return {
+            value: return_value,
+            span: Default::default(),
+        },
+    }];
+    function.refresh_metadata();
+    module.functions = vec![function];
+    module.signatures.clear();
+    module.initializers.clear();
+    module.entry_point = Some("hand_built".to_owned());
+    module
+}
+
+fn verify_hand_built(
+    instructions: Vec<nxl_compiler::nir::Instruction>,
+    return_type: nxl_compiler::nir::Type,
+    return_value: Option<nxl_compiler::nir::ValueId>,
+) -> Result<(), String> {
+    hand_built_module(instructions, return_type, return_value)
+        .verify()
+        .map_err(|diagnostic| diagnostic.code)
+}
+
+#[test]
+fn module_2_7_verifier_accepts_hand_built_array_round_trip() {
+    use nxl_compiler::nir::{Constant, Instruction, Type};
+
+    verify_hand_built(
+        vec![
+            Instruction::Constant {
+                result: 0,
+                value: Constant::Integer(7),
+                ty: Type::Int,
+                span: Default::default(),
+            },
+            Instruction::ArrayNew {
+                result: 1,
+                elements: vec![0],
+                span: Default::default(),
+            },
+            Instruction::IndexGet {
+                result: 2,
+                object: 1,
+                index: 0,
+                ty: Type::Int,
+                span: Default::default(),
+            },
+            Instruction::Return {
+                value: Some(2),
+                span: Default::default(),
+            },
+        ],
+        Type::Int,
+        Some(2),
+    )
+    .expect("valid hand-built NIR must still verify");
+}
+
+#[test]
+fn module_2_7_verifier_rejects_inconsistent_constant_type() {
+    use nxl_compiler::nir::{Constant, Instruction, Type};
+
+    assert_eq!(
+        verify_hand_built(
+            vec![Instruction::Constant {
+                result: 0,
+                value: Constant::Integer(1),
+                ty: Type::Bool,
+                span: Default::default(),
+            }],
+            Type::Void,
+            None,
+        ),
+        Err("NXL3001".into())
+    );
+}
+
+#[test]
+fn module_2_7_verifier_rejects_empty_load_name() {
+    use nxl_compiler::nir::{Instruction, Type};
+
+    assert_eq!(
+        verify_hand_built(
+            vec![Instruction::Load {
+                result: 0,
+                name: String::new(),
+                ty: Type::Int,
+                span: Default::default(),
+            }],
+            Type::Void,
+            None,
+        ),
+        Err("NXL3001".into())
+    );
+}
+
+#[test]
+fn module_2_7_verifier_rejects_index_read_on_scalar() {
+    use nxl_compiler::nir::{Constant, Instruction, Type};
+
+    assert_eq!(
+        verify_hand_built(
+            vec![
+                Instruction::Constant {
+                    result: 0,
+                    value: Constant::Integer(1),
+                    ty: Type::Int,
+                    span: Default::default(),
+                },
+                Instruction::IndexGet {
+                    result: 1,
+                    object: 0,
+                    index: 0,
+                    ty: Type::Int,
+                    span: Default::default(),
+                },
+            ],
+            Type::Void,
+            None,
+        ),
+        Err("NXL3001".into())
+    );
+}
+
+#[test]
+fn module_2_7_verifier_rejects_boolean_array_index() {
+    use nxl_compiler::nir::{Constant, Instruction, Type};
+
+    assert_eq!(
+        verify_hand_built(
+            vec![
+                Instruction::Constant {
+                    result: 0,
+                    value: Constant::Boolean(true),
+                    ty: Type::Bool,
+                    span: Default::default(),
+                },
+                Instruction::Constant {
+                    result: 1,
+                    value: Constant::Integer(1),
+                    ty: Type::Int,
+                    span: Default::default(),
+                },
+                Instruction::ArrayNew {
+                    result: 2,
+                    elements: vec![1],
+                    span: Default::default(),
+                },
+                Instruction::IndexSet {
+                    result: 3,
+                    object: 2,
+                    index: 0,
+                    value: 1,
+                    span: Default::default(),
+                },
+            ],
+            Type::Void,
+            None,
+        ),
+        Err("NXL3001".into())
+    );
+}
+
+#[test]
+fn module_2_7_verifier_rejects_duplicate_struct_field() {
+    use nxl_compiler::nir::{Constant, Instruction, Type};
+
+    assert_eq!(
+        verify_hand_built(
+            vec![
+                Instruction::Constant {
+                    result: 0,
+                    value: Constant::Integer(1),
+                    ty: Type::Int,
+                    span: Default::default(),
+                },
+                Instruction::StructNew {
+                    result: 1,
+                    type_name: "Point".to_owned(),
+                    ty: Type::Unknown,
+                    fields: vec![("x".to_owned(), 0), ("x".to_owned(), 0)],
+                    span: Default::default(),
+                },
+            ],
+            Type::Void,
+            None,
+        ),
+        Err("NXL3001".into())
+    );
+}
+
+#[test]
+fn module_2_7_verifier_rejects_empty_enum_variant() {
+    use nxl_compiler::nir::{Instruction, Type};
+
+    assert_eq!(
+        verify_hand_built(
+            vec![Instruction::EnumNew {
+                result: 0,
+                type_name: "Choice".to_owned(),
+                variant: String::new(),
+                ty: Type::Unknown,
+                arguments: Vec::new(),
+                span: Default::default(),
+            }],
+            Type::Void,
+            None,
+        ),
+        Err("NXL3001".into())
+    );
+}
+
+#[test]
+fn module_2_7_verifier_accepts_indirect_call_on_scalar() {
+    use nxl_compiler::nir::{Constant, Instruction, Type};
+
+    // Callability is a runtime property: `n(1)` for an Int must reach the VM
+    // and fail as the catchable `NXL9001` runtime error, not as `NXL3001`.
+    verify_hand_built(
+        vec![
+            Instruction::Constant {
+                result: 0,
+                value: Constant::Integer(1),
+                ty: Type::Int,
+                span: Default::default(),
+            },
+            Instruction::CallIndirect {
+                result: 1,
+                callee: 0,
+                arguments: Vec::new(),
+                return_type: Type::Int,
+                span: Default::default(),
+            },
+        ],
+        Type::Void,
+        None,
+    )
+    .expect("a scalar callee is a runtime error, not a verifier error");
+}
+
+#[test]
+fn module_2_7_verifier_rejects_cancelling_a_non_task() {
+    use nxl_compiler::nir::{Constant, Instruction, Type};
+
+    assert_eq!(
+        verify_hand_built(
+            vec![
+                Instruction::Constant {
+                    result: 0,
+                    value: Constant::Integer(1),
+                    ty: Type::Int,
+                    span: Default::default(),
+                },
+                Instruction::CancelTask {
+                    task: 0,
+                    span: Default::default(),
+                },
+            ],
+            Type::Void,
+            None,
+        ),
+        Err("NXL3001".into())
+    );
+}
+
+#[test]
+fn module_2_7_verifier_rejects_non_boolean_if_condition() {
+    use nxl_compiler::nir::{Constant, Instruction, Type};
+
+    assert_eq!(
+        verify_hand_built(
+            vec![
+                Instruction::Constant {
+                    result: 0,
+                    value: Constant::Integer(1),
+                    ty: Type::Int,
+                    span: Default::default(),
+                },
+                Instruction::If {
+                    condition: 0,
+                    then_branch: Vec::new(),
+                    else_branch: None,
+                    span: Default::default(),
+                },
+            ],
+            Type::Void,
+            None,
+        ),
+        Err("NXL3001".into())
+    );
+}
+
+#[test]
+fn module_2_7_verifier_rejects_handler_for_missing_block() {
+    use nxl_compiler::nir::{Instruction, Type};
+
+    assert_eq!(
+        verify_hand_built(
+            vec![Instruction::PushHandler {
+                catch_block: 99,
+                span: Default::default(),
+            }],
+            Type::Void,
+            None,
+        ),
+        Err("NXL3001".into())
+    );
+}
+
+#[test]
+fn module_2_7_verifier_rejects_empty_spawn_callee() {
+    use nxl_compiler::nir::{Instruction, Type};
+
+    assert_eq!(
+        verify_hand_built(
+            vec![Instruction::SpawnCall {
+                result: 0,
+                callee: String::new(),
+                arguments: Vec::new(),
+                span: Default::default(),
+            }],
+            Type::Void,
+            None,
+        ),
+        Err("NXL3001".into())
+    );
+}
+
 fn loop_module(name: &str) -> nxl_compiler::nir::Module {
     let source = SourceFile::new(name, "while true { break; }");
     compile_to_nir(&source).expect("while loop should lower")

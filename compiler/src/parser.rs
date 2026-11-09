@@ -355,6 +355,18 @@ impl Parser {
         let mut parameters = Vec::new();
         loop {
             parameters.push(self.expect_identifier("expected type parameter name")?);
+            // Inline bounds (`<T: Bound>`) are not part of the supported
+            // syntax; point at the `where` form instead of a generic parse
+            // error (Module 2.7, WP-C).
+            if self.check(&TokenKind::Colon) {
+                let token = self.peek().clone();
+                return Err(self
+                    .error_at(
+                        &token,
+                        "inline generic bounds are not supported; write `where T: Bound` after the parameter list",
+                    )
+                    .with_help("supported form: `fn f<T>(value: T) -> T where T: Bound { ... }`"));
+            }
             if !self.matches(&TokenKind::Comma) {
                 break;
             }
@@ -1559,6 +1571,8 @@ impl Parser {
                     }
                 }
                 TokenKind::Identifier(_)
+                | TokenKind::Ampersand
+                | TokenKind::Mut
                 | TokenKind::Dot
                 | TokenKind::Comma
                 | TokenKind::LeftBracket

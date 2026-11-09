@@ -28,13 +28,18 @@ nexora build --target android   # an APK for a device or emulator
 
 ## Status
 
-Version 0.1.0. The language roadmap (errors and strings, iteration and data,
-objects and methods, modules, concurrency, backend control flow) is implemented
-and covered by the automated test suite.
+Version 0.1.1. The six language phases (errors and strings, iteration and data,
+objects and methods, modules, concurrency, backend control flow) are
+implemented on the VM and covered by the automated test suite. The JavaScript
+and Rust backends cover a documented subset and refuse the rest with an
+explicit `NXL2007` diagnostic. See the language reference and
+[PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) for the evidence-based
+status of every area.
 
 | Area          | State                                                        |
 | ------------- | ------------------------------------------------------------ |
-| Language      | Phases 1-6 implemented; see the language reference            |
+| Language      | Phases 1-6 implemented on the VM; see the language reference  |
+| Type system   | Primitives/composites, generics and `where` bounds; not memory-safe (lexical ownership only) |
 | VM            | Authoritative execution path for every program                |
 | JS backend    | Native loops, `try`, classes and modules; VM-parity tested    |
 | Rust backend  | Straight-line code and `try`; refuses the rest honestly       |
@@ -45,6 +50,14 @@ and covered by the automated test suite.
 | Projects      | `new console`, `new web` and `new mobile` scaffold working trees |
 | Editor        | VS Code extension with NXL highlighting, icon and language server |
 | Releases      | Windows x64 locally; Linux/macOS built and self-tested in CI  |
+
+Language limits that matter when reading this table: passing the ownership
+checker is not a proof of memory safety (no lifetime inference, NLL, or alias
+analysis through aggregates/FFI); the compiler reports one primary diagnostic
+per run; generic constraints are enforced only on functions; and
+`Option`/`Optional` are annotations without construction or runtime
+representation. Details are in the language specification and
+`PRODUCTION_READINESS.md`.
 
 Not yet available: a hosted package registry, package signing, code-signed
 installers. The development server compiles to JavaScript and serves the
@@ -117,8 +130,9 @@ verify the artifact they are about to publish, and produce the archive.
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Every change should keep the test
-suite green (`cargo test`, 572 tests) and `cargo clippy --all-targets -- -D
-warnings` clean; the release pipeline enforces both.
+suite green (`cargo test --workspace`, 1025 passing tests; the two Python
+bridge tests additionally require Python on `PATH`) and `cargo clippy
+--all-targets -- -D warnings` clean; the release pipeline enforces both.
 
 Changing `favicon.ico` means regenerating the brand assets:
 

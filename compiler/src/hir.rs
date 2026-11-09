@@ -1,8 +1,6 @@
 use crate::ast::{Program, Statement};
 use crate::diagnostic::Diagnostic;
-use crate::nir::{
-    split_type_arguments, stable_type_id, type_from_name_with, FunctionSignature, Type,
-};
+use crate::nir::{split_type_arguments, stable_type_id, FunctionSignature, Type};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +47,23 @@ pub fn analyze_module(
                     "NXL2005",
                     format!("duplicate type declaration of '{name}'"),
                     statement_span(statement),
+                ));
+            }
+        }
+        // Module 2.7 WP-C: bounds on type declarations are not enforced by
+        // any code path, so accepting them silently would be a false promise.
+        if let Some(declaration) = type_declaration(statement) {
+            if !declaration.constraints.is_empty() {
+                return Err(Diagnostic::error(
+                    "NXL2014",
+                    format!(
+                        "generic constraints on type declaration '{}' are not supported",
+                        declaration.name
+                    ),
+                    declaration.span,
+                )
+                .with_help(
+                    "declare the constraint on the function that instantiates the type instead",
                 ));
             }
         }
@@ -131,6 +146,7 @@ pub fn analyze_module(
             parameters,
             return_type,
             type_parameters,
+            constraints: function.constraints.clone(),
             parameter_annotations,
             return_annotation,
         });
@@ -148,6 +164,14 @@ fn function_declaration(statement: &Statement) -> Option<&crate::ast::Function> 
     match statement {
         Statement::Function(function) => Some(function),
         Statement::Export(inner) => function_declaration(inner),
+        _ => None,
+    }
+}
+
+fn type_declaration(statement: &Statement) -> Option<&crate::ast::TypeDeclaration> {
+    match statement {
+        Statement::TypeDeclaration(declaration) => Some(declaration),
+        Statement::Export(inner) => type_declaration(inner),
         _ => None,
     }
 }
@@ -282,10 +306,23 @@ fn resolve_type(
     if let Some(open) = checked.find('<') {
         if checked.ends_with('>') {
             let base = &checked[..open];
-            let is_builtin = matches!(
-                base,
-                "Array" | "List" | "Option" | "Task" | "Channel" | "Result" | "Map"
-            );
+            // A declared type shadows the builtin spelling, so the container
+            // names are not reserved globally (WP-B).
+            let declared_here = generic_arities.contains_key(base)
+                || known_types.iter().any(|known| known == base)
+                || aliases.contains_key(base);
+            let is_builtin = !declared_here
+                && matches!(
+                    base,
+                    "Array"
+                        | "List"
+                        | "Option"
+                        | "Optional"
+                        | "Task"
+                        | "Channel"
+                        | "Result"
+                        | "Map"
+                );
             if !is_builtin {
                 let arguments = split_type_arguments(&checked[open + 1..checked.len() - 1]);
                 match generic_arities.get(base) {
@@ -308,17 +345,19 @@ fn resolve_type(
             }
         }
     }
-    type_from_name_with(name, aliases, params)
-        .or_else(|| {
-            aliases
-                .get(name)
-                .map(|qualified| Type::Generic(stable_type_id(qualified)))
-        })
-        .or_else(|| {
-            known_types
-                .iter()
-                .any(|known| known == name)
-                .then(|| Type::Generic(stable_type_id(name)))
-        })
-        .ok_or(TypeResolveError::Unknown)
+    crate::nir::type_from_name_scoped(name, aliases, params, &|base| {
+        known_types.iter().any(|known| known == base) || aliases.contains_key(base)
+    })
+    .or_else(|| {
+        aliases
+            .get(name)
+            .map(|qualified| Type::Generic(stable_type_id(qualified)))
+    })
+    .or_else(|| {
+        known_types
+            .iter()
+            .any(|known| known == name)
+            .then(|| Type::Generic(stable_type_id(name)))
+    })
+    .ok_or(TypeResolveError::Unknown)
 }
